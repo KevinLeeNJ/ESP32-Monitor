@@ -1,0 +1,20 @@
+.DS_Store
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+build/
+simulator/build/
+simulator/output/
+artifacts/
+managed_components/
+sdkconfig
+sdkconfig.old
+*.log
+*.swp
+__pycache__/
+*.pyc
+Examples/
+
+# Keep documentation notes local; do not track Markdown under docs.
+/docs/*.md
+/docs/**/*.md
