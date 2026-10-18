@@ -1,0 +1,5 @@
+* text=auto
+*.png binary
+*.packed binary
+*.rgb565 binary
+*.bin binary
