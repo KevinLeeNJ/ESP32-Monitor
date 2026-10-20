@@ -1,4 +1,5 @@
 #include "esp_log.h"
+#include "esp_pm.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -10,8 +11,12 @@
 #include "monitor_clock.h"
 #include "monitor_sensors.h"
 #include "monitor_weather.h"
+#include "monitor_display_refresh.h"
 
-#define TAG "monitor_test"
+#include <string.h>
+
+#define TAG "monitor"
+#define DISPLAY_CHECK_INTERVAL_MS 30000
 
 static const rlcd_pins_t PINS = {
     .mosi = 12,
@@ -24,9 +29,22 @@ static const rlcd_pins_t PINS = {
 
 static monitor_ui_demo_data_t g_demo;
 static monitor_device_t g_devices[4];
-static uint8_t g_device_count;
 
-static lv_obj_t *test_screen_factory(lv_obj_t *parent)
+typedef struct {
+    int battery_percent;
+    int temperature_tenths_c;
+    int humidity_percent;
+    int aqi;
+    monitor_weather_condition_t weather_condition;
+    monitor_wifi_state_t wifi_state;
+    char time_text[8];
+    char date_text[16];
+} display_snapshot_t;
+
+static display_snapshot_t g_rendered_snapshot;
+
+static void refresh_monitor_data(char *time_text, size_t time_size,
+                                char *date_text, size_t date_size)
 {
     monitor_weather_data_t weather;
     monitor_weather_get(&weather);
@@ -39,20 +57,48 @@ static lv_obj_t *test_screen_factory(lv_obj_t *parent)
         g_demo.temperature_tenths_c = sensors.temperature_tenths_c;
         g_demo.humidity_percent = sensors.humidity_percent;
     }
+    monitor_clock_get_text(time_text, time_size, date_text, date_size);
+}
+
+static void capture_display_snapshot(display_snapshot_t *snapshot)
+{
+    refresh_monitor_data(snapshot->time_text, sizeof(snapshot->time_text),
+                         snapshot->date_text, sizeof(snapshot->date_text));
+    snapshot->battery_percent = g_demo.board_battery_percent;
+    snapshot->temperature_tenths_c = g_demo.temperature_tenths_c;
+    snapshot->humidity_percent = g_demo.humidity_percent;
+    snapshot->aqi = g_demo.aqi;
+    snapshot->weather_condition = g_demo.weather_condition;
+    snapshot->wifi_state = monitor_wifi_get_state();
+}
+
+static bool display_snapshot_equal(const display_snapshot_t *a,
+                                  const display_snapshot_t *b)
+{
+    return a->battery_percent == b->battery_percent &&
+           a->temperature_tenths_c == b->temperature_tenths_c &&
+           a->humidity_percent == b->humidity_percent &&
+           a->aqi == b->aqi &&
+           a->weather_condition == b->weather_condition &&
+           a->wifi_state == b->wifi_state &&
+           strcmp(a->time_text, b->time_text) == 0 &&
+           strcmp(a->date_text, b->date_text) == 0;
+}
+
+static lv_obj_t *monitor_screen_factory(lv_obj_t *parent)
+{
+    capture_display_snapshot(&g_rendered_snapshot);
     monitor_ui_set_demo_data(&g_demo);
-    char time_text[8];
-    char date_text[16];
-    monitor_clock_get_text(time_text, sizeof(time_text), date_text, sizeof(date_text));
-    monitor_ui_set_clock_text(time_text, date_text);
+    monitor_ui_set_clock_text(g_rendered_snapshot.time_text,
+                              g_rendered_snapshot.date_text);
     return monitor_ui_create_with_devices_battery_wifi_variant(
         parent, g_devices, 4, g_demo.board_battery_percent,
-        monitor_wifi_get_state(), MONITOR_FRAME_NORMAL);
+        g_rendered_snapshot.wifi_state, MONITOR_FRAME_NORMAL);
 }
 
 static void set_devices(uint8_t count, int level)
 {
     static const char *names[] = {"NAS", "PI", "PC", "ROUTER"};
-    g_device_count = count;
     for(uint8_t i = 0; i < 4; ++i) {
         g_devices[i].name = names[i];
         g_devices[i].cpu_percent = level;
@@ -75,7 +121,7 @@ static void reset_demo(void)
 
 static void show_frame(monitor_renderer_t *renderer, rlcd_port_t *port)
 {
-    if(!monitor_renderer_rebuild(renderer, test_screen_factory) ||
+    if(!monitor_renderer_rebuild(renderer, monitor_screen_factory) ||
        !monitor_renderer_render(renderer)) {
         ESP_LOGE(TAG, "render failed");
         return;
@@ -84,48 +130,25 @@ static void show_frame(monitor_renderer_t *renderer, rlcd_port_t *port)
                                    MONITOR_FRAME_BYTES));
 }
 
-static void wait_frame(monitor_renderer_t *renderer, rlcd_port_t *port,
-                       TickType_t ticks)
-{
-    show_frame(renderer, port);
-    vTaskDelay(ticks);
-}
-
-static void run_test_cycle(monitor_renderer_t *renderer, rlcd_port_t *port)
-{
-    /* Wi-Fi is driven by the real provisioning/connection manager. Do not
-     * synthesize Wi-Fi states in the demo cycle. */
-
-    /* Battery, temperature and humidity are read from the hardware sensor task. */
-    wait_frame(renderer, port, pdMS_TO_TICKS(1000));
-
-    /* Weather and AQI are fetched from QWeather. */
-    wait_frame(renderer, port, pdMS_TO_TICKS(1000));
-
-    /* Temperature and humidity are hardware-backed and refreshed every 5s. */
-    wait_frame(renderer, port, pdMS_TO_TICKS(1000));
-
-    /* Devices: 0 through 4 online devices, each with all metrics swept from
-     * 0% through 100%. Offline slots are intentionally not rendered. */
-    for(uint8_t count = 0; count <= 4; ++count) {
-        for(int level = 0; level <= 100; level += 25) {
-            set_devices(count, level);
-            wait_frame(renderer, port, pdMS_TO_TICKS(350));
-        }
-    }
-}
-
 void app_main(void)
 {
-    rlcd_port_t *port = NULL;
-    ESP_ERROR_CHECK(rlcd_port_init(&port, &PINS));
-
     esp_err_t nvs_err = nvs_flash_init();
     if(nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         nvs_err = nvs_flash_init();
     }
     ESP_ERROR_CHECK(nvs_err);
+
+    const esp_pm_config_t pm_config = {
+        .max_freq_mhz = 160,
+        .min_freq_mhz = 40,
+        .light_sleep_enable = true,
+    };
+    ESP_ERROR_CHECK(esp_pm_configure(&pm_config));
+    monitor_display_refresh_register();
+
+    rlcd_port_t *port = NULL;
+    ESP_ERROR_CHECK(rlcd_port_init(&port, &PINS));
 
     ESP_ERROR_CHECK(monitor_clock_start());
     ESP_ERROR_CHECK(monitor_weather_start());
@@ -137,13 +160,20 @@ void app_main(void)
     }
     reset_demo();
     monitor_renderer_t renderer;
-    if(!monitor_renderer_init(&renderer, test_screen_factory)) {
+    if(!monitor_renderer_init(&renderer, monitor_screen_factory)) {
         ESP_LOGE(TAG, "LVGL renderer initialization failed");
         return;
     }
 
+    show_frame(&renderer, port);
+    display_snapshot_t displayed = g_rendered_snapshot;
     for(;;) {
-        run_test_cycle(&renderer, port);
-        ESP_LOGI(TAG, "test cycle complete");
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(DISPLAY_CHECK_INTERVAL_MS));
+        display_snapshot_t current;
+        capture_display_snapshot(&current);
+        if (!display_snapshot_equal(&displayed, &current)) {
+            show_frame(&renderer, port);
+            displayed = g_rendered_snapshot;
+        }
     }
 }

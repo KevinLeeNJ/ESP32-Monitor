@@ -1,4 +1,5 @@
 #include "monitor_sensors.h"
+#include "monitor_display_refresh.h"
 
 #include <math.h>
 #include <string.h>
@@ -18,6 +19,7 @@
 #define I2C_SDA_GPIO GPIO_NUM_13
 #define I2C_SCL_GPIO GPIO_NUM_14
 #define SHTC3_ADDRESS 0x70
+#define SENSOR_SAMPLE_INTERVAL_MS 30000
 
 static adc_oneshot_unit_handle_t s_adc;
 static adc_cali_handle_t s_adc_cali;
@@ -52,15 +54,19 @@ static int battery_percent_from_voltage(float v)
     return -1;
 }
 
-static bool read_battery(void)
+static bool read_battery(bool *display_changed)
 {
     int raw, mv;
     if (adc_oneshot_read(s_adc, BATTERY_ADC_CHANNEL, &raw) != ESP_OK) return false;
     if (s_adc_cali == NULL || adc_cali_raw_to_voltage(s_adc_cali, raw, &mv) != ESP_OK) return false;
     const float voltage = (mv / 1000.0f) * BATTERY_DIVIDER_RATIO;
+    const int battery_percent = battery_percent_from_voltage(voltage);
     portENTER_CRITICAL(&s_data_mux);
+    if (display_changed != NULL) {
+        *display_changed = s_data.battery_percent != battery_percent;
+    }
     s_data.battery_voltage = voltage;
-    s_data.battery_percent = battery_percent_from_voltage(voltage);
+    s_data.battery_percent = battery_percent;
     s_data.battery_valid = true;
     portEXIT_CRITICAL(&s_data_mux);
     return true;
@@ -76,7 +82,7 @@ static uint8_t shtc3_crc(const uint8_t *data)
     return crc;
 }
 
-static bool read_environment(void)
+static bool read_environment(bool *display_changed)
 {
     const uint8_t command[] = {0x78, 0x66};
     uint8_t data[6];
@@ -88,9 +94,15 @@ static bool read_environment(void)
     const uint16_t raw_h = ((uint16_t)data[3] << 8) | data[4];
     const float temperature = -45.0f + 175.0f * raw_t / 65536.0f - 4.0f;
     const float humidity = 100.0f * raw_h / 65536.0f;
+    const int temperature_tenths_c = (int)lroundf(temperature * 10.0f);
+    const int humidity_percent = (int)lroundf(humidity);
     portENTER_CRITICAL(&s_data_mux);
-    s_data.temperature_tenths_c = (int)lroundf(temperature * 10.0f);
-    s_data.humidity_percent = (int)lroundf(humidity);
+    if (display_changed != NULL) {
+        *display_changed = s_data.temperature_tenths_c != temperature_tenths_c ||
+                           s_data.humidity_percent != humidity_percent;
+    }
+    s_data.temperature_tenths_c = temperature_tenths_c;
+    s_data.humidity_percent = humidity_percent;
     s_data.environment_valid = true;
     portEXIT_CRITICAL(&s_data_mux);
     return true;
@@ -99,10 +111,17 @@ static bool read_environment(void)
 static void sensor_task(void *arg)
 {
     (void)arg;
+    TickType_t last_wake = xTaskGetTickCount();
     for (;;) {
-        if (!read_battery()) { portENTER_CRITICAL(&s_data_mux); s_data.battery_valid = false; portEXIT_CRITICAL(&s_data_mux); }
-        if (!read_environment()) { portENTER_CRITICAL(&s_data_mux); s_data.environment_valid = false; portEXIT_CRITICAL(&s_data_mux); }
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        bool display_changed = false;
+        bool value_changed = false;
+        if (!read_battery(&value_changed)) { portENTER_CRITICAL(&s_data_mux); s_data.battery_valid = false; portEXIT_CRITICAL(&s_data_mux); }
+        display_changed |= value_changed;
+        value_changed = false;
+        if (!read_environment(&value_changed)) { portENTER_CRITICAL(&s_data_mux); s_data.environment_valid = false; portEXIT_CRITICAL(&s_data_mux); }
+        display_changed |= value_changed;
+        if (display_changed) monitor_display_refresh_request();
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(SENSOR_SAMPLE_INTERVAL_MS));
     }
 }
 

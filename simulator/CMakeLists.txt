@@ -6,6 +6,11 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Emit build/compile_commands.json so clangd and IDE tooling can index the
+# simulator without a second build system. tools/gen_compile_commands.py merges
+# it with the ESP-IDF database into the repository-root compile_commands.json.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 set(REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
 set(FIRMWARE_ROOT "${REPO_ROOT}/firmware")
 set(LVGL_ROOT "${REPO_ROOT}/third_party/lvgl")

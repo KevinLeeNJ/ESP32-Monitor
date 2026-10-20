@@ -155,6 +155,8 @@ void WifiManager::StartStation() {
 
     station_->Start();
     station_active_ = true;
+    // Keep the connected station in balanced modem-sleep mode by default.
+    station_->SetPowerSaveLevel(WifiPowerSaveLevel::BALANCED);
 }
 
 void WifiManager::StopStation() {

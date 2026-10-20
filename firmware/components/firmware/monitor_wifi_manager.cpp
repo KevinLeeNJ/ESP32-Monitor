@@ -1,6 +1,7 @@
 #include "monitor_wifi_manager.h"
 #include "monitor_clock.h"
 #include "monitor_weather.h"
+#include "monitor_display_refresh.h"
 
 #include <string>
 
@@ -26,6 +27,13 @@ static esp_timer_handle_t s_config_timeout_timer = nullptr;
 
 static esp_err_t enter_config_mode(void);
 
+static void update_wifi_state(monitor_wifi_state_t state)
+{
+    if (s_state == state) return;
+    s_state = state;
+    monitor_display_refresh_request();
+}
+
 static void config_timeout_callback(void *arg)
 {
     (void)arg;
@@ -50,21 +58,32 @@ static void set_event(WifiEvent event, const std::string &data)
     (void)data;
     switch(event) {
         case WifiEvent::ConfigModeEnter:
+            // A connected station serves the configuration page over LAN.
+            // Disable modem sleep for this session so HTTP responses are not
+            // delayed by the station listen interval.
+            if (WifiManager::GetInstance().IsConnected()) {
+                WifiManager::GetInstance().SetPowerSaveLevel(WifiPowerSaveLevel::PERFORMANCE);
+            }
             s_provisioning = true;
-            s_state = MONITOR_WIFI_PROVISIONING;
+            update_wifi_state(MONITOR_WIFI_PROVISIONING);
             start_config_timeout();
             break;
         case WifiEvent::ConfigModeExit:
             s_provisioning = false;
             s_config_session_active = false;
             if (s_config_timeout_timer) esp_timer_stop(s_config_timeout_timer);
-            s_state = MONITOR_WIFI_DISCONNECTED;
+            update_wifi_state(MONITOR_WIFI_DISCONNECTED);
+            // Restore normal station power saving after a LAN configuration
+            // session. Captive-AP sessions have no connected station here.
+            if (WifiManager::GetInstance().IsConnected()) {
+                WifiManager::GetInstance().SetPowerSaveLevel(WifiPowerSaveLevel::BALANCED);
+            }
             /* StopConfigAp() has already stopped the AP, DNS server and web
                server. Retry station mode only when credentials are available;
                a timed-out first-time setup must not immediately start a loop. */
             ESP_LOGI(TAG, "Wi-Fi configuration session ended");
             if (WifiManager::GetInstance().IsConnected()) {
-                s_state = MONITOR_WIFI_CONNECTED;
+                update_wifi_state(MONITOR_WIFI_CONNECTED);
             } else if (!SsidManager::GetInstance().GetSsidList().empty()) {
                 WifiManager::GetInstance().StartStation();
             }
@@ -76,17 +95,17 @@ static void set_event(WifiEvent event, const std::string &data)
             break;
         case WifiEvent::Connected:
             s_provisioning = false;
-            s_state = MONITOR_WIFI_CONNECTED;
+            update_wifi_state(MONITOR_WIFI_CONNECTED);
             monitor_clock_on_wifi_connected();
             monitor_weather_on_wifi_connected();
             break;
         case WifiEvent::Connecting:
         case WifiEvent::Scanning:
-            if(!s_provisioning) s_state = MONITOR_WIFI_DISCONNECTED;
+            if(!s_provisioning) update_wifi_state(MONITOR_WIFI_DISCONNECTED);
             break;
         case WifiEvent::Disconnected:
             if(!s_provisioning) {
-                s_state = MONITOR_WIFI_DISCONNECTED;
+                update_wifi_state(MONITOR_WIFI_DISCONNECTED);
                 s_config_session_active = false;
                 if (s_config_timeout_timer) esp_timer_stop(s_config_timeout_timer);
                 // Do not automatically enter configuration mode on a failed
@@ -103,7 +122,7 @@ static esp_err_t enter_config_mode(void)
 {
     if (s_provisioning) return ESP_OK;
     s_provisioning = true;
-    s_state = MONITOR_WIFI_PROVISIONING;
+    update_wifi_state(MONITOR_WIFI_PROVISIONING);
     s_config_session_active = true;
     WifiManager::GetInstance().StartConfigAp();
     return ESP_OK;
