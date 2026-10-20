@@ -10,6 +10,7 @@
 #include "esp_lcd_panel_io.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 
 #define RLCD_SPI_HOST SPI3_HOST
 #define RLCD_SPI_CLOCK_HZ (10 * 1000 * 1000)
@@ -19,6 +20,8 @@ struct rlcd_port {
     esp_lcd_panel_io_handle_t io;
     rlcd_pins_t pins;
     uint8_t *packed;
+    uint8_t *staging;
+    SemaphoreHandle_t tx_done;
 };
 
 static esp_err_t send_cmd(rlcd_port_t *port, uint8_t cmd)
@@ -36,15 +39,29 @@ static esp_err_t send_data1(rlcd_port_t *port, uint8_t value)
     return send_data(port, &value, 1);
 }
 
-static esp_err_t set_window(rlcd_port_t *port)
+static esp_err_t set_window(rlcd_port_t *port, uint8_t xs, uint8_t xe, uint8_t ys, uint8_t ye)
 {
     ESP_RETURN_ON_ERROR(send_cmd(port, 0x2a), "rlcd", "column command failed");
-    ESP_RETURN_ON_ERROR(send_data1(port, 0x12), "rlcd", "column start failed");
-    ESP_RETURN_ON_ERROR(send_data1(port, 0x2a), "rlcd", "column end failed");
+    ESP_RETURN_ON_ERROR(send_data1(port, xs), "rlcd", "column start failed");
+    ESP_RETURN_ON_ERROR(send_data1(port, xe), "rlcd", "column end failed");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0x2b), "rlcd", "page command failed");
-    ESP_RETURN_ON_ERROR(send_data1(port, 0x00), "rlcd", "page start failed");
-    ESP_RETURN_ON_ERROR(send_data1(port, 0xc7), "rlcd", "page end failed");
+    ESP_RETURN_ON_ERROR(send_data1(port, ys), "rlcd", "page start failed");
+    ESP_RETURN_ON_ERROR(send_data1(port, ye), "rlcd", "page end failed");
     return ESP_OK;
+}
+
+static bool color_done_cb(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *edata, void *ctx)
+{
+    (void)io; (void)edata;
+    rlcd_port_t *port = (rlcd_port_t *)ctx;
+    BaseType_t wake = pdFALSE;
+    xSemaphoreGiveFromISR(port->tx_done, &wake);
+    return wake == pdTRUE;
+}
+
+static esp_err_t wait_color_done(rlcd_port_t *port)
+{
+    return xSemaphoreTake(port->tx_done, pdMS_TO_TICKS(1000)) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
 static esp_err_t panel_init_sequence(rlcd_port_t *port)
@@ -93,7 +110,7 @@ static esp_err_t panel_init_sequence(rlcd_port_t *port)
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xb8), "rlcd", "b8");
     ESP_RETURN_ON_ERROR(send_data1(port, 0x29), "rlcd", "b8 arg");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0x21), "rlcd", "inversion on");
-    ESP_RETURN_ON_ERROR(set_window(port), "rlcd", "window");
+    ESP_RETURN_ON_ERROR(set_window(port, 0x12, 0x2a, 0x00, 0xc7), "rlcd", "window");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0x35), "rlcd", "te");
     ESP_RETURN_ON_ERROR(send_data1(port, 0x00), "rlcd", "te arg");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xd0), "rlcd", "d0");
@@ -139,6 +156,9 @@ esp_err_t rlcd_port_init(rlcd_port_t **out_port, const rlcd_pins_t *pins)
     };
     ESP_RETURN_ON_ERROR(spi_bus_initialize(RLCD_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO), "rlcd", "spi bus");
 
+    port->tx_done = xSemaphoreCreateBinary();
+    ESP_RETURN_ON_FALSE(port->tx_done != NULL, ESP_ERR_NO_MEM, "rlcd", "completion semaphore");
+
     esp_lcd_panel_io_spi_config_t io_cfg = {
         .dc_gpio_num = pins->dc,
         .cs_gpio_num = pins->cs,
@@ -146,7 +166,9 @@ esp_err_t rlcd_port_init(rlcd_port_t **out_port, const rlcd_pins_t *pins)
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
         .spi_mode = 0,
-        .trans_queue_depth = 10,
+        .trans_queue_depth = 2,
+        .on_color_trans_done = color_done_cb,
+        .user_ctx = port,
         .flags.sio_mode = 1,
     };
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)RLCD_SPI_HOST, &io_cfg, &port->io),
@@ -157,13 +179,16 @@ esp_err_t rlcd_port_init(rlcd_port_t **out_port, const rlcd_pins_t *pins)
         port->packed = heap_caps_malloc(RLCD_PACKED_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
     }
     ESP_RETURN_ON_FALSE(port->packed != NULL, ESP_ERR_NO_MEM, "rlcd", "frame buffer");
+    port->staging = heap_caps_malloc(RLCD_PACKED_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    ESP_RETURN_ON_FALSE(port->staging != NULL, ESP_ERR_NO_MEM, "rlcd", "staging buffer");
     memset(port->packed, 0xff, RLCD_PACKED_BYTES);
 
     hardware_reset(port);
     ESP_RETURN_ON_ERROR(panel_init_sequence(port), "rlcd", "init sequence");
-    ESP_RETURN_ON_ERROR(set_window(port), "rlcd", "window before first frame");
+    ESP_RETURN_ON_ERROR(set_window(port, 0x12, 0x2a, 0x00, 0xc7), "rlcd", "window before first frame");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_color(port->io, 0x2c, port->packed, RLCD_PACKED_BYTES),
                         "rlcd", "initial flush");
+    ESP_RETURN_ON_ERROR(wait_color_done(port), "rlcd", "initial transfer timeout");
     *out_port = port;
     return ESP_OK;
 }
@@ -172,15 +197,67 @@ esp_err_t rlcd_port_draw(rlcd_port_t *port, const uint8_t *packed, uint32_t len)
 {
     ESP_RETURN_ON_FALSE(port != NULL && packed != NULL, ESP_ERR_INVALID_ARG, "rlcd", "invalid frame");
     ESP_RETURN_ON_FALSE(len == RLCD_PACKED_BYTES, ESP_ERR_INVALID_SIZE, "rlcd", "wrong frame size");
+    ESP_RETURN_ON_ERROR(set_window(port, 0x12, 0x2a, 0x00, 0xc7), "rlcd", "set full window");
     memcpy(port->packed, packed, len);
-    ESP_RETURN_ON_ERROR(set_window(port), "rlcd", "set window");
-    return esp_lcd_panel_io_tx_color(port->io, 0x2c, port->packed, len);
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_color(port->io, 0x2c, port->packed, len), "rlcd", "full frame");
+    ESP_RETURN_ON_ERROR(wait_color_done(port), "rlcd", "full frame timeout");
+    return ESP_OK;
+}
+
+esp_err_t rlcd_port_draw_diff(rlcd_port_t *port, const uint8_t *packed, uint32_t len)
+{
+    ESP_RETURN_ON_FALSE(port != NULL && packed != NULL, ESP_ERR_INVALID_ARG, "rlcd", "invalid frame");
+    ESP_RETURN_ON_FALSE(len == RLCD_PACKED_BYTES, ESP_ERR_INVALID_SIZE, "rlcd", "wrong frame size");
+    uint32_t first_page = 200, last_page = 0, first_tile = 25, last_tile = 0;
+    bool changed = false;
+    for (uint32_t i = 0; i < RLCD_PACKED_BYTES; ++i) {
+        if (packed[i] == port->packed[i]) continue;
+        changed = true;
+        uint32_t page = i / 75U;
+        uint32_t tile = (i % 75U) / 3U;
+        if (page < first_page) first_page = page;
+        if (page > last_page) last_page = page;
+        if (tile < first_tile) first_tile = tile;
+        if (tile > last_tile) last_tile = tile;
+    }
+    if (!changed) return ESP_OK;
+    const uint32_t pages = last_page - first_page + 1U;
+    const uint32_t tiles = last_tile - first_tile + 1U;
+    const uint32_t bytes = pages * tiles * 3U;
+    if (bytes > RLCD_PACKED_BYTES / 2U) return rlcd_port_draw(port, packed, len);
+
+    uint32_t out = 0;
+    for (uint32_t page = first_page; page <= last_page; ++page) {
+        for (uint32_t tile = first_tile; tile <= last_tile; ++tile) {
+            const uint32_t offset = page * 75U + tile * 3U;
+            memcpy(port->staging + out, packed + offset, 3U);
+            out += 3U;
+        }
+    }
+    /* MADCTL=0x48 scans columns downward; packed tile 0 starts at the
+       panel's highest column address. X is the logical 12-pixel axis. */
+    const uint8_t xs = (uint8_t)(0x2aU - last_tile);
+    const uint8_t xe = (uint8_t)(0x2aU - first_tile);
+    ESP_RETURN_ON_ERROR(set_window(port, xs, xe, (uint8_t)first_page, (uint8_t)last_page),
+                        "rlcd", "set partial window");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_color(port->io, 0x2c, port->staging, bytes),
+                        "rlcd", "partial transfer");
+    ESP_RETURN_ON_ERROR(wait_color_done(port), "rlcd", "partial transfer timeout");
+    for (uint32_t page = first_page; page <= last_page; ++page) {
+        for (uint32_t tile = first_tile; tile <= last_tile; ++tile) {
+            const uint32_t offset = page * 75U + tile * 3U;
+            memcpy(port->packed + offset, packed + offset, 3U);
+        }
+    }
+    return ESP_OK;
 }
 
 esp_err_t rlcd_port_deinit(rlcd_port_t *port)
 {
     if(port == NULL) return ESP_OK;
     if(port->io) esp_lcd_panel_io_del(port->io);
+    if(port->tx_done) vSemaphoreDelete(port->tx_done);
+    if(port->staging) heap_caps_free(port->staging);
     spi_bus_free(RLCD_SPI_HOST);
     free(port->packed);
     free(port);

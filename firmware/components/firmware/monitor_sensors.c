@@ -1,4 +1,5 @@
 #include "monitor_sensors.h"
+#include "monitor_clock.h"
 #include "monitor_display_refresh.h"
 
 #include <math.h>
@@ -6,6 +7,7 @@
 
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
+#include "monitor_i2c.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_check.h"
@@ -16,14 +18,10 @@
 #define TAG "monitor_sensors"
 #define BATTERY_ADC_CHANNEL ADC_CHANNEL_3 /* GPIO4 on ESP32-S3 */
 #define BATTERY_DIVIDER_RATIO 3.0f       /* Waveshare board resistor divider */
-#define I2C_SDA_GPIO GPIO_NUM_13
-#define I2C_SCL_GPIO GPIO_NUM_14
 #define SHTC3_ADDRESS 0x70
-#define SENSOR_SAMPLE_INTERVAL_MS 30000
 
 static adc_oneshot_unit_handle_t s_adc;
 static adc_cali_handle_t s_adc_cali;
-static i2c_master_bus_handle_t s_i2c_bus;
 static i2c_master_dev_handle_t s_shtc3;
 static TaskHandle_t s_task;
 static portMUX_TYPE s_data_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -111,7 +109,6 @@ static bool read_environment(bool *display_changed)
 static void sensor_task(void *arg)
 {
     (void)arg;
-    TickType_t last_wake = xTaskGetTickCount();
     for (;;) {
         bool display_changed = false;
         bool value_changed = false;
@@ -121,7 +118,8 @@ static void sensor_task(void *arg)
         if (!read_environment(&value_changed)) { portENTER_CRITICAL(&s_data_mux); s_data.environment_valid = false; portEXIT_CRITICAL(&s_data_mux); }
         display_changed |= value_changed;
         if (display_changed) monitor_display_refresh_request();
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(SENSOR_SAMPLE_INTERVAL_MS));
+        const TickType_t wait = monitor_clock_is_valid() ? portMAX_DELAY : pdMS_TO_TICKS(60000);
+        (void)ulTaskNotifyTake(pdTRUE, wait);
     }
 }
 
@@ -139,16 +137,12 @@ esp_err_t monitor_sensors_start(void)
         ESP_LOGW(TAG, "ADC calibration unavailable");
     }
 
-    i2c_master_bus_config_t bus_config = {
-        .i2c_port = I2C_NUM_0, .sda_io_num = I2C_SDA_GPIO, .scl_io_num = I2C_SCL_GPIO,
-        .clk_source = I2C_CLK_SRC_DEFAULT, .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
-    };
-    ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_config, &s_i2c_bus), TAG, "I2C init failed");
+    i2c_master_bus_handle_t bus = monitor_i2c_get_bus();
+    if (bus == NULL) return ESP_ERR_INVALID_STATE;
     i2c_device_config_t dev_config = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = SHTC3_ADDRESS, .scl_speed_hz = 400000,
     };
-    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(s_i2c_bus, &dev_config, &s_shtc3), TAG, "SHTC3 init failed");
+    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(bus, &dev_config, &s_shtc3), TAG, "SHTC3 init failed");
     if (xTaskCreate(sensor_task, "monitor_sensors", 4096, NULL, 4, &s_task) != pdPASS) return ESP_ERR_NO_MEM;
     return ESP_OK;
 }
@@ -159,4 +153,9 @@ void monitor_sensors_get(monitor_sensor_data_t *out)
     portENTER_CRITICAL(&s_data_mux);
     *out = s_data;
     portEXIT_CRITICAL(&s_data_mux);
+}
+
+void monitor_sensors_request_sample(void)
+{
+    if (s_task != NULL) xTaskNotifyGive(s_task);
 }

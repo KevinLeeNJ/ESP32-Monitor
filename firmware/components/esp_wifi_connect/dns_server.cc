@@ -6,6 +6,7 @@
 #define TAG "DnsServer"
 
 DnsServer::DnsServer() {
+    stopped_sem_ = xSemaphoreCreateBinary();
 }
 
 DnsServer::~DnsServer() {
@@ -15,7 +16,7 @@ DnsServer::~DnsServer() {
 void DnsServer::Start(esp_ip4_addr_t gateway) {
     // If already running, stop first
     if (running_) {
-        Stop();
+        if (!Stop()) return;
     }
 
     ESP_LOGI(TAG, "Starting DNS server");
@@ -40,39 +41,36 @@ void DnsServer::Start(esp_ip4_addr_t gateway) {
         return;
     }
 
+    if (stopped_sem_ == nullptr) { close(fd_); fd_ = -1; return; }
+    xSemaphoreTake(stopped_sem_, 0);
     running_ = true;
-    xTaskCreate([](void* arg) {
+    if (xTaskCreate([](void* arg) {
         DnsServer* dns_server = static_cast<DnsServer*>(arg);
         dns_server->Run();
         vTaskDelete(NULL);
-    }, "DnsServerTask", 4096, this, 5, &task_handle_);
+    }, "DnsServerTask", 4096, this, 5, &task_handle_) != pdPASS) {
+        running_ = false; task_handle_ = nullptr; close(fd_); fd_ = -1;
+    }
 }
 
-void DnsServer::Stop() {
-    if (!running_) {
-        return;
-    }
-
+bool DnsServer::Stop() {
+    if (!running_ && task_handle_ == nullptr) return true;
     ESP_LOGI(TAG, "Stopping DNS server");
     running_ = false;
-
-    // Close socket to unblock recvfrom
-    if (fd_ >= 0) {
-        shutdown(fd_, SHUT_RDWR);
-        close(fd_);
-        fd_ = -1;
+    if (fd_ >= 0) shutdown(fd_, SHUT_RDWR);
+    if (task_handle_ != nullptr &&
+        xSemaphoreTake(stopped_sem_, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        ESP_LOGE(TAG, "DNS task did not exit within 1 s; retaining its context");
+        return false;
     }
-
-    // Wait for task to finish
-    if (task_handle_ != nullptr) {
-        // Give the task some time to exit gracefully
-        vTaskDelay(pdMS_TO_TICKS(100));
-        task_handle_ = nullptr;
-    }
+    task_handle_ = nullptr;
+    if (fd_ >= 0) { close(fd_); fd_ = -1; }
+    return true;
 }
 
 void DnsServer::Run() {
     char buffer[512];
+    unsigned consecutive_errors = 0;
     while (running_) {
         struct sockaddr_in client_addr;
         socklen_t client_addr_len = sizeof(client_addr);
@@ -82,7 +80,14 @@ void DnsServer::Run() {
                 // Socket was closed during Stop(), exit gracefully
                 break;
             }
-            ESP_LOGE(TAG, "recvfrom failed, errno=%d", errno);
+            const int error = errno;
+            if (error == EINTR || error == EAGAIN || error == EWOULDBLOCK) {
+                vTaskDelay(pdMS_TO_TICKS(100));
+                continue;
+            }
+            ESP_LOGW(TAG, "recvfrom failed, errno=%d; backing off", error);
+            vTaskDelay(pdMS_TO_TICKS(250));
+            if (++consecutive_errors >= 3) break;
             continue;
         }
 
@@ -90,6 +95,7 @@ void DnsServer::Run() {
             break;
         }
 
+        consecutive_errors = 0;
         // Simple DNS response: point all queries to 192.168.4.1
         buffer[2] |= 0x80;  // Set response flag
         buffer[3] |= 0x80;  // Set Recursion Available
@@ -107,6 +113,6 @@ void DnsServer::Run() {
         sendto(fd_, buffer, len, 0, (struct sockaddr *)&client_addr, client_addr_len);
     }
 
-    task_handle_ = nullptr;
     ESP_LOGI(TAG, "DNS server task exiting");
+    xSemaphoreGive(stopped_sem_);
 }

@@ -177,6 +177,7 @@ bool WifiStation::WaitForConnected(int timeout_ms) {
 }
 
 void WifiStation::StartScan() {
+    if ((xEventGroupGetBits(event_group_) & WIFI_EVENT_CONNECTED) != 0) return;
     std::vector<uint8_t> channels;
     if (use_saved_channels_scan_) {
         channels = SsidManager::GetInstance().GetSavedChannels();
@@ -457,6 +458,7 @@ void WifiStation::IpEventHandler(void* arg, esp_event_base_t event_base, int32_t
     ESP_LOGI(TAG, "Got IP: %s", this_->ip_address_.c_str());
     
     xEventGroupSetBits(this_->event_group_, WIFI_EVENT_CONNECTED);
+    if (this_->timer_handle_ != nullptr) esp_timer_stop(this_->timer_handle_);
     this_->was_connected_ = true;  // Mark as connected for disconnect notification
     if (this_->on_connected_) {
         this_->on_connected_(this_->ssid_);

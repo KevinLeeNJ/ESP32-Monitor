@@ -8,6 +8,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
+#include "esp_sleep.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "ssid_manager.h"
@@ -17,12 +18,16 @@
 #define BOOT_BUTTON_GPIO GPIO_NUM_0
 #define KEY_BUTTON_GPIO GPIO_NUM_18
 #define CONFIG_HOLD_MS 3000
+#define BTN_BOOT BIT0
+#define BTN_KEY BIT1
+#define BTN_TIMEOUT BIT2
 
 static volatile monitor_wifi_state_t s_state = MONITOR_WIFI_DISCONNECTED;
 static volatile bool s_provisioning = false;
 static bool s_started = false;
 static bool s_config_session_active = false;
 static esp_timer_handle_t s_config_timeout_timer = nullptr;
+static TaskHandle_t s_manager_task = nullptr;
 #define CONFIG_SESSION_TIMEOUT_US (2LL * 60 * 1000000)
 
 static esp_err_t enter_config_mode(void);
@@ -37,11 +42,7 @@ static void update_wifi_state(monitor_wifi_state_t state)
 static void config_timeout_callback(void *arg)
 {
     (void)arg;
-    if (!s_config_session_active) return;
-    ESP_LOGI(TAG, "Configuration session timed out; closing web server");
-    // StopConfigAp closes either the captive AP or the LAN web server and
-    // emits ConfigModeExit.
-    WifiManager::GetInstance().StopConfigAp();
+    if (s_manager_task != nullptr) xTaskNotify(s_manager_task, BTN_TIMEOUT, eSetBits);
 }
 
 static void start_config_timeout(void)
@@ -104,6 +105,8 @@ static void set_event(WifiEvent event, const std::string &data)
             if(!s_provisioning) update_wifi_state(MONITOR_WIFI_DISCONNECTED);
             break;
         case WifiEvent::Disconnected:
+            monitor_clock_on_wifi_disconnected();
+            monitor_weather_on_wifi_disconnected();
             if(!s_provisioning) {
                 update_wifi_state(MONITOR_WIFI_DISCONNECTED);
                 s_config_session_active = false;
@@ -128,32 +131,81 @@ static esp_err_t enter_config_mode(void)
     return ESP_OK;
 }
 
+static void IRAM_ATTR button_gpio_isr(void *arg)
+{
+    const uint32_t bit = (uint32_t)(uintptr_t)arg;
+    BaseType_t wake = pdFALSE;
+    if (s_manager_task != nullptr) xTaskNotifyFromISR(s_manager_task, bit, eSetBits, &wake);
+    if (wake) portYIELD_FROM_ISR();
+}
+
+static void configure_wake_levels(bool boot_pressed, bool key_pressed)
+{
+#if CONFIG_PM_SLP_DISABLE_GPIO
+    gpio_sleep_sel_dis(BOOT_BUTTON_GPIO);
+    gpio_sleep_sel_dis(KEY_BUTTON_GPIO);
+#endif
+    gpio_wakeup_disable(BOOT_BUTTON_GPIO);
+    gpio_wakeup_disable(KEY_BUTTON_GPIO);
+    gpio_wakeup_enable(BOOT_BUTTON_GPIO, boot_pressed ? GPIO_INTR_HIGH_LEVEL : GPIO_INTR_LOW_LEVEL);
+    gpio_wakeup_enable(KEY_BUTTON_GPIO, key_pressed ? GPIO_INTR_HIGH_LEVEL : GPIO_INTR_LOW_LEVEL);
+    esp_sleep_enable_gpio_wakeup();
+}
+
 static void button_task(void *arg)
 {
     (void)arg;
+    s_manager_task = xTaskGetCurrentTaskHandle();
     gpio_config_t config = {
         .pin_bit_mask = (1ULL << BOOT_BUTTON_GPIO) | (1ULL << KEY_BUTTON_GPIO),
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
+        .intr_type = GPIO_INTR_ANYEDGE,
     };
-    gpio_config(&config);
-    TickType_t pressed_at = 0;
-    bool triggered = false;
-    for(;;) {
-        const bool both_pressed = gpio_get_level(BOOT_BUTTON_GPIO) == 0 &&
-                                  gpio_get_level(KEY_BUTTON_GPIO) == 0;
-        if(both_pressed) {
-            if(pressed_at == 0) pressed_at = xTaskGetTickCount();
-            if(!triggered && xTaskGetTickCount() - pressed_at >= pdMS_TO_TICKS(CONFIG_HOLD_MS)) {
-                if(enter_config_mode() == ESP_OK) triggered = true;
-            }
-        } else {
-            pressed_at = 0;
-            triggered = false;
+    if (gpio_config(&config) != ESP_OK) { vTaskDelete(NULL); return; }
+    esp_err_t isr_err = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+    if (isr_err != ESP_OK && isr_err != ESP_ERR_INVALID_STATE) { vTaskDelete(NULL); return; }
+    if (gpio_isr_handler_add(BOOT_BUTTON_GPIO, button_gpio_isr, (void *)(uintptr_t)BTN_BOOT) != ESP_OK ||
+        gpio_isr_handler_add(KEY_BUTTON_GPIO, button_gpio_isr, (void *)(uintptr_t)BTN_KEY) != ESP_OK) {
+        vTaskDelete(NULL); return;
+    }
+    bool stable[2] = {gpio_get_level(BOOT_BUTTON_GPIO) == 0, gpio_get_level(KEY_BUTTON_GPIO) == 0};
+    bool both_timing = false, triggered = false;
+    TickType_t both_since = 0;
+    configure_wake_levels(stable[0], stable[1]);
+    uint32_t pending = 0;
+    for (;;) {
+        TickType_t wait = portMAX_DELAY;
+        if (both_timing && !triggered) {
+            TickType_t elapsed = xTaskGetTickCount() - both_since;
+            TickType_t hold = pdMS_TO_TICKS(CONFIG_HOLD_MS);
+            wait = elapsed >= hold ? 0 : hold - elapsed;
         }
-        vTaskDelay(pdMS_TO_TICKS(50));
+        uint32_t events = 0;
+        xTaskNotifyWait(0, UINT32_MAX, &events, wait);
+        pending |= events;
+        if (pending & BTN_TIMEOUT) {
+            pending &= ~BTN_TIMEOUT;
+            if (s_config_session_active) {
+                ESP_LOGI(TAG, "Configuration session timed out; closing server");
+                WifiManager::GetInstance().StopConfigAp();
+            }
+        }
+        if (pending & (BTN_BOOT | BTN_KEY)) {
+            vTaskDelay(pdMS_TO_TICKS(30));
+            bool next[2] = {gpio_get_level(BOOT_BUTTON_GPIO) == 0, gpio_get_level(KEY_BUTTON_GPIO) == 0};
+            stable[0] = next[0]; stable[1] = next[1];
+            pending = 0;
+            configure_wake_levels(stable[0], stable[1]);
+            const bool both = stable[0] && stable[1];
+            if (!both) { both_timing = false; triggered = false; }
+            else if (!both_timing) { both_timing = true; both_since = xTaskGetTickCount(); }
+        }
+        if (both_timing && !triggered &&
+            xTaskGetTickCount() - both_since >= pdMS_TO_TICKS(CONFIG_HOLD_MS)) {
+            if (enter_config_mode() == ESP_OK) triggered = true;
+        }
     }
 }
 
@@ -190,7 +242,7 @@ extern "C" esp_err_t monitor_wifi_start(void)
         ESP_LOGI(TAG, "saved Wi-Fi credentials found; starting esp-wifi-connect station");
         manager.StartStation();
     }
-    xTaskCreate(button_task, "wifi_config_button", 3072, NULL, 4, NULL);
+    if (xTaskCreate(button_task, "wifi_config_button", 4096, NULL, 4, &s_manager_task) != pdPASS) return ESP_ERR_NO_MEM;
     return ESP_OK;
 }
 

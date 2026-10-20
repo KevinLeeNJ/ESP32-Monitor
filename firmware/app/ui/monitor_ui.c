@@ -63,6 +63,18 @@ typedef struct {
     lv_obj_t *variant_label;
     monitor_frame_variant_t variant;
     monitor_wifi_state_t wifi_state;
+    monitor_weather_condition_t weather_condition;
+    lv_obj_t *time_label;
+    lv_obj_t *date_label;
+    lv_obj_t *wifi_label;
+    lv_obj_t *battery_label;
+    lv_obj_t *battery_outline;
+    lv_obj_t *wifi_slash;
+    lv_obj_t *weather_label;
+    lv_obj_t *weather_icon;
+    lv_obj_t *temperature_label;
+    lv_obj_t *humidity_label;
+    lv_obj_t *aqi_label;
 } monitor_ui_state_t;
 
 static void monitor_ui_state_delete_cb(lv_event_t *event)
@@ -227,6 +239,51 @@ static const char *wifi_state_symbol(monitor_wifi_state_t state)
     }
 }
 
+void monitor_ui_apply_snapshot(lv_obj_t *root, const monitor_ui_snapshot_t *snapshot)
+{
+    if (root == NULL || snapshot == NULL) return;
+    monitor_ui_state_t *state = (monitor_ui_state_t *)lv_obj_get_user_data(root);
+    if (state == NULL) return;
+    char text[24];
+    if (snapshot->time_text && strcmp(lv_label_get_text(state->time_label), snapshot->time_text) != 0)
+        lv_label_set_text(state->time_label, snapshot->time_text);
+    if (snapshot->date_text && strcmp(lv_label_get_text(state->date_label), snapshot->date_text) != 0)
+        lv_label_set_text(state->date_label, snapshot->date_text);
+    if (state->wifi_state != snapshot->wifi_state) {
+        state->wifi_state = snapshot->wifi_state;
+        lv_label_set_text(state->wifi_label, wifi_state_symbol(snapshot->wifi_state));
+        if (snapshot->wifi_state == MONITOR_WIFI_DISCONNECTED) lv_obj_clear_flag(state->wifi_slash, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(state->wifi_slash, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_text_color(state->wifi_label,
+            lv_color_hex(snapshot->wifi_state == MONITOR_WIFI_PROVISIONING ? COLOR_MUTED : COLOR_BLACK), 0);
+    }
+    snprintf(text, sizeof(text), snapshot->battery_percent < 0 ? "--" : "%d%%", snapshot->battery_percent);
+    if (strcmp(lv_label_get_text(state->battery_label), text) != 0) {
+        lv_label_set_text(state->battery_label, text);
+        lv_obj_clean(state->battery_outline);
+        if (snapshot->battery_percent >= 0) {
+            int value = snapshot->battery_percent > 100 ? 100 : snapshot->battery_percent;
+            int32_t fill_width = (15 * value) / 100;
+            if (fill_width > 0) make_ink(state->battery_outline, 2, 2, fill_width, 7, 1);
+        }
+    }
+    if (state->weather_condition != snapshot->weather_condition) {
+        state->weather_condition = snapshot->weather_condition;
+        lv_image_set_src(state->weather_icon, monitor_weather_condition_icon(snapshot->weather_condition));
+        lv_label_set_text(state->weather_label, monitor_weather_condition_abbrev(snapshot->weather_condition));
+    }
+    snprintf(text, sizeof(text), "%d.%d°C", snapshot->temperature_tenths_c / 10,
+        snapshot->temperature_tenths_c < 0 ? -(snapshot->temperature_tenths_c % 10) : snapshot->temperature_tenths_c % 10);
+    if (strcmp(lv_label_get_text(state->temperature_label), text) != 0)
+        lv_label_set_text(state->temperature_label, text);
+    snprintf(text, sizeof(text), "%d%%", snapshot->humidity_percent);
+    if (strcmp(lv_label_get_text(state->humidity_label), text) != 0)
+        lv_label_set_text(state->humidity_label, text);
+    snprintf(text, sizeof(text), snapshot->aqi < 0 ? "--" : "%d", snapshot->aqi);
+    if (strcmp(lv_label_get_text(state->aqi_label), text) != 0)
+        lv_label_set_text(state->aqi_label, text);
+}
+
 static lv_obj_t *make_wifi_status(lv_obj_t *parent, monitor_wifi_state_t state)
 {
     lv_obj_t *icon = make_label(parent, wifi_state_symbol(state), 18, 63,
@@ -234,17 +291,16 @@ static lv_obj_t *make_wifi_status(lv_obj_t *parent, monitor_wifi_state_t state)
                                 state == MONITOR_WIFI_PROVISIONING ? COLOR_MUTED : COLOR_BLACK);
     set_name(icon, "wifi_status");
 
-    if(state == MONITOR_WIFI_DISCONNECTED) {
-        static const lv_point_precise_t slash_points[] = {{1, 1}, {14, 14}};
-        lv_obj_t *slash = lv_line_create(parent);
-        lv_line_set_points(slash, slash_points, 2);
-        lv_obj_set_pos(slash, 17, 62);
-        lv_obj_set_size(slash, 16, 16);
-        lv_obj_set_style_line_width(slash, 3, 0);
-        lv_obj_set_style_line_color(slash, lv_color_hex(COLOR_BLACK), 0);
-        lv_obj_set_style_line_rounded(slash, true, 0);
-        set_name(slash, "wifi_slash");
-    }
+    static const lv_point_precise_t slash_points[] = {{1, 1}, {14, 14}};
+    lv_obj_t *slash = lv_line_create(parent);
+    lv_line_set_points(slash, slash_points, 2);
+    lv_obj_set_pos(slash, 17, 62);
+    lv_obj_set_size(slash, 16, 16);
+    lv_obj_set_style_line_width(slash, 3, 0);
+    lv_obj_set_style_line_color(slash, lv_color_hex(COLOR_BLACK), 0);
+    lv_obj_set_style_line_rounded(slash, true, 0);
+    set_name(slash, "wifi_slash");
+    if(state != MONITOR_WIFI_DISCONNECTED) lv_obj_add_flag(slash, LV_OBJ_FLAG_HIDDEN);
     return icon;
 }
 
@@ -274,16 +330,19 @@ static void make_board_battery(lv_obj_t *parent, int32_t x, int32_t y, int value
 
 static lv_obj_t *make_info_card(lv_obj_t *parent, int32_t x, int32_t y,
                                 const lv_image_dsc_t *icon, const char *value,
-                                bool show_icon, bool large_value, const char *icon_name)
+                                bool show_icon, bool large_value, const char *icon_name,
+                                lv_obj_t **icon_out)
 {
     const int32_t width = 115;
     lv_obj_t *card = make_box(parent, x, y, width, 36, 6, COLOR_WHITE, 1, COLOR_BLACK);
+    if(icon_out != NULL) *icon_out = NULL;
     if(show_icon) {
         const bool weather_icon = icon_name != NULL && strcmp(icon_name, "weather_icon") == 0;
         /* Use the weather mask at its native 30px size. The taller card gives
          * it a real display area instead of clipping the source silhouette. */
-        make_icon(card, icon, weather_icon ? 5 : 5, weather_icon ? 2 : 6,
-                  weather_icon ? 30 : 23, icon_name);
+        lv_obj_t *image = make_icon(card, icon, 5, weather_icon ? 2 : 6,
+                                    weather_icon ? 30 : 23, icon_name);
+        if(icon_out != NULL) *icon_out = image;
         const int32_t value_x = 39;
         const lv_font_t *value_font = weather_icon ? &monitor_weather_zh :
                                       &lv_font_montserrat_20;
@@ -293,11 +352,11 @@ static lv_obj_t *make_info_card(lv_obj_t *parent, int32_t x, int32_t y,
         lv_obj_t *value_label = make_label(card, value, value_x, value_y,
                                            value_font, COLOR_BLACK);
         if(weather_icon) lv_obj_set_width(value_label, 75);
+        return value_label;
     } else {
         make_label(card, "AQI", 8, 5, &lv_font_montserrat_12, COLOR_MUTED);
-        make_label(card, value, 58, 5, &lv_font_montserrat_20, COLOR_BLACK);
+        return make_label(card, value, 58, 5, &lv_font_montserrat_20, COLOR_BLACK);
     }
-    return card;
 }
 
 static void make_device_card(lv_obj_t *parent, const monitor_device_t *device,
@@ -429,23 +488,27 @@ lv_obj_t *monitor_ui_create_with_devices_battery_wifi_variant(lv_obj_t *parent,
     state->root = root;
     state->variant = variant;
     state->wifi_state = wifi_state;
+    state->weather_condition = demo_data.weather_condition;
 
     make_box(root, 5, 5, 390, 290, 9, COLOR_WHITE, 2, COLOR_BLACK);
 
     /* Header: time and four compact rounded data cards. Weather has no text
      * label; temperature and humidity are identified by sourced icons. */
-    lv_obj_t *time = make_label(root, clock_time_text, 16, 9, &lv_font_montserrat_30, COLOR_BLACK);
-    lv_obj_set_style_text_letter_space(time, 1, 0);
-    set_name(time, "time");
-    make_label(root, clock_date_text, 19, 43, &lv_font_montserrat_12, COLOR_MUTED);
-    make_wifi_status(root, wifi_state);
+    state->time_label = make_label(root, clock_time_text, 16, 9, &lv_font_montserrat_30, COLOR_BLACK);
+    lv_obj_set_style_text_letter_space(state->time_label, 1, 0);
+    set_name(state->time_label, "time");
+    state->date_label = make_label(root, clock_date_text, 19, 43, &lv_font_montserrat_12, COLOR_MUTED);
+    state->wifi_label = make_wifi_status(root, wifi_state);
+    state->wifi_slash = lv_obj_get_child_by_name(root, "wifi_slash");
     make_board_battery(root, 38, 65, demo_data.board_battery_percent);
+    state->battery_label = lv_obj_get_child_by_name(root, "board_battery_value");
+    state->battery_outline = lv_obj_get_child_by_name(root, "board_battery_outline");
 
     /* Keep the four data cards together as a 2x2 block in the upper-right. */
     const monitor_weather_condition_t weather_condition = demo_data.weather_condition;
-    make_info_card(root, 150, 8, monitor_weather_condition_icon(weather_condition),
+    state->weather_label = make_info_card(root, 150, 8, monitor_weather_condition_icon(weather_condition),
                    monitor_weather_condition_abbrev(weather_condition), true, false,
-                   "weather_icon");
+                   "weather_icon", &state->weather_icon);
     char temperature_text[16];
     snprintf(temperature_text, sizeof(temperature_text), "%d.%d°C",
              demo_data.temperature_tenths_c / 10,
@@ -456,11 +519,11 @@ lv_obj_t *monitor_ui_create_with_devices_battery_wifi_variant(lv_obj_t *parent,
     char aqi_text[12];
     if(demo_data.aqi < 0) snprintf(aqi_text, sizeof(aqi_text), "--");
     else snprintf(aqi_text, sizeof(aqi_text), "%d", demo_data.aqi);
-    make_info_card(root, 270, 8, &monitor_metric_thermometer, temperature_text, true, true,
-                   "metric_icon");
-    make_info_card(root, 150, 48, &monitor_metric_droplets, humidity_text, true, true,
-                   "metric_icon");
-    make_info_card(root, 270, 48, NULL, aqi_text, false, true, NULL);
+    state->temperature_label = make_info_card(root, 270, 8, &monitor_metric_thermometer, temperature_text, true, true,
+                   "metric_icon", NULL);
+    state->humidity_label = make_info_card(root, 150, 48, &monitor_metric_droplets, humidity_text, true, true,
+                   "metric_icon", NULL);
+    state->aqi_label = make_info_card(root, 270, 48, NULL, aqi_text, false, true, NULL, NULL);
 
     make_box(root, 15, 91, 370, 1, 0, COLOR_BLACK, 0, COLOR_BLACK);
     make_label(root, "DEVICES", 16, 95, &lv_font_montserrat_14, COLOR_BLACK);
