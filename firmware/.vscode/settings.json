@@ -1,0 +1,10 @@
+{
+  "idf.customExtraVars": {
+    "IDF_PATH": "/Users/kevinlee/esp/esp-idf",
+    "IDF_TOOLS_PATH": "/Users/kevinlee/.espressif",
+    "IDF_PYTHON_ENV_PATH": "/Users/kevinlee/.espressif/python_env/idf6.1_py3.13_env"
+},
+"idf.currentSetup": "/Users/kevinlee/esp/esp-idf",
+"idf.flashType": "UART",
+"idf.port": "/dev/tty.usbmodem1101",
+}

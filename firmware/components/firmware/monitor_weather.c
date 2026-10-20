@@ -1,4 +1,5 @@
 #include "monitor_weather.h"
+#include "monitor_display_refresh.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -195,6 +196,7 @@ static void update_weather(void)
         return;
     }
     bool weather_ok = false, aqi_ok = false;
+    bool display_changed = false;
     if (http_get(weather_url, response, RESPONSE_MAX, key)) {
         cJSON *json = cJSON_Parse(response);
         cJSON *api_code = json ? cJSON_GetObjectItem(json, "code") : NULL;
@@ -206,7 +208,9 @@ static void update_weather(void)
         if (cJSON_IsString(code)) {
             int condition_code = atoi(code->valuestring);
             portENTER_CRITICAL(&s_data_mux);
-            s_data.condition = condition_from_qweather(condition_code);
+            monitor_weather_condition_t condition = condition_from_qweather(condition_code);
+            display_changed |= s_data.condition != condition;
+            s_data.condition = condition;
             s_data.weather_valid = true;
             portEXIT_CRITICAL(&s_data_mux);
             weather_ok = true;
@@ -225,7 +229,11 @@ static void update_weather(void)
         int value = cJSON_IsString(aqi_display) ? atoi(aqi_display->valuestring) :
                     (cJSON_IsNumber(aqi) ? aqi->valueint : (cJSON_IsString(aqi) ? atoi(aqi->valuestring) : -1));
         if (value >= 0) {
-            portENTER_CRITICAL(&s_data_mux); s_data.aqi = value; s_data.aqi_valid = true; portEXIT_CRITICAL(&s_data_mux);
+            portENTER_CRITICAL(&s_data_mux);
+            display_changed |= s_data.aqi != value;
+            s_data.aqi = value;
+            s_data.aqi_valid = true;
+            portEXIT_CRITICAL(&s_data_mux);
             aqi_ok = true;
         }
         if (json == NULL) {
@@ -235,6 +243,7 @@ static void update_weather(void)
     }
     free(response);
     portENTER_CRITICAL(&s_data_mux); s_data.latitude = lat; s_data.longitude = lon; s_data.location_valid = true; portEXIT_CRITICAL(&s_data_mux);
+    if (display_changed) monitor_display_refresh_request();
     ESP_LOGI(TAG, "update: weather=%s aqi=%s", weather_ok ? "ok" : "failed", aqi_ok ? "ok" : "failed");
 }
 

@@ -1,4 +1,5 @@
 #include "monitor_clock.h"
+#include "monitor_display_refresh.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -45,6 +46,7 @@ static bool sync_time(void)
     }
 
     s_time_valid = true;
+    monitor_display_refresh_request();
     time_t now;
     time(&now);
     struct tm local;
