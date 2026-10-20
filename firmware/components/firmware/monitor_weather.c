@@ -1,5 +1,7 @@
 #include "monitor_weather.h"
 #include "monitor_display_refresh.h"
+#include "monitor_wifi_manager.h"
+#include "monitor_clock.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +24,7 @@
 
 static TaskHandle_t s_task;
 static volatile bool s_update_requested;
+static volatile bool s_wifi_available;
 static portMUX_TYPE s_data_mux = portMUX_INITIALIZER_UNLOCKED;
 static monitor_weather_data_t s_data = {
     .condition = MONITOR_WEATHER_CLEAR, .aqi = -1,
@@ -251,23 +254,39 @@ static void weather_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        if (s_update_requested) {
-            s_update_requested = false;
-            update_weather();
-        }
-        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(UPDATE_PERIOD_MS)) == 0) update_weather();
+        TickType_t timeout = s_wifi_available ? pdMS_TO_TICKS(UPDATE_PERIOD_MS) : portMAX_DELAY;
+        uint32_t notified = 0;
+        xTaskNotifyWait(0, UINT32_MAX, &notified, timeout);
+        const bool requested = s_update_requested;
+        s_update_requested = false;
+        if (s_wifi_available && monitor_clock_is_valid() && (requested || notified == 0)) update_weather();
     }
 }
 
 esp_err_t monitor_weather_start(void)
 {
     if (xTaskCreate(weather_task, "monitor_weather", 16384, NULL, 3, &s_task) != pdPASS) return ESP_ERR_NO_MEM;
+    if (monitor_clock_is_valid()) s_update_requested = true;
     return ESP_OK;
 }
 
 void monitor_weather_on_wifi_connected(void)
 {
-    if (s_task) { s_update_requested = true; xTaskNotifyGive(s_task); }
+    s_wifi_available = true;
+    s_update_requested = true;
+    if (s_task != NULL) xTaskNotify(s_task, 1, eSetBits);
+}
+
+void monitor_weather_on_wifi_disconnected(void)
+{
+    s_wifi_available = false;
+    if (s_task != NULL) xTaskNotify(s_task, 1, eSetBits);
+}
+
+void monitor_weather_on_time_valid(void)
+{
+    s_update_requested = true;
+    if (s_task != NULL) xTaskNotify(s_task, 1, eSetBits);
 }
 
 void monitor_weather_get(monitor_weather_data_t *out)

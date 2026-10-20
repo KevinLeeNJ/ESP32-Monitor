@@ -53,6 +53,28 @@ void monitor_pack_rgb565(const uint16_t *rgb565, uint32_t width, uint32_t height
     }
 }
 
+void monitor_pack_rgb565_region(const uint16_t *rgb565, uint32_t width, uint32_t height,
+                                int32_t x1, int32_t y1, int32_t x2, int32_t y2,
+                                monitor_frame_variant_t variant, uint8_t *packed_inout)
+{
+    if (rgb565 == NULL || packed_inout == NULL || width == 0 || height == 0) return;
+    if (x1 < 0) x1 = 0;
+    if (y1 < 0) y1 = 0;
+    if (x2 >= (int32_t)width) x2 = (int32_t)width - 1;
+    if (y2 >= (int32_t)height) y2 = (int32_t)height - 1;
+    if (x1 > x2 || y1 > y2) return;
+    for (int32_t y = y1; y <= y2; ++y) {
+        for (int32_t x = x1; x <= x2; ++x) {
+            bool white = rgb565_is_white(rgb565[(uint32_t)y * width + (uint32_t)x]);
+            if (variant == MONITOR_FRAME_INVERTED) white = !white;
+            const uint32_t index = pack_index((uint32_t)x, (uint32_t)y, height);
+            const uint8_t mask = pack_mask((uint32_t)x, (uint32_t)y, height);
+            if (white) packed_inout[index] |= mask;
+            else packed_inout[index] &= (uint8_t)~mask;
+        }
+    }
+}
+
 void monitor_unpack_to_rgb565(const uint8_t *packed, uint32_t width, uint32_t height,
                               monitor_frame_variant_t variant, uint16_t *out)
 {

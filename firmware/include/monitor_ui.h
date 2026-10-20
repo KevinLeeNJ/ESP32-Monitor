@@ -62,6 +62,17 @@ typedef struct {
 } monitor_ui_demo_data_t;
 
 typedef struct {
+    const char *time_text;
+    const char *date_text;
+    monitor_wifi_state_t wifi_state;
+    int battery_percent;
+    monitor_weather_condition_t weather_condition;
+    int temperature_tenths_c;
+    int humidity_percent;
+    int aqi;
+} monitor_ui_snapshot_t;
+
+typedef struct {
     uint8_t *frame;
     uint32_t width;
     uint32_t height;
@@ -74,6 +85,7 @@ const lv_image_dsc_t *monitor_weather_condition_icon(monitor_weather_condition_t
 void monitor_ui_set_demo_data(const monitor_ui_demo_data_t *data);
 /* Override the deterministic simulator clock with live firmware values. */
 void monitor_ui_set_clock_text(const char *time_text, const char *date_text);
+void monitor_ui_apply_snapshot(lv_obj_t *root, const monitor_ui_snapshot_t *snapshot);
 
 lv_obj_t *monitor_ui_create(lv_obj_t *parent);
 lv_obj_t *monitor_ui_create_with_devices(lv_obj_t *parent,
@@ -112,6 +124,9 @@ monitor_frame_variant_t monitor_ui_get_variant(lv_obj_t *root);
 /* Convert a full-screen RGB565 frame to the panel's packed 1bpp format. */
 void monitor_pack_rgb565(const uint16_t *rgb565, uint32_t width, uint32_t height,
                          monitor_frame_variant_t variant, uint8_t *out);
+void monitor_pack_rgb565_region(const uint16_t *rgb565, uint32_t width, uint32_t height,
+                                int32_t x1, int32_t y1, int32_t x2, int32_t y2,
+                                monitor_frame_variant_t variant, uint8_t *packed_inout);
 
 /* Reconstruct RGB565 from the packed panel frame for a pixel-accurate preview. */
 void monitor_unpack_to_rgb565(const uint8_t *packed, uint32_t width, uint32_t height,

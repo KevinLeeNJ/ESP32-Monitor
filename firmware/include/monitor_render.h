@@ -16,6 +16,7 @@ typedef struct {
     lv_display_t *display;
     lv_obj_t *root;
     uint8_t *rgb565;
+    uint8_t *draw_buffer;
     uint8_t *packed;
 } monitor_renderer_t;
 
@@ -25,6 +26,7 @@ bool monitor_renderer_init(monitor_renderer_t *renderer,
                            monitor_screen_factory_t create_screen);
 void monitor_renderer_deinit(monitor_renderer_t *renderer);
 bool monitor_renderer_render(monitor_renderer_t *renderer);
+void monitor_renderer_invalidate_all(monitor_renderer_t *renderer);
 bool monitor_renderer_rebuild(monitor_renderer_t *renderer,
                               monitor_screen_factory_t create_screen);
 lv_obj_t *monitor_renderer_root(const monitor_renderer_t *renderer);

@@ -12,6 +12,8 @@ extern "C" {
  * initialization; notify monitor_clock_on_wifi_connected() whenever STA gets IP. */
 esp_err_t monitor_clock_start(void);
 void monitor_clock_on_wifi_connected(void);
+void monitor_clock_on_wifi_disconnected(void);
+bool monitor_clock_is_valid(void);
 bool monitor_clock_get_text(char *time_text, size_t time_size,
                             char *date_text, size_t date_size);
 

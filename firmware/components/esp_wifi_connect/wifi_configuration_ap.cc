@@ -1073,8 +1073,8 @@ void WifiConfigurationAp::Stop() {
 
     // 停止DNS服务器
     if (dns_server_) {
-        dns_server_->Stop();
-        dns_server_.reset();
+        if (dns_server_->Stop()) dns_server_.reset();
+        else (void)dns_server_.release(); /* Keep the task context alive after timeout. */
     }
 
     // 注销事件处理器

@@ -20,6 +20,8 @@ typedef struct {
 
 esp_err_t monitor_weather_start(void);
 void monitor_weather_on_wifi_connected(void);
+void monitor_weather_on_wifi_disconnected(void);
+void monitor_weather_on_time_valid(void);
 void monitor_weather_get(monitor_weather_data_t *out);
 
 #ifdef __cplusplus

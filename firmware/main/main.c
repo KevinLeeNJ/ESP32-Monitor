@@ -16,7 +16,6 @@
 #include <string.h>
 
 #define TAG "monitor"
-#define DISPLAY_CHECK_INTERVAL_MS 30000
 
 static const rlcd_pins_t PINS = {
     .mosi = 12,
@@ -70,6 +69,7 @@ static void capture_display_snapshot(display_snapshot_t *snapshot)
     snapshot->aqi = g_demo.aqi;
     snapshot->weather_condition = g_demo.weather_condition;
     snapshot->wifi_state = monitor_wifi_get_state();
+    g_demo.wifi_state = snapshot->wifi_state;
 }
 
 static bool display_snapshot_equal(const display_snapshot_t *a,
@@ -119,16 +119,6 @@ static void reset_demo(void)
     set_devices(4, 50);
 }
 
-static void show_frame(monitor_renderer_t *renderer, rlcd_port_t *port)
-{
-    if(!monitor_renderer_rebuild(renderer, monitor_screen_factory) ||
-       !monitor_renderer_render(renderer)) {
-        ESP_LOGE(TAG, "render failed");
-        return;
-    }
-    ESP_ERROR_CHECK(rlcd_port_draw(port, monitor_renderer_packed(renderer),
-                                   MONITOR_FRAME_BYTES));
-}
 
 void app_main(void)
 {
@@ -165,15 +155,40 @@ void app_main(void)
         return;
     }
 
-    show_frame(&renderer, port);
+    monitor_renderer_invalidate_all(&renderer);
+    if(!monitor_renderer_render(&renderer)) {
+        ESP_LOGE(TAG, "initial render failed");
+        return;
+    }
+    ESP_ERROR_CHECK(rlcd_port_draw_diff(port, monitor_renderer_packed(&renderer), MONITOR_FRAME_BYTES));
     display_snapshot_t displayed = g_rendered_snapshot;
     for(;;) {
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(DISPLAY_CHECK_INTERVAL_MS));
+        uint32_t reasons = 0;
+        xTaskNotifyWait(0, UINT32_MAX, &reasons, portMAX_DELAY);
+        /* Merge a burst of producers without periodic polling or busy waiting. */
+        uint32_t more = 0;
+        xTaskNotifyWait(0, UINT32_MAX, &more, pdMS_TO_TICKS(50));
+        reasons |= more;
+        (void)reasons;
         display_snapshot_t current;
         capture_display_snapshot(&current);
         if (!display_snapshot_equal(&displayed, &current)) {
-            show_frame(&renderer, port);
-            displayed = g_rendered_snapshot;
+            monitor_ui_snapshot_t ui = {
+                .time_text = current.time_text,
+                .date_text = current.date_text,
+                .wifi_state = current.wifi_state,
+                .battery_percent = current.battery_percent,
+                .weather_condition = current.weather_condition,
+                .temperature_tenths_c = current.temperature_tenths_c,
+                .humidity_percent = current.humidity_percent,
+                .aqi = current.aqi,
+            };
+            monitor_ui_apply_snapshot(monitor_renderer_root(&renderer), &ui);
+            if (monitor_renderer_render(&renderer)) {
+                esp_err_t draw_err = rlcd_port_draw_diff(port, monitor_renderer_packed(&renderer), MONITOR_FRAME_BYTES);
+                if (draw_err != ESP_OK) ESP_LOGE(TAG, "display commit failed: %s", esp_err_to_name(draw_err));
+                else displayed = current;
+            }
         }
     }
 }
