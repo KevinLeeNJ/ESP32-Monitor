@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"errors"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ var ErrEmptyBatch = errors.New("empty_batch")
 
 const MaxSeries = 256
 const CleanupBatch = 1000
+const AverageWindowSeconds int64 = 5 * 60
 
 type Store struct{ db *sql.DB }
 type DeviceState struct {
@@ -172,6 +174,17 @@ func (s *Store) Ingest(ctx context.Context, id string, samples []metrics.Sample,
 
 // Snapshot uses one read transaction so last_seen and latest describe the same commit.
 func (s *Store) Snapshot(ctx context.Context) (Snapshot, error) {
+	return s.snapshot(ctx, nil)
+}
+
+// SummarySnapshot replaces CPU/MEM values with per-series rolling averages.
+// Sample timestamps still come from latest so freshness and source ambiguity
+// are evaluated independently of the averaging window.
+func (s *Store) SummarySnapshot(ctx context.Context, now int64) (Snapshot, error) {
+	return s.snapshot(ctx, &now)
+}
+
+func (s *Store) snapshot(ctx context.Context, now *int64) (Snapshot, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
@@ -201,16 +214,35 @@ func (s *Store) Snapshot(ctx context.Context) (Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err = tx.QueryContext(ctx, "SELECT device_id,measurement,tags_json,field,sampled_at,value FROM metric_latest")
+	query := "SELECT device_id,measurement,tags_json,field,sampled_at,value FROM metric_latest"
+	var args []any
+	if now != nil {
+		query = `SELECT l.device_id,l.measurement,l.tags_json,l.field,l.sampled_at,
+		 CASE WHEN (l.measurement='cpu' AND l.field='usage_active')
+		        OR (l.measurement='mem' AND l.field='used_percent')
+		 THEN (SELECT AVG(h.value) FROM metric_history h
+		       WHERE h.device_id=l.device_id AND h.measurement=l.measurement
+		         AND h.tags_json=l.tags_json AND h.field=l.field
+		         AND h.sampled_at>=? AND h.sampled_at<=?)
+		 ELSE l.value END
+		 FROM metric_latest l`
+		args = []any{*now - AverageWindowSeconds, *now}
+	}
+	rows, err = tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var id string
 		var v metrics.Sample
-		if err = rows.Scan(&id, &v.Measurement, &v.TagsJSON, &v.Field, &v.SampledAt, &v.Value); err != nil {
+		var value sql.NullFloat64
+		if err = rows.Scan(&id, &v.Measurement, &v.TagsJSON, &v.Field, &v.SampledAt, &value); err != nil {
 			rows.Close()
 			return nil, err
+		}
+		v.Value = math.NaN()
+		if value.Valid {
+			v.Value = value.Float64
 		}
 		d := result[id]
 		d.Samples = append(d.Samples, v)

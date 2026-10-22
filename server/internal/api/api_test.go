@@ -35,7 +35,7 @@ func (f *fakeRepo) Ingest(_ context.Context, id string, s []metrics.Sample, at i
 	f.receivedAt = at
 	return f.err
 }
-func (f *fakeRepo) Snapshot(context.Context) (storage.Snapshot, error) {
+func (f *fakeRepo) SummarySnapshot(context.Context, int64) (storage.Snapshot, error) {
 	f.calls++
 	return f.snapshot, f.err
 }
