@@ -15,7 +15,7 @@ import (
 func TestCapturedMacOSTelegrafBatch(t *testing.T) {
 	// Captured HTTP body from Telegraf 1.40.2 on macOS arm64, not generated
 	// by the server. Disk device tags are redacted; timestamps/values are retained.
-	body, err := os.ReadFile("../e2e/evidence/macos/macos-real-batch.json")
+	body, err := os.ReadFile("testdata/macos-real-batch.json")
 	if err != nil {
 		t.Fatal(err)
 	}

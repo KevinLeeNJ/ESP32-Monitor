@@ -1,4 +1,4 @@
-.PHONY: build build-linux-amd64 test-ut test-race test-api test-telegraf vet
+.PHONY: build build-linux-amd64 test-ut test-race test-api test-telegraf test-tui vet
 
 build:
 	mkdir -p bin
@@ -21,6 +21,10 @@ test-api:
 # Real installed Agent + production subprocesses; about two minutes, loopback only.
 test-telegraf: build
 	python3 tests/e2e/telegraf_loopback.py --server bin/monitor-server --evidence "$${TMPDIR:-/tmp}/esp32-monitor-telegraf-evidence"
+
+# Local terminal only; install tests/e2e/requirements-tui.txt in a venv first.
+test-tui: build
+	python3 tests/e2e/tui_terminal.py --server bin/monitor-server
 
 vet:
 	go vet ./...
