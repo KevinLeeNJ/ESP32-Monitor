@@ -49,10 +49,23 @@ func TestCapturedMacOSTelegrafBatch(t *testing.T) {
 	} {
 		var value float64
 		var sampledAt int64
+		values := map[int64]float64{}
 		for _, metric := range captured.Metrics {
-			if v, ok := metric.Fields[source.field]; ok && metric.Name == source.name && metric.Timestamp > sampledAt {
-				value, sampledAt = v, metric.Timestamp
+			if v, ok := metric.Fields[source.field]; ok && metric.Name == source.name {
+				if _, exists := values[metric.Timestamp]; !exists && metric.Timestamp >= now-300 && metric.Timestamp <= now {
+					values[metric.Timestamp] = v
+				}
+				if metric.Timestamp > sampledAt {
+					value, sampledAt = v, metric.Timestamp
+				}
 			}
+		}
+		if source.name != "disk" {
+			value = 0
+			for _, v := range values {
+				value += v
+			}
+			value /= float64(len(values))
 		}
 		got := summary.Devices[0].Metrics[i]
 		expected := int(math.Round(value))

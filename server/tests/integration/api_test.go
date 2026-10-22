@@ -173,12 +173,12 @@ func TestAcceptedRequestBoundaries(t *testing.T) {
 			requireMetric(t, h.summary(t).Devices[0], 1, "0%", integer(0))
 		})
 	}
-	for _, offset := range []int64{-86400, 30} {
+	for _, offset := range []int64{-86400, 0, 30} {
 		t.Run(fmt.Sprintf("timestamp %+d", offset), func(t *testing.T) {
 			h := newHarness(t)
 			requireStatus(t, h.post(t, "a", mem(t, initialTime+offset, 42)), 204)
 			got := h.summary(t)
-			if offset < 0 {
+			if offset != 0 {
 				requireMetric(t, got.Devices[0], 1, "--", nil)
 			} else {
 				requireMetric(t, got.Devices[0], 1, "42%", integer(42))
@@ -211,10 +211,10 @@ func TestRetriesOutOfOrderAndCanonicalTags(t *testing.T) {
 	if h.count(t, "metric_history") != 2 || h.count(t, "metric_latest") != 1 {
 		t.Fatal("old history or series dedupe wrong")
 	}
-	requireMetric(t, h.summary(t).Devices[0], 0, "42%", integer(42))
+	requireMetric(t, h.summary(t).Devices[0], 0, "22%", integer(22))
 	newer := batch(t, wireMetric("cpu", map[string]string{"cpu": "cpu-total", "region": "home"}, map[string]any{"usage_active": 55}, initialTime+10))
 	requireStatus(t, h.post(t, "a", newer), 204)
-	requireMetric(t, h.summary(t).Devices[0], 0, "55%", integer(55))
+	requireMetric(t, h.summary(t).Devices[0], 0, "33%", integer(33))
 }
 
 func TestOnlineBoundaryOldReplayAndIndependentTTL(t *testing.T) {
@@ -240,7 +240,7 @@ func TestOnlineBoundaryOldReplayAndIndependentTTL(t *testing.T) {
 	requireStatus(t, h.post(t, "a", mem(t, h.clock.Load(), 33)), 204)
 	got = h.summary(t)
 	requireMetric(t, got.Devices[0], 0, "--", nil)
-	requireMetric(t, got.Devices[0], 1, "33%", integer(33))
+	requireMetric(t, got.Devices[0], 1, "38%", integer(38))
 	requireMetric(t, got.Devices[0], 2, "--", nil)
 	if got.Devices[0].Uptime != "--" {
 		t.Fatal("expired uptime displayed")
@@ -349,7 +349,7 @@ func TestStorageFailureRollbackAndRecovery(t *testing.T) {
 	}
 	h.exec(t, "DROP TRIGGER injected_failure")
 	requireStatus(t, h.post(t, "a", body), 204)
-	requireMetric(t, h.summary(t).Devices[0], 1, "99%", integer(99))
+	requireMetric(t, h.summary(t).Devices[0], 1, "71%", integer(71))
 	if seen := h.lastSeen(t, "a"); seen.Int64 != h.clock.Load() {
 		t.Fatal("recovered request not committed")
 	}
@@ -455,7 +455,7 @@ func TestConcurrentRetriesRateLimitAndIsolation(t *testing.T) {
 	requireStatus(t, h.post(t, "b", mem(t, initialTime, 25)), 204)
 	h.advance(1)
 	requireStatus(t, h.post(t, "a", mem(t, h.clock.Load(), 44)), 204)
-	requireMetric(t, h.summary(t).Devices[0], 1, "44%", integer(44))
+	requireMetric(t, h.summary(t).Devices[0], 1, "43%", integer(43))
 }
 
 func TestRestartPersistenceTokenRotationAndRevocation(t *testing.T) {
@@ -498,4 +498,43 @@ func TestRestartPersistenceTokenRotationAndRevocation(t *testing.T) {
 	if err = h.db.QueryRow("SELECT created_at FROM devices WHERE device_id='a'").Scan(&original); err != nil || original != initialTime {
 		t.Fatal("historical device changed", err)
 	}
+}
+
+func TestRollingAveragesWindowIsolationAndExpiry(t *testing.T) {
+	h := newHarness(t)
+	// The oldest point is outside the window; the exact cutoff is included.
+	for i, point := range []struct {
+		offset         int64
+		cpu, mem, disk int
+	}{{-301, 100, 100, 99}, {-300, 10, 20, 80}, {-10, 30, 40, 60}, {0, 80, 90, 50}} {
+		body := batch(t,
+			wireMetric("cpu", map[string]string{"cpu": "cpu-total"}, map[string]any{"usage_active": point.cpu}, initialTime+point.offset),
+			wireMetric("cpu", map[string]string{"cpu": "cpu0"}, map[string]any{"usage_active": 100}, initialTime+point.offset),
+			wireMetric("mem", nil, map[string]any{"used_percent": point.mem, "free": 999}, initialTime+point.offset),
+			wireMetric("disk", map[string]string{"path": "/data"}, map[string]any{"used_percent": point.disk}, initialTime+point.offset))
+		requireStatus(t, h.post(t, "a", body), 204)
+		if i == 0 {
+			requireMetric(t, h.summary(t).Devices[0], 0, "--", nil)
+		}
+	}
+	requireStatus(t, h.post(t, "b", mem(t, initialTime, 7)), 204)
+	got := h.summary(t)
+	requireMetric(t, got.Devices[0], 0, "40%", integer(40))
+	requireMetric(t, got.Devices[0], 1, "50%", integer(50))
+	requireMetric(t, got.Devices[0], 2, "50%", integer(50))
+	requireMetric(t, got.Devices[1], 1, "7%", integer(7))
+
+	// Advancing the clock drops the boundary point without any new CPU/MEM.
+	h.advance(1)
+	got = h.summary(t)
+	requireMetric(t, got.Devices[0], 0, "55%", integer(55))
+	requireMetric(t, got.Devices[0], 1, "65%", integer(65))
+
+	// Fresh disk proves the device is online, but the old CPU/MEM averages expire.
+	h.advance(45)
+	requireStatus(t, h.post(t, "a", batch(t, wireMetric("disk", map[string]string{"path": "/data"}, map[string]any{"used_percent": 51}, h.clock.Load()))), 204)
+	got = h.summary(t)
+	requireMetric(t, got.Devices[0], 0, "--", nil)
+	requireMetric(t, got.Devices[0], 1, "--", nil)
+	requireMetric(t, got.Devices[0], 2, "51%", integer(51))
 }

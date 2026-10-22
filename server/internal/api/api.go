@@ -23,7 +23,7 @@ import (
 
 type Repository interface {
 	Ingest(context.Context, string, []metrics.Sample, int64) error
-	Snapshot(context.Context) (storage.Snapshot, error)
+	SummarySnapshot(context.Context, int64) (storage.Snapshot, error)
 	Ready(context.Context) error
 }
 type credential struct {
@@ -193,12 +193,13 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		failure(w, status, "unauthorized")
 		return
 	}
-	snapshot, err := h.repo.Snapshot(r.Context())
+	now := h.now().Unix()
+	snapshot, err := h.repo.SummarySnapshot(r.Context(), now)
 	if err != nil {
 		failure(w, 503, "storage_unavailable")
 		return
 	}
-	body, err := json.Marshal(panel.Project(h.cfg, snapshot, h.now().Unix()))
+	body, err := json.Marshal(panel.Project(h.cfg, snapshot, now))
 	if err != nil || len(body) > 4096 {
 		failure(w, 503, "summary_unavailable")
 		return
