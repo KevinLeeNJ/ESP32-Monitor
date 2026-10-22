@@ -16,7 +16,7 @@ if(IDF_VERSION_MAJOR GREATER_EQUAL 6)
         EMBED_TXTFILES
             "assets/wifi_configuration.html"
             "assets/wifi_configuration_done.html"
-        REQUIRES "esp_timer" "esp_http_server" "esp_wifi" "nvs_flash" "cjson"
+        REQUIRES monitor_core "esp_timer" "esp_http_server" "esp_wifi" "nvs_flash" "cjson"
     )
 else()
     # v5
@@ -34,7 +34,7 @@ else()
         EMBED_TXTFILES
             "assets/wifi_configuration.html"
             "assets/wifi_configuration_done.html"
-        REQUIRES "esp_timer" "esp_http_server" "esp_wifi" "nvs_flash" "cjson" "json"
+        REQUIRES monitor_core "esp_timer" "esp_http_server" "esp_wifi" "nvs_flash" "cjson" "json"
     )
 endif()
 

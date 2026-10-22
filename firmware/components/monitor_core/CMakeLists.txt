@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "../../src/display/monitor_pack.c"
+        "../../src/display/monitor_devices_data.c"
         "../../src/display/monitor_render.c"
         "../../app/ui/monitor_ui.c"
         "../../app/ui/weather_assets.c"
@@ -8,5 +9,5 @@ idf_component_register(
     INCLUDE_DIRS
         "../../include"
         "../../app/ui"
-    REQUIRES lvgl
+    REQUIRES lvgl cjson
 )

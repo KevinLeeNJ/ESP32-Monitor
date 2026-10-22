@@ -2,39 +2,10 @@
 
 #include <string.h>
 
-/*
- * The review scenes intentionally pass four slots and mark unused slots
- * offline. The shared UI filters those slots before calculating card widths.
- */
-static const monitor_device_t REVIEW_DEVICES_0[] = {
-    {"NAS", 37, 62, 84, false},
-    {"PI", 18, 47, 62, false},
-    {"PC", 72, 81, -1, false},
-    {"ROUTER", 29, 54, 100, false},
-};
-static const monitor_device_t REVIEW_DEVICES_1[] = {
-    {"NAS", 37, 62, 84, true},
-    {"PI", 18, 47, 62, false},
-    {"PC", 72, 81, -1, false},
-    {"ROUTER", 29, 54, 100, false},
-};
-static const monitor_device_t REVIEW_DEVICES_2[] = {
-    {"NAS", 37, 62, 84, true},
-    {"PI", 18, 47, 62, true},
-    {"PC", 72, 81, -1, false},
-    {"ROUTER", 29, 54, 100, false},
-};
-static const monitor_device_t REVIEW_DEVICES_3[] = {
-    {"NAS", 37, 62, 84, true},
-    {"PI", 18, 47, 62, true},
-    {"PC", 72, 81, -1, true},
-    {"ROUTER", 29, 54, 100, false},
-};
-static const monitor_device_t REVIEW_DEVICES_4[] = {
-    {"NAS", 37, 62, 84, true},
-    {"PI", 18, 47, 62, true},
-    {"PC", 72, 81, -1, true},
-    {"ROUTER", 29, 54, 100, true},
+#define SAMPLE(n, c, m, d) {n, "12d 4h", 3, {{"CPU", #c "%", c, true}, {"MEM", #m "%", m, true}, {"DISK", #d "%", d, true}}}
+static const monitor_device_t REVIEW_DEVICES[] = {
+    SAMPLE("NAS", 37, 62, 84), SAMPLE("PI", 18, 47, 62),
+    SAMPLE("PC", 72, 81, 0), SAMPLE("ROUTER", 29, 54, 100),
 };
 
 static lv_obj_t *create_monitor_scene(lv_obj_t *parent,
@@ -49,11 +20,36 @@ static lv_obj_t *create_monitor_scene(lv_obj_t *parent,
         return monitor_ui_create_with_devices_variant(parent, devices, count, variant); \
     }
 
-REVIEW_FACTORY(monitor_0_scene, REVIEW_DEVICES_0, 4)
-REVIEW_FACTORY(monitor_1_scene, REVIEW_DEVICES_1, 4)
-REVIEW_FACTORY(monitor_2_scene, REVIEW_DEVICES_2, 4)
-REVIEW_FACTORY(monitor_3_scene, REVIEW_DEVICES_3, 4)
-REVIEW_FACTORY(monitor_4_scene, REVIEW_DEVICES_4, 4)
+REVIEW_FACTORY(monitor_0_scene, REVIEW_DEVICES, 0)
+REVIEW_FACTORY(monitor_1_scene, REVIEW_DEVICES, 1)
+REVIEW_FACTORY(monitor_2_scene, REVIEW_DEVICES, 2)
+REVIEW_FACTORY(monitor_3_scene, REVIEW_DEVICES, 3)
+REVIEW_FACTORY(monitor_4_scene, REVIEW_DEVICES, 4)
+
+static lv_obj_t *create_devices_state(lv_obj_t *parent, monitor_frame_variant_t variant,
+                                      monitor_devices_status_t status)
+{
+    lv_obj_t *root = monitor_ui_create_with_devices_variant(parent, NULL, 0, variant);
+    monitor_devices_snapshot_t snapshot = {.count = 4, .status = status};
+    memcpy(snapshot.devices, REVIEW_DEVICES, sizeof(REVIEW_DEVICES));
+    strcpy(snapshot.devices[3].name, "ABCDEFGH");
+    strcpy(snapshot.devices[3].uptime, "999d 23h");
+    strcpy(snapshot.devices[3].metrics[2].value, "-123456%");
+    snapshot.devices[3].metrics[2].percent_valid = false;
+    strcpy(snapshot.devices[1].metrics[1].value, "--");
+    snapshot.devices[1].metrics[1].percent_valid = false;
+    if (status != MONITOR_DEVICES_READY && status != MONITOR_DEVICES_STALE) snapshot.count = 0;
+    monitor_ui_apply_devices_snapshot(root, &snapshot);
+    return root;
+}
+#define STATE_FACTORY(n, status) \
+    static lv_obj_t *create_##n(lv_obj_t *parent, monitor_frame_variant_t variant) \
+    { return create_devices_state(parent, variant, status); }
+STATE_FACTORY(devices_missing, MONITOR_DEVICES_READY)
+STATE_FACTORY(devices_stale, MONITOR_DEVICES_STALE)
+STATE_FACTORY(devices_unavailable, MONITOR_DEVICES_UNAVAILABLE)
+STATE_FACTORY(devices_auth, MONITOR_DEVICES_AUTH_ERROR)
+STATE_FACTORY(devices_unconfigured, MONITOR_DEVICES_NOT_CONFIGURED)
 
 static const simulator_scene_t SCENES[] = {
     {
@@ -86,11 +82,16 @@ static const simulator_scene_t SCENES[] = {
         .description = "Review layout with four online devices",
         .create = create_monitor_4_scene,
     },
+    { .name = "devices-missing", .description = "Maximum labels and missing metrics", .create = create_devices_missing },
+    { .name = "devices-stale", .description = "Retained stale snapshot", .create = create_devices_stale },
+    { .name = "devices-unavailable", .description = "Expired snapshot", .create = create_devices_unavailable },
+    { .name = "devices-auth", .description = "Authentication failure", .create = create_devices_auth },
+    { .name = "devices-unconfigured", .description = "No Devices configuration", .create = create_devices_unconfigured },
 };
 
 const simulator_scene_t *simulator_scene_default(void)
 {
-    return &SCENES[0];
+    return simulator_scene_find("monitor");
 }
 
 const simulator_scene_t *simulator_scene_find(const char *name)

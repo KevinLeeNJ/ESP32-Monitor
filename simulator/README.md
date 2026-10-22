@@ -1,8 +1,10 @@
 # Desktop UI Simulator
 
-This directory is the canonical host-side display simulator for the ESP32-S3
-RLCD project. It renders real LVGL screens on a computer and writes a
-pixel-accurate 400 x 300 PNG without connecting the board.
+This directory contains the host-side display simulator for the ESP32-S3 RLCD
+project. It renders the firmware's LVGL screens on a computer and writes a
+pixel-accurate 400 × 300 PNG without connecting to the board.
+
+[简体中文](README.zh_CN.md)
 
 It is designed for future UI development: new screens are registered as
 simulator scenes, and the same scene can be selected from the command line.
@@ -32,13 +34,13 @@ are visible in the preview.
 
 ## Quick start
 
-From any directory:
+From the repository root:
 
 ```bash
-/Users/kevinlee/Documents/ESP32-Monitor/simulator/run.sh
+./simulator/run.sh
 ```
 
-The default scene is `monitor`; the primary preview is:
+The default scene is `monitor`. Its primary preview is:
 
 ```text
 simulator/output/latest/normal.png
@@ -67,10 +69,9 @@ List available scenes:
 5. Inspect `simulator/output/latest/my_screen_normal.png`.
 6. Run the same scene in the firmware when integrating it.
 
-A scene that has an inverted diagnostic mode should also expose a factory
-accepting `monitor_frame_variant_t`; the current monitor scene uses
-`monitor_ui_create_variant()` for that purpose. A normal-only future scene can
-ignore the variant.
+A scene with an inverted diagnostic mode should also expose a factory that
+accepts `monitor_frame_variant_t`. The current monitor scene uses
+`monitor_ui_create_variant()`; a normal-only scene can ignore the variant.
 
 The registry is intentionally small and explicit. Do not fork an existing
 screen into a simulator-only implementation: the simulator must render the
@@ -92,19 +93,18 @@ simulator/build/monitor_simulator --scene monitor --variant normal \
 | `--list-scenes` | Print registered scene names and descriptions |
 | `--help` | Show CLI help |
 
-## Agent workflow
+## UI development workflow
 
-1. Read the relevant UI source under `firmware/app/ui/` and the headers under `firmware/include/`.
+1. Read the relevant screen under `firmware/app/ui/` and its headers under `firmware/include/`.
 2. Change the shared UI rather than creating a simulator-only copy.
 3. Run `./simulator/run.sh <scene>`.
 4. Inspect the scene's `*_normal.png` output.
 5. Read the matching `.json` and `.sha256` for machine-readable results.
 6. Treat a failing unit/e2e test or missing preview as an unsuccessful change.
 
-Keep simulated frames deterministic: avoid wall-clock text, random values, and
-unbounded animations in scenes used for visual regression checks. If a screen
-uses time-dependent content, add a fixed test state or a deterministic scene
-factory instead of changing the production UI contract.
+Keep scenes used for visual regression deterministic. Avoid wall-clock text,
+random values, and unbounded animations. For time-dependent content, provide a
+fixed test state or deterministic scene factory.
 
 ## Output contract
 
@@ -129,7 +129,7 @@ shared with the firmware.
 
 ## Tests
 
-`./simulator/run.sh` runs both layers:
+`./simulator/run.sh` builds the simulator and runs both test layers:
 
 - `monitor_unit_tests`: SHA-256 vectors, RGB565/1bpp round trips, panel corner
   mapping and polarity, deterministic LVGL rendering, and PNG generation.

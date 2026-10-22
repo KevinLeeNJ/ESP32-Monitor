@@ -21,8 +21,25 @@ set(CONFIG_LV_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
 add_subdirectory("${LVGL_ROOT}" "${CMAKE_BINARY_DIR}/lvgl")
 
+# Reuse the firmware's pinned cJSON when available. A desktop-only checkout
+# fetches that same upstream version without requiring the ESP-IDF toolchain.
+set(CJSON_SOURCE_DIR "${FIRMWARE_ROOT}/managed_components/espressif__cjson/cJSON")
+if(NOT EXISTS "${CJSON_SOURCE_DIR}/cJSON.c")
+    include(FetchContent)
+    FetchContent_Declare(monitor_cjson
+        GIT_REPOSITORY https://github.com/DaveGamble/cJSON.git
+        GIT_TAG v1.7.19
+        GIT_SHALLOW TRUE
+        SOURCE_SUBDIR unused
+    )
+    FetchContent_MakeAvailable(monitor_cjson)
+    set(CJSON_SOURCE_DIR "${monitor_cjson_SOURCE_DIR}")
+endif()
+
 add_library(monitor_sim_core STATIC
     "${FIRMWARE_ROOT}/src/display/monitor_pack.c"
+    "${FIRMWARE_ROOT}/src/display/monitor_devices_data.c"
+    "${CJSON_SOURCE_DIR}/cJSON.c"
     "${FIRMWARE_ROOT}/src/display/monitor_render.c"
     "${FIRMWARE_ROOT}/app/ui/monitor_ui.c"
     "${FIRMWARE_ROOT}/app/ui/weather_assets.c"
@@ -32,6 +49,7 @@ add_library(monitor_sim_core STATIC
     src/sha256.c
 )
 target_include_directories(monitor_sim_core PUBLIC
+    "${CJSON_SOURCE_DIR}"
     "${FIRMWARE_ROOT}/include"
     "${FIRMWARE_ROOT}/app/ui"
     "${REPO_ROOT}/third_party"
@@ -47,6 +65,11 @@ if(BUILD_TESTING)
     add_executable(monitor_unit_tests tests/unit_tests.c)
     target_link_libraries(monitor_unit_tests PRIVATE monitor_sim_core)
     add_test(NAME monitor_unit_tests COMMAND monitor_unit_tests)
+    find_program(NODE_EXECUTABLE node)
+    if(NODE_EXECUTABLE)
+        add_test(NAME monitor_config_page_tests
+            COMMAND "${NODE_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/config_page_test.cjs")
+    endif()
 
     add_test(
         NAME monitor_simulator_e2e

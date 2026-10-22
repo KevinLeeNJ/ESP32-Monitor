@@ -7,6 +7,7 @@
 #include "monitor_ui.h"
 #include "scene_registry.h"
 #include "sha256.h"
+#include "cJSON.h"
 
 static int failures = 0;
 
@@ -170,8 +171,117 @@ static void test_png_signature(void)
     }
 }
 
+
+static const char *SUMMARY =
+    "{\"device_count\":1,\"devices\":[{\"name\":\"NAS\",\"uptime\":\"12d 4h\","
+    "\"metric_count\":3,\"metrics\":[{\"name\":\"CPU\",\"value\":\"27%\",\"percent\":27},"
+    "{\"name\":\"MEM\",\"value\":\"42%\",\"percent\":42},"
+    "{\"name\":\"DISK\",\"value\":\"--\",\"percent\":null}]}]}";
+
+static void test_devices_url(void)
+{
+    static const char *good[] = {"", "https://baseurl.com:8443/", "https://baseurl.com:443",
+        "http://192.168.1.3:8080", "https://monitor.example.com", "http://[::1]:18080/", "https://example.com:65535"};
+    static const char *bad[] = {"https://", "ftp://example.com", "https://u:p@example.com:8443",
+        "https://example.com/path", "https://example.com?x=1", "https://example.com/#a",
+        "https://example.com:0", "https://example.com:65536", "https://example.com:port",
+        "https://example.com:", "https://example.com:443:8443", "https://example.com\\path", "https://bad host"};
+    char url[256];
+    for (size_t i = 0; i < sizeof(good) / sizeof(*good); ++i) {
+        strcpy(url, good[i]);
+        CHECK(monitor_devices_normalize_url(url), "valid base URL including custom ports");
+    }
+    strcpy(url, good[1]);
+    monitor_devices_normalize_url(url);
+    CHECK(strcmp(url, "https://baseurl.com:8443") == 0, "normalization preserves custom HTTPS port");
+    for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); ++i) {
+        strcpy(url, bad[i]);
+        CHECK(!monitor_devices_normalize_url(url), "reject unsafe or malformed base URL");
+    }
+    CHECK(monitor_devices_valid_token("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"), "accept Server read token");
+    CHECK(!monitor_devices_valid_token("token\r\nHeader: value"), "reject header injection token");
+    CHECK(!monitor_devices_valid_token(""), "do not allow anonymous Devices requests");
+}
+
+static void reject_summary(const char *body, size_t len)
+{
+    monitor_devices_snapshot_t before, after;
+    memset(&before, 0x5a, sizeof(before));
+    after = before;
+    CHECK(!monitor_devices_parse(body, len, &after), "reject malformed summary");
+    CHECK(memcmp(&after, &before, sizeof(after)) == 0, "invalid summary preserves previous snapshot atomically");
+}
+static void test_devices_parser(void)
+{
+    monitor_devices_snapshot_t snapshot = {0};
+    CHECK(monitor_devices_parse(SUMMARY, strlen(SUMMARY), &snapshot), "parse real Server summary contract");
+    CHECK(snapshot.count == 1 && snapshot.devices[0].metric_count == 3, "fixed device and metric counts");
+    CHECK(!snapshot.devices[0].metrics[2].percent_valid, "null percent stays distinct from zero");
+    CHECK(strcmp(snapshot.devices[0].uptime, "12d 4h") == 0, "copy uptime to owned storage");
+    static const char *bad[] = {"{}", "[]", "{\"device_count\":0.5,\"devices\":[]}",
+        "{\"device_count\":1,\"devices\":[]}", "{\"device_count\":5,\"devices\":[]}",
+        "{\"device_count\":0,\"devices\":[]}junk", "{\"device_count\":0,\"device_count\":0,\"devices\":[]}"};
+    for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); ++i) reject_summary(bad[i], strlen(bad[i]));
+    for (int variant = 0; variant < 9; ++variant) {
+        cJSON *root = cJSON_Parse(SUMMARY);
+        cJSON *d = cJSON_GetArrayItem(cJSON_GetObjectItem(root, "devices"), 0);
+        cJSON *m = cJSON_GetArrayItem(cJSON_GetObjectItem(d, "metrics"), 0);
+        switch (variant) {
+            case 0: cJSON_ReplaceItemInObject(d, "name", cJSON_CreateString("123456789")); break;
+            case 1: cJSON_ReplaceItemInObject(d, "uptime", cJSON_CreateString("123456789")); break;
+            case 2: cJSON_ReplaceItemInObject(d, "metric_count", cJSON_CreateNumber(2)); break;
+            case 3: cJSON_ReplaceItemInObject(m, "percent", cJSON_CreateNumber(101)); break;
+            case 4: cJSON_ReplaceItemInObject(m, "percent", cJSON_CreateNumber(-1)); break;
+            case 5: cJSON_ReplaceItemInObject(m, "percent", cJSON_CreateNumber(2.5)); break;
+            case 6: cJSON_ReplaceItemInObject(m, "name", cJSON_CreateString("MEM")); break;
+            case 7: cJSON_ReplaceItemInObject(m, "value", cJSON_CreateString("123456789")); break;
+            case 8: cJSON_DeleteItemFromObject(m, "percent"); break;
+        }
+        char *body = cJSON_PrintUnformatted(root);
+        reject_summary(body, strlen(body));
+        cJSON_free(body);
+        cJSON_Delete(root);
+    }
+    const char *nul = "{\"device_count\":0,\"devices\":[],\"extra\":\"\\u0000\"}";
+    reject_summary(nul, strlen(nul));
+    char large[4098];
+    memset(large, ' ', sizeof(large)); large[4097] = 0;
+    reject_summary(large, 4097);
+    char deep[129];
+    memset(deep, '[', 64); memset(deep + 64, ']', 64); deep[128] = 0;
+    reject_summary(deep, 128);
+    const char *empty = "{\"device_count\":0,\"devices\":[]}";
+    CHECK(monitor_devices_parse(empty, strlen(empty), &snapshot) && !snapshot.count, "successful empty response removes all old devices");
+}
+static void test_devices_ui_replacement(void)
+{
+    monitor_renderer_t renderer;
+    CHECK(monitor_renderer_init(&renderer, monitor_ui_create), "create Devices UI");
+    lv_obj_t *root = monitor_renderer_root(&renderer);
+    monitor_devices_snapshot_t snapshot = {0};
+    monitor_devices_parse(SUMMARY, strlen(SUMMARY), &snapshot);
+    monitor_ui_apply_devices_snapshot(root, &snapshot);
+    CHECK(monitor_renderer_render(&renderer), "render live Devices snapshot");
+    CHECK(lv_obj_get_child_by_name(root, "device_1") == NULL, "remove extra old device cards");
+    lv_obj_t *card = lv_obj_get_child_by_name(root, "device_0");
+    CHECK(card != NULL, "create only the new snapshot card");
+    CHECK(lv_obj_get_y(lv_obj_get_child(card, 2)) == lv_obj_get_y(lv_obj_get_child(card, 3)), "metric label and value share the same horizontal row");
+    strcpy(snapshot.devices[0].name, "PC");
+    monitor_ui_apply_devices_snapshot(root, &snapshot);
+    card = lv_obj_get_child_by_name(root, "device_0");
+    CHECK(strcmp(lv_label_get_text(lv_obj_get_child(card, 0)), "PC") == 0, "same-count membership changes replace cards");
+    snapshot.count = 0;
+    monitor_ui_apply_devices_snapshot(root, &snapshot);
+    CHECK(lv_obj_get_child_by_name(root, "device_0") == NULL, "empty online list removes final device card");
+    CHECK(lv_obj_get_child_by_name(root, "empty_devices") != NULL, "empty online list displays message");
+    monitor_renderer_deinit(&renderer);
+}
+
 int main(void)
 {
+    test_devices_url();
+    test_devices_parser();
+    test_devices_ui_replacement();
     test_sha256_vectors();
     test_pack_round_trip();
     test_pack_layout();

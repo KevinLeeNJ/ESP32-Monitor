@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "lvgl.h"
+#include "monitor_devices_data.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -45,14 +46,6 @@ typedef enum {
 } monitor_weather_condition_t;
 
 typedef struct {
-    const char *name;
-    int cpu_percent;
-    int ram_percent;
-    int battery_percent; /* -1 means the device has no battery metric. */
-    bool online;
-} monitor_device_t;
-
-typedef struct {
     monitor_wifi_state_t wifi_state;
     int board_battery_percent;
     monitor_weather_condition_t weather_condition;
@@ -85,6 +78,7 @@ const lv_image_dsc_t *monitor_weather_condition_icon(monitor_weather_condition_t
 void monitor_ui_set_demo_data(const monitor_ui_demo_data_t *data);
 /* Override the deterministic simulator clock with live firmware values. */
 void monitor_ui_set_clock_text(const char *time_text, const char *date_text);
+void monitor_ui_apply_devices_snapshot(lv_obj_t *root, const monitor_devices_snapshot_t *snapshot);
 void monitor_ui_apply_snapshot(lv_obj_t *root, const monitor_ui_snapshot_t *snapshot);
 
 lv_obj_t *monitor_ui_create(lv_obj_t *parent);

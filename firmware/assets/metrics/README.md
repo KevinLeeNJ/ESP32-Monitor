@@ -1,10 +1,13 @@
 # Metric Icons
 
-The thermometer and droplets icons are sourced from the open-source
-[Lucide Icons](https://github.com/lucide-icons/lucide) project.
+The thermometer and droplets icons come from [Lucide Icons](https://github.com/lucide-icons/lucide), an open-source icon set.
 
-- Source files: `thermometer.svg`, `droplets.svg`
-- License: ISC
-- The sourced icon geometry is rasterized into 24x24 A8 masks in
-  `firmware/app/ui/weather_assets.c` so LVGL can recolor them for the normal and
-  inverted monochrome panel variants.
+[简体中文](README.zh_CN.md)
+
+| Item | Details |
+|---|---|
+| Source files | `thermometer.svg`, `droplets.svg` |
+| License | ISC |
+| Firmware representation | 24 × 24 A8 masks in `firmware/app/ui/weather_assets.c` |
+
+LVGL recolors these masks for the normal and inverted monochrome display variants.

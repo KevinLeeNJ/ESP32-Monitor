@@ -11,6 +11,7 @@
 #include "monitor_clock.h"
 #include "monitor_sensors.h"
 #include "monitor_weather.h"
+#include "monitor_devices.h"
 #include "monitor_display_refresh.h"
 
 #include <string.h>
@@ -27,7 +28,6 @@ static const rlcd_pins_t PINS = {
 };
 
 static monitor_ui_demo_data_t g_demo;
-static monitor_device_t g_devices[4];
 
 typedef struct {
     int battery_percent;
@@ -36,6 +36,7 @@ typedef struct {
     int aqi;
     monitor_weather_condition_t weather_condition;
     monitor_wifi_state_t wifi_state;
+    monitor_devices_snapshot_t devices;
     char time_text[8];
     char date_text[16];
 } display_snapshot_t;
@@ -61,6 +62,7 @@ static void refresh_monitor_data(char *time_text, size_t time_size,
 
 static void capture_display_snapshot(display_snapshot_t *snapshot)
 {
+    monitor_devices_get(&snapshot->devices);
     refresh_monitor_data(snapshot->time_text, sizeof(snapshot->time_text),
                          snapshot->date_text, sizeof(snapshot->date_text));
     snapshot->battery_percent = g_demo.board_battery_percent;
@@ -75,7 +77,8 @@ static void capture_display_snapshot(display_snapshot_t *snapshot)
 static bool display_snapshot_equal(const display_snapshot_t *a,
                                   const display_snapshot_t *b)
 {
-    return a->battery_percent == b->battery_percent &&
+    return a->devices.version == b->devices.version &&
+           a->battery_percent == b->battery_percent &&
            a->temperature_tenths_c == b->temperature_tenths_c &&
            a->humidity_percent == b->humidity_percent &&
            a->aqi == b->aqi &&
@@ -91,21 +94,11 @@ static lv_obj_t *monitor_screen_factory(lv_obj_t *parent)
     monitor_ui_set_demo_data(&g_demo);
     monitor_ui_set_clock_text(g_rendered_snapshot.time_text,
                               g_rendered_snapshot.date_text);
-    return monitor_ui_create_with_devices_battery_wifi_variant(
-        parent, g_devices, 4, g_demo.board_battery_percent,
+    lv_obj_t *root = monitor_ui_create_with_devices_battery_wifi_variant(
+        parent, NULL, 0, g_demo.board_battery_percent,
         g_rendered_snapshot.wifi_state, MONITOR_FRAME_NORMAL);
-}
-
-static void set_devices(uint8_t count, int level)
-{
-    static const char *names[] = {"NAS", "PI", "PC", "ROUTER"};
-    for(uint8_t i = 0; i < 4; ++i) {
-        g_devices[i].name = names[i];
-        g_devices[i].cpu_percent = level;
-        g_devices[i].ram_percent = level;
-        g_devices[i].battery_percent = level;
-        g_devices[i].online = i < count;
-    }
+    monitor_ui_apply_devices_snapshot(root, &g_rendered_snapshot.devices);
+    return root;
 }
 
 static void reset_demo(void)
@@ -116,7 +109,6 @@ static void reset_demo(void)
     g_demo.temperature_tenths_c = 245;
     g_demo.humidity_percent = 58;
     g_demo.aqi = -1;
-    set_devices(4, 50);
 }
 
 
@@ -142,6 +134,7 @@ void app_main(void)
 
     ESP_ERROR_CHECK(monitor_clock_start());
     ESP_ERROR_CHECK(monitor_weather_start());
+    ESP_ERROR_CHECK(monitor_devices_start());
     esp_err_t sensor_err = monitor_sensors_start();
     if(sensor_err != ESP_OK) ESP_LOGW(TAG, "sensor initialization failed: %s", esp_err_to_name(sensor_err));
     esp_err_t wifi_err = monitor_wifi_start();
@@ -184,6 +177,8 @@ void app_main(void)
                 .aqi = current.aqi,
             };
             monitor_ui_apply_snapshot(monitor_renderer_root(&renderer), &ui);
+            if (displayed.devices.version != current.devices.version)
+                monitor_ui_apply_devices_snapshot(monitor_renderer_root(&renderer), &current.devices);
             if (monitor_renderer_render(&renderer)) {
                 esp_err_t draw_err = rlcd_port_draw_diff(port, monitor_renderer_packed(&renderer), MONITOR_FRAME_BYTES);
                 if (draw_err != ESP_OK) ESP_LOGE(TAG, "display commit failed: %s", esp_err_to_name(draw_err));
