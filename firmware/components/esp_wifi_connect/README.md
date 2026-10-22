@@ -1,39 +1,47 @@
-# ESP32 Wi-Fi Connect
+# ESP-WiFi-Connect
 
-This component helps with Wi-Fi connection for the device.
+ESP-WiFi-Connect manages station connections and provides a web portal for
+provisioning Wi-Fi credentials. This project uses a local copy of the component
+with application-specific extensions; see the top-level README for how the
+monitor enters provisioning mode.
 
-It first tries to connect to a Wi-Fi network using the credentials stored in the flash. If this fails, it starts an access point and a web server to allow the user to connect to a Wi-Fi network.
+[简体中文](README.zh_CN.md)
 
-The URL to access the web server is `http://192.168.4.1`.
+The component uses saved credentials when available. It can also start an
+access point and web server at `http://192.168.4.1/` for provisioning.
 
-### Screenshot: Wi-Fi Configuration v3.2
+## Configuration portal
+
+The screenshot shows the v3.2 portal:
 
 <img src="assets/ap_v3_2.jpg" width="320" alt="Wi-Fi Configuration v3.2">
 
-## Changelog: v3.3.1
+## Changelog
+
+### v3.3.1
 
 - Bound SSID/password copies into `wifi_config` so a full 32-byte SSID no longer overflows with `strcpy`.
 - Config portal and SmartConfig now handle a maximum-length SSID without truncating or reading past the buffer.
 
-## Changelog: v3.3.0
+### v3.3.0
 
 - Persist each saved AP's channel in NVS as `channel`, `channel1`, ... `channel9` (same indexing as `password` / `passwordN`). 2.4 GHz (1-14) and 5 GHz (36-177) share one `uint8` key because the channel numbers do not overlap.
 - The first station scan after start only visits those saved channels. If no matching AP is found, the next scan is a full-band scan.
 - After a successful connection, the current channel is written back so later boots stay accurate if the AP moved.
 
-## Changelog: v3.2.0
+### v3.2.0
 
 - Station mode now connects to the strongest same-SSID AP. `StartConnect()` sets `WIFI_ALL_CHANNEL_SCAN` + `WIFI_CONNECT_AP_BY_SIGNAL` on the station config so the driver picks the AP with the best signal instead of the first match it finds (the previous default was `WIFI_FAST_SCAN`).
 - Added `station_failure_retry_cnt` (default: 3) to `WifiManagerConfig`. The driver retries the strongest AP this many times before falling back to a weaker same-SSID AP, avoiding spurious fallback on a single transient auth failure.
 - Added `show_ota_config` and `show_sleep_config` flags to `WifiManagerConfig`. Both default to `false`, hiding the corresponding fields in the config portal Advanced tab. Set them to `true` to make the fields visible.
 
-## Changelog: v3.1.0
+### v3.1.0
 
 - Event callback now includes an additional `data` parameter for extra information.
 - Disconnected event now provides the disconnect reason code via the `data` parameter.
 - This allows applications to handle different disconnect scenarios appropriately.
 
-## Changelog: v3.0.0
+### v3.0.0
 
 - Added WifiManager class for unified WiFi connection management.
 - Improved DnsServer and WifiConfigurationAp classes for better resource handling.
@@ -41,29 +49,29 @@ The URL to access the web server is `http://192.168.4.1`.
 - Enhanced error handling and state management in WifiStation.
 - Cleaned up unused code and improved thread safety across components.
 
-## Changelog: v2.6.0
+### v2.6.0
 
 - Add support for ESP32C5 5G mode.
 
-## Changelog: v2.4.0
+### v2.4.0
 
 - Add ja / zh-TW languages.
 - Add advanced tab.
 - Add "Connection: close" headers to save open sockets.
 
-## Changelog: v2.3.0
+### v2.3.0
 
 - Add support for language request.
 
-## Changelog: v2.2.0
+### v2.2.0
 
 - Add support for ESP32 SmartConfig(ESPTouch v2)
 
-## Changelog: v2.1.0
+### v2.1.0
 
 - Improve Wi-Fi connection logic.
 
-## Changelog: v2.0.0
+### v2.0.0
 
 - Add support for multiple Wi-Fi SSID management.
 - Auto switch to the best Wi-Fi network.
@@ -72,11 +80,13 @@ The URL to access the web server is `http://192.168.4.1`.
 
 ## Configuration
 
-The Wi-Fi credentials are stored in the flash under the "wifi" namespace.
+Wi-Fi credentials are stored in NVS under the `wifi` namespace.
 
-The keys are "ssid", "ssid1", ... "ssid9", "password", "password1", ... "password9", and "channel", "channel1", ... "channel9". Channel is a `uint8` (0 = unknown; 1-14 = 2.4 GHz; 36-177 = 5 GHz).
+The keys are `ssid` through `ssid9`, `password` through `password9`, and
+`channel` through `channel9`. Channel is a `uint8`: `0` means unknown, `1–14`
+means 2.4 GHz, and `36–177` means 5 GHz.
 
-## Usage
+## Integration example
 
 ```cpp
 #include <wifi_manager.h>

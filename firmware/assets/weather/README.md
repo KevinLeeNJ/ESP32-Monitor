@@ -1,6 +1,10 @@
 # Weather Icons
 
-Weather symbols are derived from the open-source [Weather Icons](https://github.com/erikflowers/weather-icons) project by Erik Flowers (SIL Open Font License 1.1). The user-facing weather label is Chinese and is rendered with an embedded 12 px Noto Sans SC subset (`firmware/app/ui/weather_zh_font.c`), containing only the characters needed for these labels.
+Weather symbols are based on Erik Flowers' open-source [Weather Icons](https://github.com/erikflowers/weather-icons) project, licensed under the SIL Open Font License 1.1. The original SVG files are kept in this directory; the firmware and simulator use monochrome glyph masks embedded in `firmware/app/ui/weather_assets.c`.
+
+[简体中文](README.zh_CN.md)
+
+The UI displays Chinese condition labels using an embedded 12 px Noto Sans SC subset in `firmware/app/ui/weather_zh_font.c`. The subset contains only the characters required for the labels below.
 
 Supported UI conditions (in enum order, also used by the firmware demo sweep):
 
@@ -22,5 +26,3 @@ Supported UI conditions (in enum order, also used by the firmware demo sweep):
 | Fog | 雾 | fog |
 | Haze | 霾 | fog/haze |
 | Dust storm | 沙尘暴 | dust |
-
-The SVG source files are retained in this directory. Their monochrome glyph masks are embedded in `firmware/app/ui/weather_assets.c` for firmware and simulator use.

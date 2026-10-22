@@ -28,11 +28,12 @@ extern const lv_image_dsc_t monitor_metric_droplets;
 
 /* The simulator intentionally uses fixed values. Firmware can create the same
  * layout with live values through monitor_ui_create_with_devices(). */
+#define DEMO_DEVICE(n, c, m, d) {n, "12d 4h", 3, {{"CPU", #c "%", c, true}, {"MEM", #m "%", m, true}, {"DISK", #d "%", d, true}}}
 static const monitor_device_t DEFAULT_DEVICES[] = {
-    {"NAS", 37, 62, 84, true},
-    {"PI", 18, 47, 62, true},
-    {"PC", 72, 81, -1, true},
-    {"ROUTER", 29, 54, 100, true},
+    DEMO_DEVICE("NAS", 37, 62, 84),
+    DEMO_DEVICE("PI", 18, 47, 62),
+    DEMO_DEVICE("PC", 72, 81, 0),
+    DEMO_DEVICE("ROUTER", 29, 54, 100),
 };
 
 static char clock_time_text[8] = "12:34";
@@ -199,21 +200,18 @@ const lv_image_dsc_t *monitor_weather_condition_icon(monitor_weather_condition_t
 }
 
 static void make_metric(lv_obj_t *card, int32_t card_width, int32_t y,
-                        const char *name, int value, const lv_font_t *font)
+                        const monitor_device_metric_t *metric, const lv_font_t *font)
 {
-    if(value > 100) value = 100;
-    char value_text[8];
-    if(value < 0) {
-        snprintf(value_text, sizeof(value_text), "--");
-    } else {
-        snprintf(value_text, sizeof(value_text), "%d%%", value);
-    }
-
-    make_label(card, name, 7, y, font, COLOR_MUTED);
-    lv_obj_t *value_label = make_label(card, value_text, card_width - 35, y,
-                                       font, COLOR_BLACK);
+    lv_point_t name_size, value_size;
+    lv_text_get_size(&name_size, metric->name, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    lv_text_get_size(&value_size, metric->value, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    if (name_size.x + value_size.x + 4 > card_width - 14) font = &lv_font_montserrat_8;
+    make_label(card, metric->name, 7, y, font, COLOR_MUTED);
+    lv_obj_t *value_label = make_label(card, metric->value, 7, y, font, COLOR_BLACK);
+    lv_obj_set_width(value_label, card_width - 14);
     lv_obj_set_style_text_align(value_label, LV_TEXT_ALIGN_RIGHT, 0);
-    make_bar(card, 7, y + 16, card_width - 14, value);
+    make_bar(card, 7, y + 16, card_width - 14,
+             metric->percent_valid ? metric->percent : -1);
 }
 
 static lv_obj_t *make_icon(lv_obj_t *parent, const lv_image_dsc_t *source,
@@ -376,15 +374,9 @@ static void make_device_card(lv_obj_t *parent, const monitor_device_t *device,
     set_name(card, card_name);
 
     make_label(card, device->name, 7, 7, name_font, COLOR_BLACK);
-    const uint32_t status_color = device->online ? COLOR_BLACK : COLOR_LIGHT;
-    lv_obj_t *status = make_box(card, width - 17, 9, 8, 8, 4, status_color, 1, COLOR_BLACK);
-    set_name(status, "ink");
-    make_label(card, device->online ? "ONLINE" : "OFFLINE", 7, 29,
-               &lv_font_montserrat_12, device->online ? COLOR_BLACK : COLOR_MUTED);
-
-    make_metric(card, width, metric_y, "CPU", device->cpu_percent, metric_font);
-    make_metric(card, width, metric_y + metric_step, "RAM", device->ram_percent, metric_font);
-    make_metric(card, width, metric_y + metric_step * 2, "PWR", device->battery_percent, metric_font);
+    make_label(card, device->uptime, 7, 29, &lv_font_montserrat_12, COLOR_MUTED);
+    for (uint8_t i = 0; i < device->metric_count && i < 3; ++i)
+        make_metric(card, width, metric_y + metric_step * i, &device->metrics[i], metric_font);
 }
 
 static void apply_variant_recursive(lv_obj_t *obj, bool inverted)
@@ -420,6 +412,49 @@ static void apply_variant_recursive(lv_obj_t *obj, bool inverted)
     for(uint32_t i = 0; i < lv_obj_get_child_count(obj); ++i) {
         apply_variant_recursive(lv_obj_get_child(obj, i), inverted);
     }
+}
+
+void monitor_ui_apply_devices_snapshot(lv_obj_t *root, const monitor_devices_snapshot_t *snapshot)
+{
+    if (!root || !snapshot || snapshot->count > 4) return;
+    for (int i = 0; i < 4; ++i) {
+        char name[24];
+        snprintf(name, sizeof(name), "device_%d", i);
+        lv_obj_t *old = lv_obj_get_child_by_name(root, name);
+        if (old) lv_obj_delete(old);
+    }
+    lv_obj_t *old = lv_obj_get_child_by_name(root, "empty_devices");
+    if (old) lv_obj_delete(old);
+    const char *status = "";
+    switch (snapshot->status) {
+        case MONITOR_DEVICES_NOT_CONFIGURED: status = "NOT CONFIGURED"; break;
+        case MONITOR_DEVICES_WAITING: status = "WAITING FOR DATA"; break;
+        case MONITOR_DEVICES_STALE: status = "STALE"; break;
+        case MONITOR_DEVICES_UNAVAILABLE: status = "DATA UNAVAILABLE"; break;
+        case MONITOR_DEVICES_AUTH_ERROR: status = snapshot->count ? "AUTH ERROR / STALE" : "AUTH ERROR"; break;
+        default: break;
+    }
+    char title[40];
+    snprintf(title, sizeof(title), "%u%s%s", snapshot->count, *status ? "  " : "", status);
+    lv_obj_t *count = lv_obj_get_child_by_name(root, "device_count");
+    lv_obj_set_pos(count, 130, 97);
+    lv_obj_set_width(count, 254);
+    lv_label_set_text(count, title);
+    if (!snapshot->count) {
+        lv_obj_t *empty = make_label(root, snapshot->status == MONITOR_DEVICES_AUTH_ERROR ? "DATA UNAVAILABLE" :
+                                     (*status ? status : "NO ONLINE DEVICES"), 0, 177,
+                                     &lv_font_montserrat_14, COLOR_MUTED);
+        lv_obj_set_width(empty, MONITOR_DISPLAY_WIDTH);
+        lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
+        set_name(empty, "empty_devices");
+    } else {
+        int32_t width = (CONTENT_WIDTH - DEVICE_GAP * (snapshot->count - 1)) / snapshot->count;
+        for (uint8_t i = 0; i < snapshot->count; ++i)
+            make_device_card(root, &snapshot->devices[i], snapshot->count, i,
+                             CONTENT_X + i * (width + DEVICE_GAP), width);
+    }
+    monitor_ui_state_t *state = lv_obj_get_user_data(root);
+    if (state && state->variant != MONITOR_FRAME_NORMAL) apply_variant_recursive(root, true);
 }
 
 lv_obj_t *monitor_ui_create_with_devices(lv_obj_t *parent,
@@ -531,34 +566,9 @@ lv_obj_t *monitor_ui_create_with_devices_battery_wifi_variant(lv_obj_t *parent,
     lv_obj_set_style_text_align(count_label, LV_TEXT_ALIGN_RIGHT, 0);
     set_name(count_label, "device_count");
 
-    /* Offline devices are omitted before calculating widths. This keeps the
-     * remaining cards evenly distributed for every online-device count. */
-    monitor_device_t visible_devices[4];
-    uint8_t visible_count = 0;
-    for(uint8_t i = 0; i < device_count; ++i) {
-        if(!devices[i].online) continue;
-        visible_devices[visible_count++] = devices[i];
-    }
-
-    char count_text[20];
-    snprintf(count_text, sizeof(count_text), "%u ONLINE", (unsigned)visible_count);
-    lv_obj_t *count = lv_obj_get_child_by_name(root, "device_count");
-    if(count != NULL) lv_label_set_text(count, count_text);
-
-    if(visible_count == 0) {
-        lv_obj_t *empty = make_label(root, "NO DEVICES", 0, 177,
-                                     &lv_font_montserrat_14, COLOR_MUTED);
-        lv_obj_set_width(empty, MONITOR_DISPLAY_WIDTH);
-        lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
-        set_name(empty, "empty_devices");
-    } else {
-        const int32_t available_width = CONTENT_WIDTH - DEVICE_GAP * ((int32_t)visible_count - 1);
-        const int32_t card_width = available_width / visible_count;
-        for(uint8_t i = 0; i < visible_count; ++i) {
-            const int32_t x = CONTENT_X + (int32_t)i * (card_width + DEVICE_GAP);
-            make_device_card(root, &visible_devices[i], visible_count, i, x, card_width);
-        }
-    }
+    monitor_devices_snapshot_t initial = {.count = device_count, .status = MONITOR_DEVICES_READY};
+    if (device_count) memcpy(initial.devices, devices, device_count * sizeof(*devices));
+    monitor_ui_apply_devices_snapshot(root, &initial);
 
     state->variant_label = make_label(root, "", 0, 0, &lv_font_montserrat_12, COLOR_MUTED);
     lv_obj_add_flag(state->variant_label, LV_OBJ_FLAG_HIDDEN);

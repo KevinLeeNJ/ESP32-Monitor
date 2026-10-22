@@ -1,4 +1,5 @@
 #include "wifi_configuration_ap.h"
+#include "monitor_devices_data.h"
 #include <cstdio>
 #include <memory>
 #include <freertos/FreeRTOS.h>
@@ -577,6 +578,17 @@ void WifiConfigurationAp::StartWebServer()
                 nvs_close(weather_nvs);
             }
             cJSON_AddBoolToObject(json, "qweather_key_configured", qweather_key_configured);
+            char devices_url[MONITOR_DEVICES_URL_MAX + 1] = {0};
+            bool devices_token_configured = false;
+            nvs_handle_t devices_nvs;
+            if (nvs_open("monitor_loc", NVS_READONLY, &devices_nvs) == ESP_OK) {
+                size_t size = sizeof(devices_url), token_size = 0;
+                if (nvs_get_str(devices_nvs, "devices_api_url", devices_url, &size) != ESP_OK) devices_url[0] = 0;
+                devices_token_configured = nvs_get_str(devices_nvs, "devices_token", nullptr, &token_size) == ESP_OK && token_size > 1;
+                nvs_close(devices_nvs);
+            }
+            cJSON_AddStringToObject(json, "devices_api_url", devices_url);
+            cJSON_AddBoolToObject(json, "devices_api_token_configured", devices_token_configured);
             cJSON_AddNumberToObject(json, "max_tx_power", this_->max_tx_power_);
             cJSON_AddBoolToObject(json, "remember_bssid", this_->remember_bssid_);
             cJSON_AddBoolToObject(json, "sleep_mode", this_->sleep_mode_);
@@ -609,7 +621,7 @@ void WifiConfigurationAp::StartWebServer()
         .handler = [](httpd_req_t *req) -> esp_err_t {
             char *buf;
             size_t buf_len = req->content_len;
-            if (buf_len > 1024) {
+            if (buf_len > 2048) {
                 httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Payload too large");
                 return ESP_FAIL;
             }
@@ -620,24 +632,74 @@ void WifiConfigurationAp::StartWebServer()
                 return ESP_FAIL;
             }
 
-            int ret = httpd_req_recv(req, buf, buf_len);
-            if (ret <= 0) {
-                free(buf);
-                if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
-                    httpd_resp_send_408(req);
-                } else {
-                    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Failed to receive request");
+            size_t received = 0;
+            while (received < buf_len) {
+                int ret = httpd_req_recv(req, buf + received, buf_len - received);
+                if (ret <= 0) {
+                    free(buf);
+                    if (ret == HTTPD_SOCK_ERR_TIMEOUT) httpd_resp_send_408(req);
+                    else httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Failed to receive request");
+                    return ESP_FAIL;
                 }
-                return ESP_FAIL;
+                received += ret;
             }
-            buf[ret] = '\0';
+            buf[received] = '\0';
 
             // 解析JSON数据
-            cJSON *json = cJSON_Parse(buf);
+            bool embedded_nul = memchr(buf, 0, received) != nullptr || strstr(buf, "\\u0000") != nullptr;
+            cJSON *json = embedded_nul ? nullptr : cJSON_ParseWithOpts(buf, nullptr, true);
             free(buf);
-            if (!json) {
+            if (!cJSON_IsObject(json)) {
+                cJSON_Delete(json);
                 httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
                 return ESP_FAIL;
+            }
+
+            // Validate Devices fields before modifying any persistent configuration.
+            const cJSON *devices_url_item = cJSON_GetObjectItemCaseSensitive(json, "devices_api_url");
+            const cJSON *devices_token_item = cJSON_GetObjectItemCaseSensitive(json, "devices_api_token");
+            const cJSON *devices_clear_item = cJSON_GetObjectItemCaseSensitive(json, "devices_api_token_clear");
+            char devices_url[MONITOR_DEVICES_URL_MAX + 1] = {0};
+            char devices_token[MONITOR_DEVICES_TOKEN_MAX + 1] = {0};
+            nvs_handle_t previous;
+            if (nvs_open("monitor_loc", NVS_READONLY, &previous) == ESP_OK) {
+                size_t size = sizeof(devices_url);
+                if (nvs_get_str(previous, "devices_api_url", devices_url, &size) != ESP_OK) devices_url[0] = 0;
+                size = sizeof(devices_token);
+                if (nvs_get_str(previous, "devices_token", devices_token, &size) != ESP_OK) devices_token[0] = 0;
+                nvs_close(previous);
+            }
+            const std::string previous_devices_url = devices_url;
+            const char *validation_error = nullptr;
+            if (devices_url_item) {
+                if (!cJSON_IsString(devices_url_item) || strlen(devices_url_item->valuestring) > MONITOR_DEVICES_URL_MAX)
+                    validation_error = "invalid_devices_api_url";
+                else snprintf(devices_url, sizeof(devices_url), "%s", devices_url_item->valuestring);
+            }
+            if (!monitor_devices_normalize_url(devices_url)) validation_error = "invalid_devices_api_url";
+            if (devices_token_item) {
+                if (!cJSON_IsString(devices_token_item) ||
+                    (devices_token_item->valuestring[0] && !monitor_devices_valid_token(devices_token_item->valuestring)))
+                    validation_error = "invalid_devices_api_token";
+                else if (devices_token_item->valuestring[0])
+                    snprintf(devices_token, sizeof(devices_token), "%s", devices_token_item->valuestring);
+            }
+            if (devices_clear_item && !cJSON_IsBool(devices_clear_item)) validation_error = "invalid_devices_api_token";
+            const bool clear_devices_token = cJSON_IsTrue(devices_clear_item);
+            if (clear_devices_token) devices_token[0] = 0;
+            const bool replacing_token = cJSON_IsString(devices_token_item) && devices_token_item->valuestring[0];
+            if (!validation_error && devices_url[0] && !monitor_devices_valid_token(devices_token) &&
+                !clear_devices_token && (previous_devices_url != devices_url || replacing_token)) {
+                validation_error = "devices_token_required";
+            }
+            if (validation_error) {
+                cJSON_Delete(json);
+                httpd_resp_set_status(req, "400 Bad Request");
+                httpd_resp_set_type(req, "application/json");
+                char response[128];
+                snprintf(response, sizeof(response), "{\"success\":false,\"error\":\"%s\"}", validation_error);
+                httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);
+                return ESP_OK;
             }
 
             // 获取当前对象
@@ -667,7 +729,6 @@ void WifiConfigurationAp::StartWebServer()
             cJSON *longitude = cJSON_GetObjectItem(json, "longitude");
             bool qweather_key_saved = false;
             bool qweather_host_saved = false;
-            bool qweather_configured = false;
             nvs_handle_t location_nvs;
             esp_err_t location_err = nvs_open("monitor_loc", NVS_READWRITE, &location_nvs);
             if (location_err == ESP_OK) {
@@ -694,32 +755,31 @@ void WifiConfigurationAp::StartWebServer()
                     size_t key_size = sizeof(key_check);
                     qweather_key_saved = nvs_get_str(location_nvs, "qweather_key", key_check, &key_size) == ESP_OK && key_check[0] != '\0';
                 }
-                if (location_err == ESP_OK) {
-                    location_err = nvs_commit(location_nvs);
+                if (location_err == ESP_OK && devices_url_item)
+                    location_err = nvs_set_str(location_nvs, "devices_api_url", devices_url);
+                if (location_err == ESP_OK && clear_devices_token) {
+                    location_err = nvs_erase_key(location_nvs, "devices_token");
+                    if (location_err == ESP_ERR_NVS_NOT_FOUND) location_err = ESP_OK;
+                } else if (location_err == ESP_OK && devices_token_item && devices_token_item->valuestring[0]) {
+                    location_err = nvs_set_str(location_nvs, "devices_token", devices_token);
                 }
                 if (location_err == ESP_OK) {
-                    char host_check[192] = {0};
-                    char key_check[128] = {0};
-                    size_t host_size = sizeof(host_check);
-                    size_t key_size = sizeof(key_check);
-                    qweather_configured =
-                        nvs_get_str(location_nvs, "qweather_host", host_check, &host_size) == ESP_OK &&
-                        nvs_get_str(location_nvs, "qweather_key", key_check, &key_size) == ESP_OK &&
-                        host_check[0] != '\0' && key_check[0] != '\0';
+                    location_err = nvs_commit(location_nvs);
                 }
                 nvs_close(location_nvs);
             }
             if (location_err != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to save weather settings: %s", esp_err_to_name(location_err));
+                ESP_LOGE(TAG, "Failed to save advanced settings: %s", esp_err_to_name(location_err));
+                nvs_close(nvs);
+                cJSON_Delete(json);
+                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to save advanced settings");
+                return ESP_FAIL;
             } else {
                 ESP_LOGI(TAG, "Weather settings saved: latitude=%s longitude=%s qweather_host=%s qweather_key=%s",
                          cJSON_IsString(latitude) ? latitude->valuestring : "",
                          cJSON_IsString(longitude) ? longitude->valuestring : "",
                          qweather_host_saved ? "configured" : "unchanged",
                          qweather_key_saved ? "configured" : "not configured");
-                if (qweather_configured && this_->on_advanced_settings_saved_) {
-                    this_->on_advanced_settings_saved_();
-                }
             }
 
             // 保存WiFi功率
@@ -768,6 +828,7 @@ void WifiConfigurationAp::StartWebServer()
                 return ESP_FAIL;
             }
 
+            if (this_->on_advanced_settings_saved_) this_->on_advanced_settings_saved_();
             // 发送成功响应
             httpd_resp_set_type(req, "application/json");
             httpd_resp_set_hdr(req, "Connection", "close");

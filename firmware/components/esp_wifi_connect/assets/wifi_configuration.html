@@ -112,6 +112,7 @@
             color: var(--text-muted);
         }
         input[type="text"],
+        input[type="url"],
         input[type="password"],
         select {
             width: 100%;
@@ -127,6 +128,7 @@
             appearance: none;
         }
         input[type="text"]:focus,
+        input[type="url"]:focus,
         input[type="password"]:focus,
         select:focus {
             border-color: var(--accent);
@@ -561,21 +563,37 @@
 
                 <!-- Weather location: blank uses public-IP geolocation after Wi-Fi connects -->
                 <p>
-                    <label for="latitude">天气纬度（留空自动定位）：</label>
-                    <input type="text" id="latitude" name="latitude" placeholder="例如 31.2304">
+                    <label for="latitude" data-lang="weather_latitude">天气纬度（留空自动定位）：</label>
+                    <input type="text" id="latitude" name="latitude" placeholder="例如 31.2304" data-lang-placeholder="weather_latitude_hint">
                 </p>
                 <p>
-                    <label for="longitude">天气经度（留空自动定位）：</label>
-                    <input type="text" id="longitude" name="longitude" placeholder="例如 121.4737">
+                    <label for="longitude" data-lang="weather_longitude">天气经度（留空自动定位）：</label>
+                    <input type="text" id="longitude" name="longitude" placeholder="例如 121.4737" data-lang-placeholder="weather_longitude_hint">
                 </p>
                 <p>
-                    <label for="qweather_host">和风天气 API Host：</label>
-                    <input type="text" id="qweather_host" name="qweather_host" placeholder="请输入你的和风天气 API Host">
+                    <label for="qweather_host" data-lang="weather_host">和风天气 API Host：</label>
+                    <input type="text" id="qweather_host" name="qweather_host" placeholder="请输入你的和风天气 API Host" data-lang-placeholder="weather_host_hint">
                 </p>
                 <p>
-                    <label for="qweather_key">和风天气 API Key：</label>
-                    <input type="password" id="qweather_key" name="qweather_key" placeholder="留空保持现有 Key">
+                    <label for="qweather_key" data-lang="weather_key">和风天气 API Key：</label>
+                    <input type="password" id="qweather_key" name="qweather_key" placeholder="留空保持现有 Key" data-lang-placeholder="token_keep">
                 </p>
+
+                <p>
+                    <label for="devices_api_url" data-lang="devices_url">Devices API Base URL:</label>
+                    <input type="url" id="devices_api_url" name="devices_api_url" maxlength="192"
+                           placeholder="https://monitor.example.com:8443" autocomplete="off">
+                    <small data-lang="devices_url_hint">Base URL with optional port; leave blank to disable. No path, query or fragment.</small>
+                </p>
+                <p>
+                    <label for="devices_api_token" data-lang="devices_token">Devices read-only API Token:</label>
+                    <input type="password" id="devices_api_token" name="devices_api_token" maxlength="128"
+                           autocomplete="new-password" data-lang-placeholder="token_keep" placeholder="Leave blank to keep the saved token">
+                </p>
+                <div class="switch-row">
+                    <label for="devices_api_token_clear" data-lang="devices_token_clear">Clear saved Devices token (pauses requests)</label>
+                    <input type="checkbox" id="devices_api_token_clear" name="devices_api_token_clear">
+                </div>
 
                 <!-- Max TX Power -->
                 <p class="field-inline">
@@ -612,7 +630,7 @@
                 </div>
 
                 <p>
-                    <input type="submit" value="Save" id="advanced_button" data-lang-value="save">
+                    <input type="submit" value="Save" id="advanced_button" data-lang-value="save" disabled>
                 </p>
             </div>
         </form>
@@ -1437,6 +1455,64 @@
         /**
          * Get supported language code from browser language
          */
+        // Additional Advanced fields follow the existing translation dictionary.
+        // Locales without these keys use English, including placeholders/errors.
+        Object.assign(translations['en-US'], {
+            weather_latitude: 'Weather latitude (blank for automatic location):',
+            weather_longitude: 'Weather longitude (blank for automatic location):',
+            weather_latitude_hint: 'e.g. 31.2304', weather_longitude_hint: 'e.g. 121.4737',
+            weather_host: 'QWeather API Host:', weather_host_hint: 'Enter your QWeather API Host',
+            weather_key: 'QWeather API Key:', token_keep: 'Leave blank to keep the saved credential',
+            token_configured: 'Configured (leave blank to keep unchanged)',
+            devices_url: 'Devices API Base URL:',
+            devices_url_hint: 'Base URL with optional port (e.g. :8443); no path, query or fragment. Leave blank to disable. Use HTTPS; HTTP is for isolated LAN debugging only.',
+            devices_token: 'Devices read-only API Token:',
+            devices_token_clear: 'Clear saved Devices token (pauses requests)',
+            invalid_devices_api_url: 'Enter an HTTP(S) Base URL with an optional port (1–65535), without credentials, path, query or fragment.',
+            invalid_devices_api_token: 'Enter the 64-character hexadecimal read-only token generated by the server.',
+            devices_token_required: 'Set a read-only token before enabling the Devices URL.',
+            save_failed: 'Could not save configuration.', configuration_saved: 'Configuration saved',
+            load_failed: 'Could not load configuration. Reload before saving.'
+        });
+        Object.assign(translations['zh-CN'], {
+            weather_latitude: '天气纬度（留空自动定位）：', weather_longitude: '天气经度（留空自动定位）：',
+            weather_latitude_hint: '例如 31.2304', weather_longitude_hint: '例如 121.4737',
+            weather_host: '和风天气 API Host：', weather_host_hint: '请输入你的和风天气 API Host',
+            weather_key: '和风天气 API Key：', token_keep: '留空保持现有凭据',
+            token_configured: '已配置（留空保持不变）', devices_url: 'Devices API 基地址：',
+            devices_url_hint: '支持自定义端口（如 :8443）；不含路径、查询参数或片段。留空停用。使用 HTTPS；HTTP 仅用于隔离局域网调试。',
+            devices_token: 'Devices 只读 API Token：', devices_token_clear: '清除已保存的 Devices Token（暂停拉取）',
+            invalid_devices_api_url: '请输入 HTTP(S) 基地址，端口可为 1–65535，不允许包含账号密码、路径、查询参数或片段。',
+            invalid_devices_api_token: '请输入服务端生成的 64 位十六进制只读 Token。',
+            devices_token_required: '启用 Devices 地址前请先设置只读 Token。',
+            save_failed: '保存配置失败。', configuration_saved: '配置已保存',
+            load_failed: '读取配置失败，请刷新页面后再保存。'
+        });
+        Object.assign(translations['zh-TW'], {
+            weather_latitude: '天氣緯度（留空自動定位）：', weather_longitude: '天氣經度（留空自動定位）：',
+            weather_latitude_hint: '例如 31.2304', weather_longitude_hint: '例如 121.4737',
+            weather_host: '和風天氣 API Host：', weather_host_hint: '請輸入你的和風天氣 API Host',
+            weather_key: '和風天氣 API Key：', token_keep: '留空保留現有憑證',
+            token_configured: '已設定（留空保持不變）', devices_url: 'Devices API 基底網址：',
+            devices_url_hint: '支援自訂連接埠（如 :8443）；不含路徑、查詢參數或片段。留空停用。請使用 HTTPS；HTTP 僅供隔離區域網路除錯。',
+            devices_token: 'Devices 唯讀 API Token：', devices_token_clear: '清除已儲存的 Devices Token（暫停擷取）',
+            invalid_devices_api_url: '請輸入 HTTP(S) 基底網址，連接埠可為 1–65535，不含帳號密碼、路徑、查詢參數或片段。',
+            invalid_devices_api_token: '請輸入伺服器產生的 64 位十六進位唯讀 Token。',
+            devices_token_required: '啟用 Devices 網址前請先設定唯讀 Token。',
+            save_failed: '儲存設定失敗。', configuration_saved: '設定已儲存',
+            load_failed: '讀取設定失敗，請重新載入後再儲存。'
+        });
+        function translate(key) {
+            const lang = document.getElementById('language').value;
+            return (translations[lang] && translations[lang][key]) || translations['en-US'][key] || key;
+        }
+        function updateCredentialPlaceholders() {
+            ['qweather_key', 'devices_api_token'].forEach(id => {
+                const input = document.getElementById(id);
+                input.placeholder = translate(input.dataset.configured === 'true' ? 'token_configured' : 'token_keep');
+            });
+        }
+
         function getSupportedLanguage(lang) {
             // First try exact match
             if (languageMap[lang]) {
@@ -1470,15 +1546,20 @@
             // Update text content
             document.querySelectorAll('[data-lang]').forEach(element => {
                 const key = element.getAttribute('data-lang');
-                element.textContent = translations[lang][key];
+                element.textContent = translate(key);
             });
             
             // Update input values
             document.querySelectorAll('[data-lang-value]').forEach(element => {
                 const key = element.getAttribute('data-lang-value');
-                element.value = translations[lang][key];
+                element.value = translate(key);
             });
             
+            document.querySelectorAll('[data-lang-placeholder]').forEach(element => {
+                element.placeholder = translate(element.getAttribute('data-lang-placeholder'));
+            });
+            updateCredentialPlaceholders();
+
             // Update AP list text based on 5G support
             const apList = document.getElementById('ap_list');
             if (apList.firstChild) {
@@ -1685,6 +1766,9 @@
                 longitude: document.getElementById('longitude').value.trim(),
                 qweather_host: document.getElementById('qweather_host').value.trim(),
                 qweather_key: document.getElementById('qweather_key').value.trim(),
+                devices_api_url: document.getElementById('devices_api_url').value.trim(),
+                devices_api_token: document.getElementById('devices_api_token').value.trim(),
+                devices_api_token_clear: document.getElementById('devices_api_token_clear').checked,
                 max_tx_power: parseInt(document.getElementById('max_tx_power').value),
                 remember_bssid: document.getElementById('remember_bssid').checked,
                 sleep_mode: document.getElementById('sleep_mode').checked
@@ -1701,16 +1785,16 @@
 
                 const data = await response.json();
                 if (!data.success) {
-                    throw new Error(data.error || 'Save failed');
+                    throw new Error(translate(data.error in translations['en-US'] ? data.error : 'save_failed'));
                 }
 
                 // Saving any advanced configuration ends the temporary
                 // configuration session, just like saving Wi-Fi credentials.
                 await fetch('/exit', { method: 'POST' });
                 advancedButton.disabled = false;
-                showToast('Configuration saved');
+                showToast(translate('configuration_saved'));
             } catch (err) {
-                advancedError.textContent = err.message;
+                advancedError.textContent = err instanceof TypeError || err instanceof SyntaxError ? translate('save_failed') : err.message;
                 advancedButton.disabled = false;
             }
         }
@@ -1756,6 +1840,7 @@
         async function loadAdvancedConfig() {
             try {
                 const response = await fetch('/advanced/config');
+                if (!response.ok) throw new Error('load_failed');
                 const data = await response.json();
                 
                 document.getElementById('ota_url_row').style.display =
@@ -1768,7 +1853,10 @@
                 if (data.latitude) document.getElementById('latitude').value = data.latitude;
                 if (data.longitude) document.getElementById('longitude').value = data.longitude;
                 if (data.qweather_host) document.getElementById('qweather_host').value = data.qweather_host;
-                if (data.qweather_key_configured) document.getElementById('qweather_key').placeholder = '已配置（留空保持不变）';
+                document.getElementById('qweather_key').dataset.configured = String(!!data.qweather_key_configured);
+                document.getElementById('devices_api_url').value = data.devices_api_url || '';
+                document.getElementById('devices_api_token').dataset.configured = String(!!data.devices_api_token_configured);
+                updateCredentialPlaceholders();
                 if (data.max_tx_power) {
                     document.getElementById('max_tx_power').value = data.max_tx_power;
                 }
@@ -1778,8 +1866,11 @@
                 if (data.sleep_mode !== undefined) {
                     document.getElementById('sleep_mode').checked = data.sleep_mode;
                 }
+                document.getElementById('advanced_button').disabled = false;
             } catch (error) {
                 console.error('Error loading advanced config:', error);
+                document.getElementById('advanced_error').textContent = translate('load_failed');
+                document.getElementById('advanced_button').disabled = true;
             }
         }
 

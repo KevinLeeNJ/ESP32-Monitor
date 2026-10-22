@@ -1,6 +1,7 @@
 #include "monitor_wifi_manager.h"
 #include "monitor_clock.h"
 #include "monitor_weather.h"
+#include "monitor_devices.h"
 #include "monitor_display_refresh.h"
 
 #include <string>
@@ -90,6 +91,7 @@ static void set_event(WifiEvent event, const std::string &data)
             }
             break;
         case WifiEvent::AdvancedConfigSaved:
+            monitor_devices_config_changed();
             if (WifiManager::GetInstance().IsConnected()) {
                 monitor_weather_on_wifi_connected();
             }
@@ -99,12 +101,14 @@ static void set_event(WifiEvent event, const std::string &data)
             update_wifi_state(MONITOR_WIFI_CONNECTED);
             monitor_clock_on_wifi_connected();
             monitor_weather_on_wifi_connected();
+            monitor_devices_set_wifi_available(true);
             break;
         case WifiEvent::Connecting:
         case WifiEvent::Scanning:
             if(!s_provisioning) update_wifi_state(MONITOR_WIFI_DISCONNECTED);
             break;
         case WifiEvent::Disconnected:
+            monitor_devices_set_wifi_available(false);
             monitor_clock_on_wifi_disconnected();
             monitor_weather_on_wifi_disconnected();
             if(!s_provisioning) {
