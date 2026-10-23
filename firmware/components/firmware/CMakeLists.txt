@@ -1,5 +1,5 @@
 idf_component_register(
     SRCS "display_port.c" "monitor_lvgl.c"
     INCLUDE_DIRS "."
-    REQUIRES esp_lcd esp_driver_spi esp_driver_gpio esp_timer esp_pm monitor_core esp_lvgl_adapter
+    REQUIRES esp_lcd esp_driver_spi esp_driver_gpio esp_timer esp_pm monitor_core lvgl
 )
