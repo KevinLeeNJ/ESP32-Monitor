@@ -14,7 +14,9 @@ typedef lv_obj_t *(*monitor_screen_factory_t)(lv_obj_t *parent);
 
 /* LVGL I1 includes an 8-byte palette; pixels are row-major, MSB first. */
 #define MONITOR_I1_PALETTE_BYTES 8U
-#define MONITOR_I1_DRAW_BUFFER_BYTES ((MONITOR_DISPLAY_WIDTH / 8U) * 40U + MONITOR_I1_PALETTE_BYTES)
+/* A full-height partial buffer avoids splitting large animation viewports.
+ * I1 needs only 15 KB; LVGL still draws and flushes only invalidated areas. */
+#define MONITOR_I1_DRAW_BUFFER_BYTES (MONITOR_FRAME_BYTES + MONITOR_I1_PALETTE_BYTES)
 
 typedef struct {
     lv_display_t *display;

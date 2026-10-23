@@ -3,6 +3,23 @@
 #include <stddef.h>
 #include <string.h>
 
+#ifdef ESP_PLATFORM
+#include "esp_heap_caps.h"
+
+static void *renderer_buffer_alloc(size_t bytes)
+{
+    /* These CPU-only I1 buffers never go to SPI DMA. Leave internal RAM for
+     * the DMA staging buffer, network stacks and concurrent TLS requests. */
+    void *buffer = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if(buffer == NULL) buffer = heap_caps_malloc(bytes, MALLOC_CAP_8BIT);
+    return buffer;
+}
+#define renderer_buffer_free heap_caps_free
+#else
+#define renderer_buffer_alloc lv_malloc
+#define renderer_buffer_free lv_free
+#endif
+
 static void flush_cb(lv_display_t *display, const lv_area_t *area, uint8_t *px_map)
 {
     monitor_renderer_t *renderer = (monitor_renderer_t *)lv_display_get_user_data(display);
@@ -28,8 +45,8 @@ bool monitor_renderer_init(monitor_renderer_t *renderer,
     memset(renderer, 0, sizeof(*renderer));
 
     lv_init();
-    renderer->draw_buffer = (uint8_t *)lv_malloc(MONITOR_I1_DRAW_BUFFER_BYTES);
-    renderer->packed = (uint8_t *)lv_malloc(MONITOR_FRAME_BYTES);
+    renderer->draw_buffer = (uint8_t *)renderer_buffer_alloc(MONITOR_I1_DRAW_BUFFER_BYTES);
+    renderer->packed = (uint8_t *)renderer_buffer_alloc(MONITOR_FRAME_BYTES);
     if(renderer->draw_buffer == NULL || renderer->packed == NULL) {
         monitor_renderer_deinit(renderer);
         return false;
@@ -63,11 +80,11 @@ void monitor_renderer_deinit(monitor_renderer_t *renderer)
         renderer->display = NULL;
     }
     if(renderer->draw_buffer != NULL) {
-        lv_free(renderer->draw_buffer);
+        renderer_buffer_free(renderer->draw_buffer);
         renderer->draw_buffer = NULL;
     }
     if(renderer->packed != NULL) {
-        lv_free(renderer->packed);
+        renderer_buffer_free(renderer->packed);
         renderer->packed = NULL;
     }
     renderer->root = NULL;
