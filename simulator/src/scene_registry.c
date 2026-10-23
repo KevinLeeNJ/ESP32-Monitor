@@ -51,7 +51,89 @@ STATE_FACTORY(devices_unavailable, MONITOR_DEVICES_UNAVAILABLE)
 STATE_FACTORY(devices_auth, MONITOR_DEVICES_AUTH_ERROR)
 STATE_FACTORY(devices_unconfigured, MONITOR_DEVICES_NOT_CONFIGURED)
 
+static lv_obj_t *create_device_transition(lv_obj_t *parent, monitor_frame_variant_t variant, bool online)
+{
+    monitor_device_t before[3] = {REVIEW_DEVICES[0], REVIEW_DEVICES[2], REVIEW_DEVICES[3]};
+    lv_obj_t *root = monitor_ui_create_with_devices_variant(parent, online ? before : REVIEW_DEVICES,
+                                                            online ? 2 : 3, variant);
+    monitor_ui_set_animations_enabled(root, true);
+    monitor_devices_snapshot_t next = {.count = online ? 3 : 2, .status = MONITOR_DEVICES_READY};
+    memcpy(next.devices, online ? REVIEW_DEVICES : before, next.count * sizeof(next.devices[0]));
+    monitor_ui_apply_devices_snapshot(root, &next);
+    return root;
+}
+static lv_obj_t *create_online(lv_obj_t *parent, monitor_frame_variant_t variant)
+{ return create_device_transition(parent, variant, true); }
+static lv_obj_t *create_offline(lv_obj_t *parent, monitor_frame_variant_t variant)
+{ return create_device_transition(parent, variant, false); }
+
+static lv_obj_t *create_clock_transition(lv_obj_t *parent, monitor_frame_variant_t variant, bool rollover)
+{
+    monitor_ui_set_clock_text(rollover ? "19:59" : "19:55", "MON 18 OCT");
+    lv_obj_t *root = create_monitor_scene(parent, variant);
+    monitor_ui_set_animations_enabled(root, true);
+    monitor_ui_snapshot_t next = {.time_text = rollover ? "20:00" : "19:56",
+        .wifi_state = MONITOR_WIFI_CONNECTED, .battery_percent = 78,
+        .weather_condition = MONITOR_WEATHER_UNKNOWN, .temperature_tenths_c = 245,
+        .humidity_percent = 58, .aqi = 42};
+    monitor_ui_apply_snapshot(root, &next);
+    monitor_ui_set_clock_text("12:34", "MON 18 OCT");
+    return root;
+}
+static lv_obj_t *create_minute(lv_obj_t *parent, monitor_frame_variant_t variant)
+{ return create_clock_transition(parent, variant, false); }
+static lv_obj_t *create_rollover(lv_obj_t *parent, monitor_frame_variant_t variant)
+{ return create_clock_transition(parent, variant, true); }
+
+static lv_obj_t *create_info_update(lv_obj_t *parent, monitor_frame_variant_t variant)
+{
+    monitor_ui_set_clock_text("19:55", "MON 18 OCT");
+    lv_obj_t *root = create_monitor_scene(parent, variant);
+    monitor_ui_set_clock_text("12:34", "MON 18 OCT");
+    monitor_ui_set_animations_enabled(root, true);
+    monitor_ui_snapshot_t next = {.time_text = "19:56", .wifi_state = MONITOR_WIFI_CONNECTED,
+        .battery_percent = 78, .weather_condition = MONITOR_WEATHER_LIGHT_RAIN,
+        .temperature_tenths_c = 256, .humidity_percent = 63, .aqi = 57};
+    monitor_ui_apply_snapshot(root, &next);
+    return root;
+}
+
+static lv_obj_t *create_waiting(lv_obj_t *parent, monitor_frame_variant_t variant)
+{ return monitor_ui_create_waiting(parent, variant); }
+
+static lv_obj_t *create_first_data_count(lv_obj_t *parent, monitor_frame_variant_t variant, uint8_t count)
+{
+    lv_obj_t *root = create_waiting(parent, variant);
+    monitor_ui_snapshot_t next = {.time_text = "19:56", .date_text = "FRI 23 OCT",
+        .wifi_state = MONITOR_WIFI_CONNECTED, .battery_percent = 78,
+        .weather_condition = MONITOR_WEATHER_LIGHT_RAIN, .temperature_tenths_c = 256,
+        .humidity_percent = 63, .aqi = 57};
+    monitor_ui_apply_snapshot(root, &next);
+    monitor_devices_snapshot_t devices = {.count = count, .status = MONITOR_DEVICES_READY};
+    memcpy(devices.devices, REVIEW_DEVICES, sizeof(REVIEW_DEVICES));
+    monitor_ui_apply_devices_snapshot(root, &devices);
+    return root;
+}
+
+#define FIRST_DATA_FACTORY(name, count) \
+    static lv_obj_t *create_##name(lv_obj_t *parent, monitor_frame_variant_t variant) \
+    { return create_first_data_count(parent, variant, count); }
+FIRST_DATA_FACTORY(first_data, 4)
+FIRST_DATA_FACTORY(first_data_3, 3)
+FIRST_DATA_FACTORY(first_data_2, 2)
+FIRST_DATA_FACTORY(first_data_1, 1)
+
 static const simulator_scene_t SCENES[] = {
+    { .name = "monitor-waiting", .description = "Live boot placeholders before first data", .create = create_waiting },
+    { .name = "animation-load-3", .description = "First snapshot with three Devices", .create = create_first_data_3 },
+    { .name = "animation-load-2", .description = "First snapshot with two Devices", .create = create_first_data_2 },
+    { .name = "animation-load-1", .description = "First snapshot with one Device", .create = create_first_data_1 },
+    { .name = "animation-load", .description = "First data rolls in and Devices pop in one by one", .create = create_first_data },
+    { .name = "animation-info", .description = "Clock, weather, temperature, humidity and AQI roll together", .create = create_info_update },
+    { .name = "animation-online", .description = "Existing cards make room, new card pops in", .create = create_online },
+    { .name = "animation-offline", .description = "Middle card shrinks, survivors fill the gap", .create = create_offline },
+    { .name = "animation-minute", .description = "19:55 to 19:56, last digit rolls", .create = create_minute },
+    { .name = "animation-rollover", .description = "19:59 to 20:00, four digits roll together", .create = create_rollover },
     {
         .name = "monitor",
         .description = "Current ESP32-S3 monitor verification UI",

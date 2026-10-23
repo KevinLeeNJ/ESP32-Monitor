@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #include "esp_err.h"
 
@@ -10,6 +11,8 @@ extern "C" {
 
 #define RLCD_WIDTH  400
 #define RLCD_HEIGHT 300
+/* ST7305 section 7.11: 300ms HPM settling + 20ms voltage settling. */
+#define RLCD_HPM_PREPARE_MS 320U
 
 typedef struct {
     int mosi;
@@ -25,6 +28,13 @@ typedef struct rlcd_port rlcd_port_t;
 esp_err_t rlcd_port_init(rlcd_port_t **out_port, const rlcd_pins_t *pins);
 esp_err_t rlcd_port_draw(rlcd_port_t *port, const uint8_t *packed, uint32_t len);
 esp_err_t rlcd_port_draw_diff(rlcd_port_t *port, const uint8_t *packed, uint32_t len);
+/* Call on the display task, between completed draws. HPM=32 Hz, LPM=1 Hz.
+ * Blocks through the datasheet's voltage/mode settling sequence.
+ * Idempotent: no command traffic when the requested mode is already active. */
+esp_err_t rlcd_port_set_animation_mode(rlcd_port_t *port, bool active);
+/* True while HPM writes are paced by the panel TE signal. On a TE timeout,
+ * writes continue and callers resume the nominal frame timer until next HPM. */
+bool rlcd_port_frame_sync_active(const rlcd_port_t *port);
 esp_err_t rlcd_port_deinit(rlcd_port_t *port);
 
 #ifdef __cplusplus

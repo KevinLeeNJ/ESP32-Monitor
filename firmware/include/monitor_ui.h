@@ -5,6 +5,7 @@
 
 #include "lvgl.h"
 #include "monitor_devices_data.h"
+#include "monitor_animation.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -15,6 +16,8 @@ extern "C" {
 #define MONITOR_FRAME_BYTES    (MONITOR_DISPLAY_WIDTH * MONITOR_DISPLAY_HEIGHT / 8U)
 /* Desktop preview export only; the shared renderer allocates no RGB565 frame. */
 #define MONITOR_RGB565_BYTES   (MONITOR_DISPLAY_WIDTH * MONITOR_DISPLAY_HEIGHT * 2U)
+/* Pending environmental readings render as "--" instead of demo numbers. */
+#define MONITOR_TEMPERATURE_UNAVAILABLE INT32_MIN
 
 typedef enum {
     MONITOR_FRAME_NORMAL = 0,
@@ -83,7 +86,17 @@ void monitor_ui_set_clock_text(const char *time_text, const char *date_text);
 void monitor_ui_apply_devices_snapshot(lv_obj_t *root, const monitor_devices_snapshot_t *snapshot);
 void monitor_ui_apply_snapshot(lv_obj_t *root, const monitor_ui_snapshot_t *snapshot);
 
+/* Explicit, bounded timelines: no periodic LVGL timer while the UI is idle.
+ * Factories default to static output. Firmware opts in after initial data.
+ * Advance with elapsed wall time only while active, then render/draw the diff. */
+void monitor_ui_set_animations_enabled(lv_obj_t *root, bool enabled);
+bool monitor_ui_animation_active(lv_obj_t *root);
+bool monitor_ui_advance(lv_obj_t *root, uint32_t elapsed_ms);
+
 lv_obj_t *monitor_ui_create(lv_obj_t *parent);
+/* Live boot: empty Devices, --:-- clock, -- information; updates animate.
+ * Wi-Fi/battery use demo_data as supplied by the firmware before creation. */
+lv_obj_t *monitor_ui_create_waiting(lv_obj_t *parent, monitor_frame_variant_t variant);
 lv_obj_t *monitor_ui_create_with_devices(lv_obj_t *parent,
                                           const monitor_device_t *devices,
                                           uint8_t device_count);

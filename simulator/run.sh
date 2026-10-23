@@ -6,17 +6,27 @@ REPO_ROOT="$(cd "${SIMULATOR_DIR}/.." && pwd)"
 BUILD_DIR="${SIMULATOR_BUILD_DIR:-${SIMULATOR_DIR}/build}"
 OUTPUT_DIR="${SIMULATOR_OUTPUT_DIR:-${SIMULATOR_DIR}/output/latest}"
 SCENE="${SIMULATOR_SCENE:-monitor}"
-if [[ $# -gt 0 ]]; then
-  if [[ "$1" == "--scene" ]]; then
-    if [[ $# -lt 2 ]]; then
-      echo "--scene requires a name" >&2
-      exit 2
-    fi
-    SCENE="$2"
-  else
-    SCENE="$1"
-  fi
-fi
+ANIMATION_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --scene)
+      if [[ $# -lt 2 ]]; then
+        echo "--scene requires a name" >&2
+        exit 2
+      fi
+      SCENE="$2"
+      shift 2
+      ;;
+    --animate)
+      ANIMATION_ARGS=(--animate)
+      shift
+      ;;
+    *)
+      SCENE="$1"
+      shift
+      ;;
+  esac
+done
 
 GENERATOR_ARGS=()
 if command -v ninja >/dev/null 2>&1; then
@@ -37,8 +47,8 @@ if [[ "${SCENE}" == "--list-scenes" ]]; then
 fi
 
 ctest --test-dir "${BUILD_DIR}" --output-on-failure
-"${BUILD_DIR}/monitor_simulator" --scene "${SCENE}" --output "${OUTPUT_DIR}" --variant normal
-"${BUILD_DIR}/monitor_simulator" --scene "${SCENE}" --output "${OUTPUT_DIR}" --variant inverted
+"${BUILD_DIR}/monitor_simulator" --scene "${SCENE}" --output "${OUTPUT_DIR}" --variant normal ${ANIMATION_ARGS[@]+"${ANIMATION_ARGS[@]}"}
+"${BUILD_DIR}/monitor_simulator" --scene "${SCENE}" --output "${OUTPUT_DIR}" --variant inverted ${ANIMATION_ARGS[@]+"${ANIMATION_ARGS[@]}"}
 
 if [[ "${SCENE}" == "monitor" ]]; then
   PREVIEW="${OUTPUT_DIR}/normal.png"

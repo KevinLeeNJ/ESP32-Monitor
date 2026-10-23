@@ -122,7 +122,15 @@ typedef struct {
     int socket;
     bool rejected;
     bool json_type;
+    unsigned connections;
 } response_guard_t;
+
+/* Owned exclusively by devices_task. The event context must outlive every
+ * request while the HTTP handle retains its idle TCP/TLS connection. */
+typedef struct {
+    esp_http_client_handle_t client;
+    response_guard_t guard;
+} devices_transport_t;
 /* Shutdown interrupts a slow header/body read without touching the HTTP/TLS
  * object's ownership. DISCONNECTED clears the descriptor before it is closed,
  * and stop_blocking joins this callback before cleanup frees the context. */
@@ -138,7 +146,10 @@ static esp_err_t guard_event(esp_http_client_event_t *event)
 {
     response_guard_t *guard = event->user_data;
     xSemaphoreTake(guard->lock, portMAX_DELAY);
-    if (event->event_id == HTTP_EVENT_ON_CONNECTED) guard->socket = esp_http_client_get_socket(event->client);
+    if (event->event_id == HTTP_EVENT_ON_CONNECTED) {
+        guard->socket = esp_http_client_get_socket(event->client);
+        ++guard->connections;
+    }
     if (event->event_id == HTTP_EVENT_DISCONNECTED) guard->socket = -1;
     if (event->event_id == HTTP_EVENT_ON_HEADER) {
         if (!strcasecmp(event->header_key, "Content-Encoding") && strcasecmp(event->header_value, "identity"))
@@ -166,68 +177,140 @@ static bool remaining(esp_http_client_handle_t client, response_guard_t *guard)
     esp_http_client_set_timeout_ms(client, (int)((us + 999) / 1000));
     return true;
 }
-static bool fetch(const devices_config_t *settings, monitor_devices_snapshot_t *out, int *status)
+static void transport_close_client(devices_transport_t *transport)
 {
-    char url[MONITOR_DEVICES_URL_MAX + sizeof("/v1/devices/summary")];
+    if (transport->client) esp_http_client_cleanup(transport->client);
+    transport->client = NULL;
+    if (transport->guard.lock) xSemaphoreTake(transport->guard.lock, portMAX_DELAY);
+    transport->guard.socket = -1;
+    if (transport->guard.lock) xSemaphoreGive(transport->guard.lock);
+}
+
+/* Only call with no request deadline callback running. */
+static void transport_reset(devices_transport_t *transport)
+{
+    transport_close_client(transport);
+    if (transport->guard.lock) vSemaphoreDelete(transport->guard.lock);
+    memset(transport, 0, sizeof(*transport));
+    transport->guard.socket = -1;
+}
+
+static bool fetch_attempt(devices_transport_t *transport, const devices_config_t *settings,
+                          char *body, monitor_devices_snapshot_t *out, int *status, bool *retryable)
+{
+    response_guard_t *guard = &transport->guard;
+    *status = 0;
+    *retryable = false;
+    if (!transport->client) {
+        char url[MONITOR_DEVICES_URL_MAX + sizeof("/v1/devices/summary")];
+        snprintf(url, sizeof(url), "%s/v1/devices/summary", settings->url);
+        esp_http_client_config_t config = {
+            .url = url, .timeout_ms = 8000, .disable_auto_redirect = true,
+            .crt_bundle_attach = esp_crt_bundle_attach,
+            .event_handler = guard_event, .user_data = guard,
+            /* Normal 30s polls keep the socket busy without extra probes. */
+            .keep_alive_enable = true, .keep_alive_idle = 45,
+            .keep_alive_interval = 10, .keep_alive_count = 3,
+        };
+        transport->client = esp_http_client_init(&config);
+        if (!transport->client) return false;
+    }
+    esp_http_client_handle_t client = transport->client;
     char auth[sizeof("Bearer ") + MONITOR_DEVICES_TOKEN_MAX];
-    snprintf(url, sizeof(url), "%s/v1/devices/summary", settings->url);
     snprintf(auth, sizeof(auth), "Bearer %s", settings->token);
-    response_guard_t guard = {
-        .deadline = esp_timer_get_time() + REQUEST_US,
-        .lock = xSemaphoreCreateMutex(), .socket = -1,
-    };
-    if (!guard.lock) return false;
-    esp_timer_handle_t deadline_timer = NULL;
-    const esp_timer_create_args_t deadline_args = {.callback = request_deadline, .arg = &guard, .name = "devices_deadline"};
-    esp_http_client_config_t config = {
-        .url = url, .timeout_ms = 8000, .disable_auto_redirect = true,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-        .event_handler = guard_event, .user_data = &guard,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    char *body = malloc(MONITOR_DEVICES_BODY_MAX + 1);
-    bool ok = false;
-    if (!client || !body || esp_timer_create(&deadline_args, &deadline_timer) != ESP_OK) goto done;
-    if (esp_timer_start_once(deadline_timer, REQUEST_US) != ESP_OK) goto done;
-    if (esp_http_client_set_header(client, "Authorization", auth) != ESP_OK ||
+    esp_err_t headers = esp_http_client_set_header(client, "Authorization", auth);
+    memset(auth, 0, sizeof(auth));
+    if (headers != ESP_OK ||
         esp_http_client_set_header(client, "Accept", "application/json") != ESP_OK ||
         esp_http_client_set_header(client, "Accept-Encoding", "identity") != ESP_OK ||
-        esp_http_client_open(client, 0) != ESP_OK || !remaining(client, &guard)) goto done;
+        esp_http_client_set_header(client, "Connection", "keep-alive") != ESP_OK ||
+        !remaining(client, guard)) return false;
+    if (esp_http_client_open(client, 0) != ESP_OK) {
+        *retryable = true;
+        return false;
+    }
+    if (!remaining(client, guard)) return false;
     int64_t header_length = esp_http_client_fetch_headers(client);
+    if (header_length < 0) {
+        *retryable = true;
+        return false;
+    }
     *status = esp_http_client_get_status_code(client);
-    if (header_length < 0 || !remaining(client, &guard)) goto done;
-    if (*status != 200 || !guard.json_type) goto done;
+    if (!remaining(client, guard) || *status != 200 || !guard->json_type) return false;
     size_t len = 0;
     for (;;) {
-        if (!remaining(client, &guard)) goto done;
-        /* The extra byte detects overflow even when Content-Length is absent. */
+        if (!remaining(client, guard)) return false;
+        /* Read through message completion (including chunk trailers) before
+         * retaining the connection for another request. */
         int n = esp_http_client_read(client, body + len, MONITOR_DEVICES_BODY_MAX + 1 - len);
-        if (n < 0) goto done;
+        if (n < 0) { *retryable = true; return false; }
         len += n;
-        if (len > MONITOR_DEVICES_BODY_MAX) goto done;
+        if (len > MONITOR_DEVICES_BODY_MAX) return false;
         if (!n) {
-            if (!esp_http_client_is_complete_data_received(client)) goto done;
+            if (!esp_http_client_is_complete_data_received(client)) {
+                *retryable = true;
+                return false;
+            }
             break;
         }
     }
-    if (!remaining(client, &guard)) goto done;
+    if (!remaining(client, guard)) return false;
     body[len] = 0;
-    ok = monitor_devices_parse(body, len, out);
+    return monitor_devices_parse(body, len, out);
+}
+
+static bool fetch(devices_transport_t *transport, const devices_config_t *settings,
+                  monitor_devices_snapshot_t *out, int *status, bool *reused)
+{
+    response_guard_t *guard = &transport->guard;
+    *reused = false;
+    if (!guard->lock) {
+        guard->lock = xSemaphoreCreateMutex();
+        guard->socket = -1;
+    }
+    if (!guard->lock) return false;
+    xSemaphoreTake(guard->lock, portMAX_DELAY);
+    guard->deadline = esp_timer_get_time() + REQUEST_US;
+    guard->rejected = false;
+    guard->json_type = false;
+    unsigned connections_before = guard->connections;
+    xSemaphoreGive(guard->lock);
+    const bool had_client = transport->client != NULL;
+    esp_timer_handle_t deadline_timer = NULL;
+    const esp_timer_create_args_t args = {.callback = request_deadline, .arg = guard, .name = "devices_deadline"};
+    char *body = malloc(MONITOR_DEVICES_BODY_MAX + 1);
+    bool ok = false;
+    if (!body || esp_timer_create(&args, &deadline_timer) != ESP_OK) goto done;
+    if (esp_timer_start_once(deadline_timer, REQUEST_US) != ESP_OK) goto done;
+    for (unsigned attempt = 0; attempt < 2; ++attempt) {
+        bool retryable = false;
+        ok = fetch_attempt(transport, settings, body, out, status, &retryable);
+        if (ok || !had_client || attempt || !retryable) break;
+        /* A proxy may have silently expired the idle connection. Retry this
+         * idempotent GET once, sharing the original eight-second deadline. */
+        if (!remaining(transport->client, guard)) break;
+        transport_close_client(transport);
+        xSemaphoreTake(guard->lock, portMAX_DELAY);
+        guard->json_type = false;
+        xSemaphoreGive(guard->lock);
+    }
 done:
     if (deadline_timer) {
         esp_timer_stop_blocking(deadline_timer, portMAX_DELAY);
         esp_timer_delete(deadline_timer);
     }
-    if (client) esp_http_client_cleanup(client);
-    vSemaphoreDelete(guard.lock);
+    if (guard->rejected || esp_timer_get_time() >= guard->deadline) ok = false;
+    *reused = ok && had_client && guard->connections == connections_before;
+    if (!ok || !esp_http_client_is_persistent_connection(transport->client)) transport_close_client(transport);
     free(body);
-    memset(auth, 0, sizeof(auth));
     return ok;
 }
 static void devices_task(void *arg)
 {
     (void)arg;
     int64_t next_poll = 0;
+    devices_transport_t transport = {.guard.socket = -1};
+    uint32_t transport_generation = UINT32_MAX;
     for (;;) {
         bool changed = false;
         devices_config_t config;
@@ -250,6 +333,10 @@ static void devices_task(void *arg)
         }
         portEXIT_CRITICAL(&s_mux);
         notify_display(changed, true);
+        if (generation != transport_generation || !wifi || !configured) {
+            transport_reset(&transport);
+            transport_generation = generation;
+        }
         bool clock_ready = strncmp(config.url, "https://", 8) != 0 || monitor_clock_is_valid();
         if (configured && wifi && clock_ready && now >= next_poll) {
             monitor_devices_snapshot_t candidate = {0};
@@ -257,7 +344,8 @@ static void devices_task(void *arg)
             /* The clock task owns :00/:30 polling while wall time is valid.
              * Keep a relative fallback only for HTTP before time is known. */
             next_poll = monitor_clock_is_valid() ? INT64_MAX : now + PERIOD_US;
-            bool ok = fetch(&config, &candidate, &status);
+            bool reused = false;
+            bool ok = fetch(&transport, &config, &candidate, &status, &reused);
             now = esp_timer_get_time();
             /* Merge refreshes received during this request. A newer config or
              * connection generation starts a new request immediately below. */
@@ -293,7 +381,8 @@ static void devices_task(void *arg)
             }
             notify_display(changed, immediate);
             /* No URL, token or response body in logs. */
-            ESP_LOGI(TAG, "summary %s, HTTP %d", ok ? "received" : "failed", status);
+            ESP_LOGI(TAG, "summary %s, HTTP %d, connection %s", ok ? "received" : "failed", status,
+                     ok ? (reused ? "reused" : "new") : "discarded");
             continue;
         }
         int64_t wake = expiry;

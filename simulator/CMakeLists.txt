@@ -75,6 +75,16 @@ if(BUILD_TESTING)
     target_include_directories(monitor_unit_tests PRIVATE "${FIRMWARE_ROOT}/components/firmware")
     target_link_libraries(monitor_unit_tests PRIVATE monitor_sim_core)
     add_test(NAME monitor_unit_tests COMMAND monitor_unit_tests)
+    add_executable(monitor_animation_tests tests/animation_tests.c)
+    target_link_libraries(monitor_animation_tests PRIVATE monitor_sim_core)
+    add_test(NAME monitor_animation_tests COMMAND monitor_animation_tests)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME monitor_firmware_animation_tests
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/firmware_animation_test.py"
+                "${CMAKE_C_COMPILER}")
+    add_test(NAME monitor_devices_transport_tests
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/devices_transport_test.py"
+                "${CMAKE_C_COMPILER}")
     find_program(NODE_EXECUTABLE node)
     if(NODE_EXECUTABLE)
         add_test(NAME monitor_config_page_tests
