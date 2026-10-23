@@ -215,7 +215,7 @@ static void make_metric(lv_obj_t *card, int32_t card_width, int32_t y,
              metric->percent_valid ? metric->percent : -1);
 }
 
-static void center_info_label(lv_obj_t *label, int32_t x)
+static int32_t visible_label_center_offset(lv_obj_t *label)
 {
     const lv_font_t *font = lv_obj_get_style_text_font(label, 0);
     const char *text = lv_label_get_text(label);
@@ -233,8 +233,13 @@ static void center_info_label(lv_obj_t *label, int32_t x)
         if(last_y < bottom) last_y = bottom;
     }
     /* Font line boxes include baseline padding; center the visible glyphs. */
-    const int32_t offset_y = last_y < 0 ? 0 :
+    return last_y < 0 ? 0 :
         (font->line_height - 1 - first_y - last_y) / 2;
+}
+
+static void center_info_label(lv_obj_t *label, int32_t x)
+{
+    const int32_t offset_y = visible_label_center_offset(label);
     lv_obj_align(label, LV_ALIGN_LEFT_MID, x, offset_y);
 }
 
@@ -381,9 +386,12 @@ static void make_board_battery(lv_obj_t *parent, int32_t x, int32_t y, int value
     char text[8];
     if(value < 0) snprintf(text, sizeof(text), "--");
     else snprintf(text, sizeof(text), "%d%%", value);
-    lv_obj_t *label = make_label(parent, text, x + 27, y - 3,
+    lv_obj_t *label = make_label(parent, text, 0, 0,
                                  &monitor_misans_12,
                                  value >= 0 ? COLOR_BLACK : COLOR_MUTED);
+    const lv_font_t *font = lv_obj_get_style_text_font(label, 0);
+    const int32_t line_y = y + (11 - font->line_height) / 2;
+    lv_obj_set_pos(label, x + 27, line_y + visible_label_center_offset(label));
     set_name(label, "board_battery_value");
 }
 
