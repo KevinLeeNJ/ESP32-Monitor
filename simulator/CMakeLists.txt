@@ -43,7 +43,16 @@ add_library(monitor_sim_core STATIC
     "${FIRMWARE_ROOT}/src/display/monitor_render.c"
     "${FIRMWARE_ROOT}/app/ui/monitor_ui.c"
     "${FIRMWARE_ROOT}/app/ui/weather_assets.c"
-    "${FIRMWARE_ROOT}/app/ui/weather_zh_font.c"
+    "${FIRMWARE_ROOT}/app/ui/fonts/monitor_misans_8.c"
+    "${FIRMWARE_ROOT}/app/ui/fonts/monitor_misans_12.c"
+    "${FIRMWARE_ROOT}/app/ui/fonts/monitor_misans_14.c"
+    "${FIRMWARE_ROOT}/app/ui/fonts/monitor_misans_20.c"
+    "${FIRMWARE_ROOT}/app/ui/fonts/monitor_misans_30.c"
+    "${FIRMWARE_ROOT}/app/ui/fonts/monitor_ndot57_8.c"
+    "${FIRMWARE_ROOT}/app/ui/fonts/monitor_ndot57_12.c"
+    "${FIRMWARE_ROOT}/app/ui/fonts/monitor_ndot57_14.c"
+    "${FIRMWARE_ROOT}/app/ui/fonts/monitor_ndot57_20.c"
+    "${FIRMWARE_ROOT}/app/ui/fonts/monitor_ndot57_30.c"
     src/png_writer.c
     src/scene_registry.c
     src/sha256.c

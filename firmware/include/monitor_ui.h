@@ -27,6 +27,7 @@ typedef enum {
 } monitor_wifi_state_t;
 
 typedef enum {
+    MONITOR_WEATHER_UNKNOWN = -1,       /* 尚未获得有效天气 */
     MONITOR_WEATHER_CLEAR = 0,          /* 晴 */
     MONITOR_WEATHER_FEW_CLOUDS,         /* 少云 */
     MONITOR_WEATHER_SCATTERED_CLOUDS,   /* 多云 */

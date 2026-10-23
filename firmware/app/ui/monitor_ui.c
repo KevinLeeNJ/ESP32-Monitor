@@ -1,4 +1,6 @@
 #include "monitor_ui.h"
+#include "monitor_fonts.h"
+#include "src/misc/lv_text_private.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -22,7 +24,6 @@ extern const lv_image_dsc_t monitor_weather_thunderstorm;
 extern const lv_image_dsc_t monitor_weather_snow;
 extern const lv_image_dsc_t monitor_weather_fog;
 extern const lv_image_dsc_t monitor_weather_hail;
-extern const lv_font_t monitor_weather_zh;
 extern const lv_image_dsc_t monitor_metric_thermometer;
 extern const lv_image_dsc_t monitor_metric_droplets;
 
@@ -42,7 +43,7 @@ static char clock_date_text[16] = "MON 18 OCT";
 static monitor_ui_demo_data_t demo_data = {
     .wifi_state = MONITOR_WIFI_CONNECTED,
     .board_battery_percent = 78,
-    .weather_condition = MONITOR_WEATHER_FEW_CLOUDS,
+    .weather_condition = MONITOR_WEATHER_UNKNOWN,
     .temperature_tenths_c = 245,
     .humidity_percent = 58,
     .aqi = 42,
@@ -195,7 +196,7 @@ const lv_image_dsc_t *monitor_weather_condition_icon(monitor_weather_condition_t
         case MONITOR_WEATHER_FOG:
         case MONITOR_WEATHER_HAZE: return &monitor_weather_fog;
         case MONITOR_WEATHER_DUST_STORM: return &monitor_weather_hail;
-        default: return &monitor_weather_cloudy;
+        default: return NULL;
     }
 }
 
@@ -205,7 +206,7 @@ static void make_metric(lv_obj_t *card, int32_t card_width, int32_t y,
     lv_point_t name_size, value_size;
     lv_text_get_size(&name_size, metric->name, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
     lv_text_get_size(&value_size, metric->value, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-    if (name_size.x + value_size.x + 4 > card_width - 14) font = &lv_font_montserrat_8;
+    if (name_size.x + value_size.x + 4 > card_width - 14) font = &monitor_misans_8;
     make_label(card, metric->name, 7, y, font, COLOR_MUTED);
     lv_obj_t *value_label = make_label(card, metric->value, 7, y, font, COLOR_BLACK);
     lv_obj_set_width(value_label, card_width - 14);
@@ -214,13 +215,65 @@ static void make_metric(lv_obj_t *card, int32_t card_width, int32_t y,
              metric->percent_valid ? metric->percent : -1);
 }
 
+static void center_info_label(lv_obj_t *label, int32_t x)
+{
+    const lv_font_t *font = lv_obj_get_style_text_font(label, 0);
+    const char *text = lv_label_get_text(label);
+    int32_t first_y = font->line_height;
+    int32_t last_y = -1;
+    uint32_t index = 0;
+    while(text[index]) {
+        uint32_t letter = lv_text_encoded_next(text, &index);
+        lv_font_glyph_dsc_t glyph;
+        if(!lv_font_get_glyph_dsc(font, &glyph, letter, 0) ||
+           glyph.box_h == 0 || glyph.box_w == 0) continue;
+        const int32_t top = font->line_height - font->base_line - glyph.box_h - glyph.ofs_y;
+        const int32_t bottom = top + glyph.box_h - 1;
+        if(first_y > top) first_y = top;
+        if(last_y < bottom) last_y = bottom;
+    }
+    /* Font line boxes include baseline padding; center the visible glyphs. */
+    const int32_t offset_y = last_y < 0 ? 0 :
+        (font->line_height - 1 - first_y - last_y) / 2;
+    lv_obj_align(label, LV_ALIGN_LEFT_MID, x, offset_y);
+}
+
+static void center_info_icon(lv_obj_t *image, const lv_image_dsc_t *source)
+{
+    /* A8 assets have asymmetric transparent margins. Align the visible shape,
+     * not just its canvas, with the card's horizontal center line. */
+    int32_t first_y = (int32_t)source->header.h;
+    int32_t last_y = -1;
+    for(uint32_t y = 0; y < source->header.h; ++y) {
+        for(uint32_t x = 0; x < source->header.w; ++x) {
+            if(source->data[y * source->header.stride + x] < 128) continue;
+            if(first_y > (int32_t)y) first_y = (int32_t)y;
+            last_y = (int32_t)y;
+            break;
+        }
+    }
+    const int32_t offset_y = last_y < 0 ? 0 :
+        ((int32_t)source->header.h - 1 - first_y - last_y) / 2;
+    lv_obj_set_size(image, source->header.w, source->header.h);
+    lv_obj_align(image, LV_ALIGN_LEFT_MID, 5, offset_y);
+}
+
+static void set_info_icon(lv_obj_t *image, const lv_image_dsc_t *source)
+{
+    if(source == NULL) {
+        lv_obj_add_flag(image, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_image_set_src(image, source);
+    center_info_icon(image, source);
+    lv_obj_clear_flag(image, LV_OBJ_FLAG_HIDDEN);
+}
+
 static lv_obj_t *make_icon(lv_obj_t *parent, const lv_image_dsc_t *source,
-                           int32_t x, int32_t y, int32_t size, const char *name)
+                           const char *name)
 {
     lv_obj_t *image = lv_image_create(parent);
-    lv_image_set_src(image, source);
-    lv_obj_set_pos(image, x, y);
-    lv_obj_set_size(image, size, size);
+    set_info_icon(image, source);
     lv_obj_set_style_image_recolor(image, lv_color_hex(COLOR_BLACK), 0);
     lv_obj_set_style_image_recolor_opa(image, LV_OPA_COVER, 0);
     set_name(image, name);
@@ -267,25 +320,33 @@ void monitor_ui_apply_snapshot(lv_obj_t *root, const monitor_ui_snapshot_t *snap
     }
     if (state->weather_condition != snapshot->weather_condition) {
         state->weather_condition = snapshot->weather_condition;
-        lv_image_set_src(state->weather_icon, monitor_weather_condition_icon(snapshot->weather_condition));
+        const lv_image_dsc_t *icon = monitor_weather_condition_icon(snapshot->weather_condition);
+        set_info_icon(state->weather_icon, icon);
         lv_label_set_text(state->weather_label, monitor_weather_condition_abbrev(snapshot->weather_condition));
+        center_info_label(state->weather_label, 39);
     }
     snprintf(text, sizeof(text), "%d.%d°C", snapshot->temperature_tenths_c / 10,
         snapshot->temperature_tenths_c < 0 ? -(snapshot->temperature_tenths_c % 10) : snapshot->temperature_tenths_c % 10);
-    if (strcmp(lv_label_get_text(state->temperature_label), text) != 0)
+    if (strcmp(lv_label_get_text(state->temperature_label), text) != 0) {
         lv_label_set_text(state->temperature_label, text);
+        center_info_label(state->temperature_label, 39);
+    }
     snprintf(text, sizeof(text), "%d%%", snapshot->humidity_percent);
-    if (strcmp(lv_label_get_text(state->humidity_label), text) != 0)
+    if (strcmp(lv_label_get_text(state->humidity_label), text) != 0) {
         lv_label_set_text(state->humidity_label, text);
+        center_info_label(state->humidity_label, 39);
+    }
     snprintf(text, sizeof(text), snapshot->aqi < 0 ? "--" : "%d", snapshot->aqi);
-    if (strcmp(lv_label_get_text(state->aqi_label), text) != 0)
+    if (strcmp(lv_label_get_text(state->aqi_label), text) != 0) {
         lv_label_set_text(state->aqi_label, text);
+        center_info_label(state->aqi_label, 58);
+    }
 }
 
 static lv_obj_t *make_wifi_status(lv_obj_t *parent, monitor_wifi_state_t state)
 {
     lv_obj_t *icon = make_label(parent, wifi_state_symbol(state), 18, 63,
-                                &lv_font_montserrat_14,
+                                &monitor_misans_14,
                                 state == MONITOR_WIFI_PROVISIONING ? COLOR_MUTED : COLOR_BLACK);
     set_name(icon, "wifi_status");
 
@@ -321,7 +382,7 @@ static void make_board_battery(lv_obj_t *parent, int32_t x, int32_t y, int value
     if(value < 0) snprintf(text, sizeof(text), "--");
     else snprintf(text, sizeof(text), "%d%%", value);
     lv_obj_t *label = make_label(parent, text, x + 27, y - 3,
-                                 &lv_font_montserrat_12,
+                                 &monitor_misans_12,
                                  value >= 0 ? COLOR_BLACK : COLOR_MUTED);
     set_name(label, "board_battery_value");
 }
@@ -336,24 +397,22 @@ static lv_obj_t *make_info_card(lv_obj_t *parent, int32_t x, int32_t y,
     if(icon_out != NULL) *icon_out = NULL;
     if(show_icon) {
         const bool weather_icon = icon_name != NULL && strcmp(icon_name, "weather_icon") == 0;
-        /* Use the weather mask at its native 30px size. The taller card gives
-         * it a real display area instead of clipping the source silhouette. */
-        lv_obj_t *image = make_icon(card, icon, 5, weather_icon ? 2 : 6,
-                                    weather_icon ? 30 : 23, icon_name);
+        lv_obj_t *image = make_icon(card, icon, icon_name);
         if(icon_out != NULL) *icon_out = image;
         const int32_t value_x = 39;
-        const lv_font_t *value_font = weather_icon ? &monitor_weather_zh :
-                                      &lv_font_montserrat_20;
-        /* All large values use the same visual baseline as AQI. The 20 px
-         * Chinese subset fixes the missing-glyph issue for weather labels. */
-        const int32_t value_y = weather_icon ? 5 : 5;
-        lv_obj_t *value_label = make_label(card, value, value_x, value_y,
+        const lv_font_t *value_font = &monitor_ndot57_20;
+        /* Latin/digits use NDot57; weather names and status symbols use merged glyphs. */
+        lv_obj_t *value_label = make_label(card, value, value_x, 0,
                                            value_font, COLOR_BLACK);
         if(weather_icon) lv_obj_set_width(value_label, 75);
+        center_info_label(value_label, value_x);
         return value_label;
     } else {
-        make_label(card, "AQI", 8, 5, &lv_font_montserrat_12, COLOR_MUTED);
-        return make_label(card, value, 58, 5, &lv_font_montserrat_20, COLOR_BLACK);
+        lv_obj_t *title = make_label(card, "AQI", 8, 0, &monitor_misans_12, COLOR_MUTED);
+        center_info_label(title, 8);
+        lv_obj_t *value_label = make_label(card, value, 58, 0, &monitor_ndot57_20, COLOR_BLACK);
+        center_info_label(value_label, 58);
+        return value_label;
     }
 }
 
@@ -362,8 +421,8 @@ static void make_device_card(lv_obj_t *parent, const monitor_device_t *device,
                              int32_t width)
 {
     const bool compact = device_count >= 4;
-    const lv_font_t *name_font = compact ? &lv_font_montserrat_12 : &lv_font_montserrat_14;
-    const lv_font_t *metric_font = compact ? &lv_font_montserrat_12 : &lv_font_montserrat_14;
+    const lv_font_t *name_font = compact ? &monitor_misans_12 : &monitor_misans_14;
+    const lv_font_t *metric_font = compact ? &monitor_misans_12 : &monitor_misans_14;
     const int32_t metric_y = compact ? 58 : 60;
     const int32_t metric_step = compact ? 39 : 40;
 
@@ -374,7 +433,7 @@ static void make_device_card(lv_obj_t *parent, const monitor_device_t *device,
     set_name(card, card_name);
 
     make_label(card, device->name, 7, 7, name_font, COLOR_BLACK);
-    make_label(card, device->uptime, 7, 29, &lv_font_montserrat_12, COLOR_MUTED);
+    make_label(card, device->uptime, 7, 29, &monitor_misans_12, COLOR_MUTED);
     for (uint8_t i = 0; i < device->metric_count && i < 3; ++i)
         make_metric(card, width, metric_y + metric_step * i, &device->metrics[i], metric_font);
 }
@@ -443,7 +502,7 @@ void monitor_ui_apply_devices_snapshot(lv_obj_t *root, const monitor_devices_sna
     if (!snapshot->count) {
         lv_obj_t *empty = make_label(root, snapshot->status == MONITOR_DEVICES_AUTH_ERROR ? "DATA UNAVAILABLE" :
                                      (*status ? status : "NO ONLINE DEVICES"), 0, 177,
-                                     &lv_font_montserrat_14, COLOR_MUTED);
+                                     &monitor_misans_14, COLOR_MUTED);
         lv_obj_set_width(empty, MONITOR_DISPLAY_WIDTH);
         lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
         set_name(empty, "empty_devices");
@@ -517,6 +576,7 @@ lv_obj_t *monitor_ui_create_with_devices_battery_wifi_variant(lv_obj_t *parent,
     lv_obj_set_size(root, MONITOR_DISPLAY_WIDTH, MONITOR_DISPLAY_HEIGHT);
     lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(root, lv_color_hex(COLOR_WHITE), 0);
+    lv_obj_set_style_text_font(root, &monitor_misans_14, 0);
     lv_obj_set_user_data(root, state);
     lv_obj_add_event_cb(root, monitor_ui_state_delete_cb, LV_EVENT_DELETE, NULL);
 
@@ -529,10 +589,10 @@ lv_obj_t *monitor_ui_create_with_devices_battery_wifi_variant(lv_obj_t *parent,
 
     /* Header: time and four compact rounded data cards. Weather has no text
      * label; temperature and humidity are identified by sourced icons. */
-    state->time_label = make_label(root, clock_time_text, 16, 9, &lv_font_montserrat_30, COLOR_BLACK);
+    state->time_label = make_label(root, clock_time_text, 16, 9, &monitor_ndot57_30, COLOR_BLACK);
     lv_obj_set_style_text_letter_space(state->time_label, 1, 0);
     set_name(state->time_label, "time");
-    state->date_label = make_label(root, clock_date_text, 19, 43, &lv_font_montserrat_12, COLOR_MUTED);
+    state->date_label = make_label(root, clock_date_text, 19, 43, &monitor_misans_12, COLOR_MUTED);
     state->wifi_label = make_wifi_status(root, wifi_state);
     state->wifi_slash = lv_obj_get_child_by_name(root, "wifi_slash");
     make_board_battery(root, 38, 65, demo_data.board_battery_percent);
@@ -561,8 +621,8 @@ lv_obj_t *monitor_ui_create_with_devices_battery_wifi_variant(lv_obj_t *parent,
     state->aqi_label = make_info_card(root, 270, 48, NULL, aqi_text, false, true, NULL, NULL);
 
     make_box(root, 15, 91, 370, 1, 0, COLOR_BLACK, 0, COLOR_BLACK);
-    make_label(root, "DEVICES", 16, 95, &lv_font_montserrat_14, COLOR_BLACK);
-    lv_obj_t *count_label = make_label(root, "0 ONLINE", 320, 97, &lv_font_montserrat_12, COLOR_MUTED);
+    make_label(root, "DEVICES", 16, 95, &monitor_misans_14, COLOR_BLACK);
+    lv_obj_t *count_label = make_label(root, "0 ONLINE", 320, 97, &monitor_misans_12, COLOR_MUTED);
     lv_obj_set_style_text_align(count_label, LV_TEXT_ALIGN_RIGHT, 0);
     set_name(count_label, "device_count");
 
@@ -570,7 +630,7 @@ lv_obj_t *monitor_ui_create_with_devices_battery_wifi_variant(lv_obj_t *parent,
     if (device_count) memcpy(initial.devices, devices, device_count * sizeof(*devices));
     monitor_ui_apply_devices_snapshot(root, &initial);
 
-    state->variant_label = make_label(root, "", 0, 0, &lv_font_montserrat_12, COLOR_MUTED);
+    state->variant_label = make_label(root, "", 0, 0, &monitor_misans_12, COLOR_MUTED);
     lv_obj_add_flag(state->variant_label, LV_OBJ_FLAG_HIDDEN);
     if(variant != MONITOR_FRAME_NORMAL) monitor_ui_set_variant(root, variant);
     return root;
