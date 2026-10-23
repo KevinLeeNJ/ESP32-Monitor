@@ -39,9 +39,10 @@ static bool publish(monitor_devices_snapshot_t *next)
     s_snapshot = *next;
     return true;
 }
-static void notify_display(bool changed)
+static void notify_display(bool changed, bool immediate)
 {
-    if (changed) monitor_display_refresh_request_reason(MONITOR_REFRESH_DEVICES);
+    if (changed) monitor_display_refresh_request_reason(
+        MONITOR_REFRESH_DEVICES | (immediate ? MONITOR_REFRESH_RECOVER : 0));
 }
 void monitor_devices_get(monitor_devices_snapshot_t *out)
 {
@@ -79,7 +80,7 @@ void monitor_devices_config_changed(void)
         changed = publish(&next);
     }
     portEXIT_CRITICAL(&s_mux);
-    notify_display(changed);
+    notify_display(changed, true);
     monitor_devices_request_refresh();
 }
 void monitor_devices_set_wifi_available(bool available)
@@ -96,7 +97,7 @@ void monitor_devices_set_wifi_available(bool available)
         }
     }
     portEXIT_CRITICAL(&s_mux);
-    notify_display(changed);
+    notify_display(changed, true);
     monitor_devices_request_refresh();
 }
 
@@ -112,7 +113,7 @@ static void expire_snapshot(void *arg)
         s_have_snapshot = false;
     }
     portEXIT_CRITICAL(&s_mux);
-    notify_display(changed);
+    notify_display(changed, true);
 }
 
 typedef struct {
@@ -248,20 +249,24 @@ static void devices_task(void *arg)
             }
         }
         portEXIT_CRITICAL(&s_mux);
-        notify_display(changed);
+        notify_display(changed, true);
         bool clock_ready = strncmp(config.url, "https://", 8) != 0 || monitor_clock_is_valid();
         if (configured && wifi && clock_ready && now >= next_poll) {
             monitor_devices_snapshot_t candidate = {0};
             int status = 0;
-            next_poll = now + PERIOD_US;
+            /* The clock task owns :00/:30 polling while wall time is valid.
+             * Keep a relative fallback only for HTTP before time is known. */
+            next_poll = monitor_clock_is_valid() ? INT64_MAX : now + PERIOD_US;
             bool ok = fetch(&config, &candidate, &status);
             now = esp_timer_get_time();
             /* Merge refreshes received during this request. A newer config or
              * connection generation starts a new request immediately below. */
             ulTaskNotifyTake(pdTRUE, 0);
             bool arm_expiry = false;
+            bool immediate = false;
             portENTER_CRITICAL(&s_mux);
             if (generation == s_generation && s_wifi) {
+                immediate = !s_have_snapshot;
                 if (ok) {
                     s_have_snapshot = true;
                     s_last_success = now;
@@ -275,6 +280,7 @@ static void devices_task(void *arg)
                     candidate.status = status == 401 || status == 403 ? MONITOR_DEVICES_AUTH_ERROR :
                         (s_have_snapshot ? MONITOR_DEVICES_STALE : MONITOR_DEVICES_UNAVAILABLE);
                 }
+                immediate |= candidate.status != s_snapshot.status;
                 changed = publish(&candidate);
             } else {
                 changed = false;
@@ -285,14 +291,15 @@ static void devices_task(void *arg)
                 esp_timer_stop(s_expiry_timer);
                 esp_timer_start_once(s_expiry_timer, RETAIN_US);
             }
-            notify_display(changed);
+            notify_display(changed, immediate);
             /* No URL, token or response body in logs. */
             ESP_LOGI(TAG, "summary %s, HTTP %d", ok ? "received" : "failed", status);
             continue;
         }
         int64_t wake = expiry;
         if (configured && wifi) {
-            int64_t poll = clock_ready ? next_poll : now + 1000000;
+            /* Time becoming valid wakes us through the clock task as well. */
+            int64_t poll = clock_ready ? next_poll : INT64_MAX;
             if (poll < wake) wake = poll;
         }
         TickType_t wait = wake == INT64_MAX ? portMAX_DELAY : pdMS_TO_TICKS((wake > now ? wake - now : 1000) / 1000 + 1);

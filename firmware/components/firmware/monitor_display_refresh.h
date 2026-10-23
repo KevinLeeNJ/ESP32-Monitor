@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -14,6 +15,14 @@ enum {
     MONITOR_REFRESH_DEVICES = 1U << 5,
     MONITOR_REFRESH_RECOVER = 1U << 4,
 };
+
+/* Periodic data stays cached until the next shared clock boundary. Recovery
+ * includes initial data, configuration changes and snapshot expiration. */
+static inline bool monitor_display_refresh_should_render(uint32_t reasons, bool clock_valid)
+{
+    return !clock_valid || (reasons & (MONITOR_REFRESH_CLOCK | MONITOR_REFRESH_WIFI |
+                                      MONITOR_REFRESH_RECOVER)) != 0;
+}
 
 /* Register the current task as the sole owner of display rendering. */
 void monitor_display_refresh_register(void);

@@ -158,11 +158,18 @@ void app_main(void)
     for(;;) {
         uint32_t reasons = 0;
         xTaskNotifyWait(0, UINT32_MAX, &reasons, portMAX_DELAY);
-        /* Merge a burst of producers without periodic polling or busy waiting. */
-        uint32_t more = 0;
-        xTaskNotifyWait(0, UINT32_MAX, &more, pdMS_TO_TICKS(50));
-        reasons |= more;
-        (void)reasons;
+        if (!monitor_display_refresh_should_render(reasons, monitor_clock_is_valid())) continue;
+        /* Give the shared :00/:30 batch one fixed second to collect sensor
+         * and network results. Notifications never extend this deadline.
+         * Late periodic results remain cached for the next clock boundary. */
+        const TickType_t merge_ticks = pdMS_TO_TICKS((reasons & MONITOR_REFRESH_CLOCK) ? 1000 : 50);
+        const TickType_t merge_start = xTaskGetTickCount();
+        TickType_t elapsed;
+        while ((elapsed = xTaskGetTickCount() - merge_start) < merge_ticks) {
+            uint32_t more = 0;
+            xTaskNotifyWait(0, UINT32_MAX, &more, merge_ticks - elapsed);
+            reasons |= more;
+        }
         display_snapshot_t current;
         capture_display_snapshot(&current);
         if (!display_snapshot_equal(&displayed, &current)) {

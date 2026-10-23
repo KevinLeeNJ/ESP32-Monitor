@@ -18,12 +18,12 @@
 #include "miniz.h"
 
 #define TAG "monitor_weather"
-#define UPDATE_PERIOD_MS (15 * 60 * 1000)
+#define WEATHER_EVT_UPDATE BIT0
+#define WEATHER_EVT_WIFI_CHANGED BIT1
 #define HTTP_TIMEOUT_MS 10000
 #define RESPONSE_MAX 8192
 
 static TaskHandle_t s_task;
-static volatile bool s_update_requested;
 static volatile bool s_wifi_available;
 static portMUX_TYPE s_data_mux = portMUX_INITIALIZER_UNLOCKED;
 static monitor_weather_data_t s_data = {
@@ -200,6 +200,10 @@ static void update_weather(void)
     }
     bool weather_ok = false, aqi_ok = false;
     bool display_changed = false;
+    bool initial_data;
+    portENTER_CRITICAL(&s_data_mux);
+    initial_data = !s_data.weather_valid && !s_data.aqi_valid;
+    portEXIT_CRITICAL(&s_data_mux);
     if (http_get(weather_url, response, RESPONSE_MAX, key)) {
         cJSON *json = cJSON_Parse(response);
         cJSON *api_code = json ? cJSON_GetObjectItem(json, "code") : NULL;
@@ -212,7 +216,7 @@ static void update_weather(void)
             int condition_code = atoi(code->valuestring);
             portENTER_CRITICAL(&s_data_mux);
             monitor_weather_condition_t condition = condition_from_qweather(condition_code);
-            display_changed |= s_data.condition != condition;
+            display_changed |= !s_data.weather_valid || s_data.condition != condition;
             s_data.condition = condition;
             s_data.weather_valid = true;
             portEXIT_CRITICAL(&s_data_mux);
@@ -233,7 +237,7 @@ static void update_weather(void)
                     (cJSON_IsNumber(aqi) ? aqi->valueint : (cJSON_IsString(aqi) ? atoi(aqi->valuestring) : -1));
         if (value >= 0) {
             portENTER_CRITICAL(&s_data_mux);
-            display_changed |= s_data.aqi != value;
+            display_changed |= !s_data.aqi_valid || s_data.aqi != value;
             s_data.aqi = value;
             s_data.aqi_valid = true;
             portEXIT_CRITICAL(&s_data_mux);
@@ -246,7 +250,8 @@ static void update_weather(void)
     }
     free(response);
     portENTER_CRITICAL(&s_data_mux); s_data.latitude = lat; s_data.longitude = lon; s_data.location_valid = true; portEXIT_CRITICAL(&s_data_mux);
-    if (display_changed) monitor_display_refresh_request();
+    if (display_changed) monitor_display_refresh_request_reason(
+        initial_data ? MONITOR_REFRESH_RECOVER : MONITOR_REFRESH_WEATHER);
     ESP_LOGI(TAG, "update: weather=%s aqi=%s", weather_ok ? "ok" : "failed", aqi_ok ? "ok" : "failed");
 }
 
@@ -254,39 +259,38 @@ static void weather_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        TickType_t timeout = s_wifi_available ? pdMS_TO_TICKS(UPDATE_PERIOD_MS) : portMAX_DELAY;
         uint32_t notified = 0;
-        xTaskNotifyWait(0, UINT32_MAX, &notified, timeout);
-        const bool requested = s_update_requested;
-        s_update_requested = false;
-        if (s_wifi_available && monitor_clock_is_valid() && (requested || notified == 0)) update_weather();
+        xTaskNotifyWait(0, UINT32_MAX, &notified, portMAX_DELAY);
+        if (s_wifi_available && monitor_clock_is_valid() && (notified & WEATHER_EVT_UPDATE)) update_weather();
     }
 }
 
 esp_err_t monitor_weather_start(void)
 {
     if (xTaskCreate(weather_task, "monitor_weather", 16384, NULL, 3, &s_task) != pdPASS) return ESP_ERR_NO_MEM;
-    if (monitor_clock_is_valid()) s_update_requested = true;
     return ESP_OK;
+}
+
+void monitor_weather_request_refresh(void)
+{
+    if (s_task != NULL) xTaskNotify(s_task, WEATHER_EVT_UPDATE, eSetBits);
 }
 
 void monitor_weather_on_wifi_connected(void)
 {
     s_wifi_available = true;
-    s_update_requested = true;
-    if (s_task != NULL) xTaskNotify(s_task, 1, eSetBits);
+    monitor_weather_request_refresh();
 }
 
 void monitor_weather_on_wifi_disconnected(void)
 {
     s_wifi_available = false;
-    if (s_task != NULL) xTaskNotify(s_task, 1, eSetBits);
+    if (s_task != NULL) xTaskNotify(s_task, WEATHER_EVT_WIFI_CHANGED, eSetBits);
 }
 
 void monitor_weather_on_time_valid(void)
 {
-    s_update_requested = true;
-    if (s_task != NULL) xTaskNotify(s_task, 1, eSetBits);
+    monitor_weather_request_refresh();
 }
 
 void monitor_weather_get(monitor_weather_data_t *out)
