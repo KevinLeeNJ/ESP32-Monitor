@@ -105,7 +105,7 @@ static void reset_demo(void)
 {
     g_demo.wifi_state = MONITOR_WIFI_CONNECTED;
     g_demo.board_battery_percent = -1;
-    g_demo.weather_condition = MONITOR_WEATHER_FEW_CLOUDS;
+    g_demo.weather_condition = MONITOR_WEATHER_UNKNOWN;
     g_demo.temperature_tenths_c = 245;
     g_demo.humidity_percent = 58;
     g_demo.aqi = -1;
