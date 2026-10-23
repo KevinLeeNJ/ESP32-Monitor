@@ -208,8 +208,9 @@ int main(int argc, char **argv)
                              MONITOR_DISPLAY_WIDTH, MONITOR_DISPLAY_HEIGHT,
                              MONITOR_FRAME_NORMAL, preview);
 
+    /* RGB565 is a desktop export reconstructed from the final monochrome frame. */
     int ok = 1;
-    ok = write_bytes(rgb_path, monitor_renderer_rgb565(&renderer), MONITOR_RGB565_BYTES) == 0 && ok;
+    ok = write_bytes(rgb_path, preview, MONITOR_RGB565_BYTES) == 0 && ok;
     ok = write_bytes(packed_path, monitor_renderer_packed(&renderer), MONITOR_FRAME_BYTES) == 0 && ok;
     ok = monitor_write_rgb565_png(png_path, preview,
                                   MONITOR_DISPLAY_WIDTH, MONITOR_DISPLAY_HEIGHT) && ok;
@@ -222,7 +223,7 @@ int main(int argc, char **argv)
              "  \"scene\": \"%s\",\n"
              "  \"width\": %d,\n"
              "  \"height\": %d,\n"
-             "  \"color_format\": \"RGB565\",\n"
+             "  \"color_format\": \"I1\",\n"
              "  \"panel_format\": \"1bpp\",\n"
              "  \"panel_polarity\": \"1=white, 0=black\",\n"
              "  \"variant\": \"%s\",\n"

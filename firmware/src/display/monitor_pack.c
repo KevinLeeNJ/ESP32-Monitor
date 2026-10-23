@@ -1,7 +1,6 @@
 #include "monitor_ui.h"
 
 #include <stddef.h>
-#include <string.h>
 
 /*
  * The RLCD examples use a 1bpp panel layout:
@@ -24,52 +23,25 @@ static inline uint8_t pack_mask(uint32_t x, uint32_t y, uint32_t height)
     return (uint8_t)(1U << (7U - ((local_y << 1U) | local_x)));
 }
 
-static inline bool rgb565_is_white(uint16_t pixel)
+void monitor_pack_i1_region(const uint8_t *pixels, uint32_t stride,
+                            uint32_t width, uint32_t height,
+                            int32_t x1, int32_t y1, int32_t x2, int32_t y2,
+                            uint8_t *packed_inout)
 {
-    /* The Waveshare RLCD example maps a displayed white pixel to bit 1:
-       ColorBlack = 0, ColorWhite = 0xff. Keep that panel polarity here.
-       White RGB565 is 0xffff; values above the midpoint are treated as white. */
-    return pixel > 0x7fffU;
-}
+    if(pixels == NULL || packed_inout == NULL || width == 0 || height == 0 ||
+       width % 2U != 0 || height % 4U != 0 ||
+       x1 < 0 || y1 < 0 || x1 > x2 || y1 > y2 ||
+       x2 >= (int32_t)width || y2 >= (int32_t)height ||
+       stride < ((uint32_t)(x2 - x1) + 8U) / 8U) return;
 
-void monitor_pack_rgb565(const uint16_t *rgb565, uint32_t width, uint32_t height,
-                         monitor_frame_variant_t variant, uint8_t *out)
-{
-    const uint32_t bytes = (width * height) / 8U;
-    memset(out, 0, bytes);
-
-    for(uint32_t y = 0; y < height; ++y) {
-        for(uint32_t x = 0; x < width; ++x) {
-            bool white = rgb565_is_white(rgb565[y * width + x]);
-            if(variant == MONITOR_FRAME_INVERTED) {
-                white = !white;
-            }
-            /* 1 = white, 0 = black, matching ColorWhite/ColorBlack in the
-               Waveshare reference display driver. */
-            if(white) {
-                out[pack_index(x, y, height)] |= pack_mask(x, y, height);
-            }
-        }
-    }
-}
-
-void monitor_pack_rgb565_region(const uint16_t *rgb565, uint32_t width, uint32_t height,
-                                int32_t x1, int32_t y1, int32_t x2, int32_t y2,
-                                monitor_frame_variant_t variant, uint8_t *packed_inout)
-{
-    if (rgb565 == NULL || packed_inout == NULL || width == 0 || height == 0) return;
-    if (x1 < 0) x1 = 0;
-    if (y1 < 0) y1 = 0;
-    if (x2 >= (int32_t)width) x2 = (int32_t)width - 1;
-    if (y2 >= (int32_t)height) y2 = (int32_t)height - 1;
-    if (x1 > x2 || y1 > y2) return;
-    for (int32_t y = y1; y <= y2; ++y) {
-        for (int32_t x = x1; x <= x2; ++x) {
-            bool white = rgb565_is_white(rgb565[(uint32_t)y * width + (uint32_t)x]);
-            if (variant == MONITOR_FRAME_INVERTED) white = !white;
+    for(int32_t y = y1; y <= y2; ++y) {
+        const uint8_t *row = pixels + (uint32_t)(y - y1) * stride;
+        for(int32_t x = x1; x <= x2; ++x) {
+            const uint32_t local_x = (uint32_t)(x - x1);
+            const bool white = (row[local_x / 8U] & (0x80U >> (local_x % 8U))) != 0;
             const uint32_t index = pack_index((uint32_t)x, (uint32_t)y, height);
             const uint8_t mask = pack_mask((uint32_t)x, (uint32_t)y, height);
-            if (white) packed_inout[index] |= mask;
+            if(white) packed_inout[index] |= mask;
             else packed_inout[index] &= (uint8_t)~mask;
         }
     }

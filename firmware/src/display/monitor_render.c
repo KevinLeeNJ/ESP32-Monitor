@@ -11,22 +11,13 @@ static void flush_cb(lv_display_t *display, const lv_area_t *area, uint8_t *px_m
         return;
     }
 
-    const uint32_t width = MONITOR_DISPLAY_WIDTH;
-    const uint32_t height = MONITOR_DISPLAY_HEIGHT;
-    const uint32_t area_width = (uint32_t)(area->x2 - area->x1 + 1);
-    const uint32_t area_height = (uint32_t)(area->y2 - area->y1 + 1);
-    uint16_t *dst = (uint16_t *)renderer->rgb565;
-    const uint16_t *src = (const uint16_t *)px_map;
-
-    for(uint32_t y = 0; y < area_height; ++y) {
-        uint32_t dst_y = (uint32_t)area->y1 + y;
-        uint32_t dst_offset = dst_y * width + (uint32_t)area->x1;
-        memcpy(dst + dst_offset, src + y * area_width, area_width * sizeof(uint16_t));
-    }
-
-    monitor_pack_rgb565_region((const uint16_t *)renderer->rgb565, width, height,
-                               area->x1, area->y1, area->x2, area->y2,
-                               MONITOR_FRAME_NORMAL, renderer->packed);
+    /* I1 reserves two ARGB8888 palette entries before its MSB-first rows.
+       Partial buffers use the stride of this flush area, not the panel width. */
+    const uint32_t stride = lv_draw_buf_width_to_stride(
+        (uint32_t)lv_area_get_width(area), LV_COLOR_FORMAT_I1);
+    monitor_pack_i1_region(px_map + MONITOR_I1_PALETTE_BYTES, stride,
+                           MONITOR_DISPLAY_WIDTH, MONITOR_DISPLAY_HEIGHT,
+                           area->x1, area->y1, area->x2, area->y2, renderer->packed);
     lv_display_flush_ready(display);
 }
 
@@ -37,14 +28,12 @@ bool monitor_renderer_init(monitor_renderer_t *renderer,
     memset(renderer, 0, sizeof(*renderer));
 
     lv_init();
-    renderer->rgb565 = (uint8_t *)lv_malloc(MONITOR_RGB565_BYTES);
-    renderer->draw_buffer = (uint8_t *)lv_malloc(MONITOR_DISPLAY_WIDTH * 40U * sizeof(uint16_t));
+    renderer->draw_buffer = (uint8_t *)lv_malloc(MONITOR_I1_DRAW_BUFFER_BYTES);
     renderer->packed = (uint8_t *)lv_malloc(MONITOR_FRAME_BYTES);
-    if(renderer->rgb565 == NULL || renderer->draw_buffer == NULL || renderer->packed == NULL) {
+    if(renderer->draw_buffer == NULL || renderer->packed == NULL) {
         monitor_renderer_deinit(renderer);
         return false;
     }
-    memset(renderer->rgb565, 0, MONITOR_RGB565_BYTES);
     memset(renderer->packed, 0, MONITOR_FRAME_BYTES);
 
     renderer->display = lv_display_create(MONITOR_DISPLAY_WIDTH, MONITOR_DISPLAY_HEIGHT);
@@ -53,9 +42,9 @@ bool monitor_renderer_init(monitor_renderer_t *renderer,
         return false;
     }
     lv_display_set_user_data(renderer->display, renderer);
-    lv_display_set_color_format(renderer->display, LV_COLOR_FORMAT_RGB565);
+    lv_display_set_color_format(renderer->display, LV_COLOR_FORMAT_I1);
     lv_display_set_buffers(renderer->display, renderer->draw_buffer, NULL,
-                           MONITOR_DISPLAY_WIDTH * 40U * sizeof(uint16_t), LV_DISPLAY_RENDER_MODE_PARTIAL);
+                           MONITOR_I1_DRAW_BUFFER_BYTES, LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(renderer->display, flush_cb);
 
     renderer->root = create_screen(lv_screen_active());
@@ -72,10 +61,6 @@ void monitor_renderer_deinit(monitor_renderer_t *renderer)
     if(renderer->display != NULL) {
         lv_display_delete(renderer->display);
         renderer->display = NULL;
-    }
-    if(renderer->rgb565 != NULL) {
-        lv_free(renderer->rgb565);
-        renderer->rgb565 = NULL;
     }
     if(renderer->draw_buffer != NULL) {
         lv_free(renderer->draw_buffer);
@@ -112,11 +97,6 @@ bool monitor_renderer_rebuild(monitor_renderer_t *renderer,
 lv_obj_t *monitor_renderer_root(const monitor_renderer_t *renderer)
 {
     return renderer == NULL ? NULL : renderer->root;
-}
-
-const uint8_t *monitor_renderer_rgb565(const monitor_renderer_t *renderer)
-{
-    return renderer == NULL ? NULL : renderer->rgb565;
 }
 
 const uint8_t *monitor_renderer_packed(const monitor_renderer_t *renderer)

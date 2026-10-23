@@ -10,6 +10,8 @@
 #include "cJSON.h"
 #include "monitor_schedule.h"
 #include "monitor_display_refresh.h"
+#include "lvgl/src/draw/sw/blend/lv_draw_sw_blend_private.h"
+#include "lvgl/src/draw/sw/blend/lv_draw_sw_blend_to_i1.h"
 
 static int failures = 0;
 
@@ -30,58 +32,100 @@ static void test_sha256_vectors(void)
 
 static void test_pack_round_trip(void)
 {
-    uint16_t *rgb = (uint16_t *)malloc(MONITOR_RGB565_BYTES);
-    uint16_t *back = (uint16_t *)malloc(MONITOR_RGB565_BYTES);
-    uint8_t *packed = (uint8_t *)malloc(MONITOR_FRAME_BYTES);
-    CHECK(rgb && back && packed, "test allocations");
-    if(!rgb || !back || !packed) { free(rgb); free(back); free(packed); return; }
-
-    for(uint32_t y = 0; y < MONITOR_DISPLAY_HEIGHT; ++y) {
-        for(uint32_t x = 0; x < MONITOR_DISPLAY_WIDTH; ++x) {
-            rgb[y * MONITOR_DISPLAY_WIDTH + x] =
-                ((x / 20U) + (y / 20U)) % 2U == 0 ? 0x0000U : 0xffffU;
-        }
-    }
-
-    monitor_pack_rgb565(rgb, MONITOR_DISPLAY_WIDTH, MONITOR_DISPLAY_HEIGHT,
-                        MONITOR_FRAME_NORMAL, packed);
+    uint8_t *i1 = malloc(MONITOR_FRAME_BYTES);
+    uint8_t *packed = malloc(MONITOR_FRAME_BYTES);
+    uint16_t *back = malloc(MONITOR_RGB565_BYTES);
+    CHECK(i1 && packed && back, "I1 round-trip allocations");
+    if(!i1 || !packed || !back) { free(i1); free(packed); free(back); return; }
+    for(uint32_t i = 0; i < MONITOR_FRAME_BYTES; ++i) i1[i] = (uint8_t)(i * 37U + 13U);
+    monitor_pack_i1_region(i1, MONITOR_DISPLAY_WIDTH / 8U,
+                           MONITOR_DISPLAY_WIDTH, MONITOR_DISPLAY_HEIGHT,
+                           0, 0, MONITOR_DISPLAY_WIDTH - 1, MONITOR_DISPLAY_HEIGHT - 1, packed);
     monitor_unpack_to_rgb565(packed, MONITOR_DISPLAY_WIDTH, MONITOR_DISPLAY_HEIGHT,
                              MONITOR_FRAME_NORMAL, back);
-    CHECK(memcmp(rgb, back, MONITOR_RGB565_BYTES) == 0, "pack/unpack normal round trip");
-
-    monitor_pack_rgb565(rgb, MONITOR_DISPLAY_WIDTH, MONITOR_DISPLAY_HEIGHT,
-                        MONITOR_FRAME_INVERTED, packed);
-    monitor_unpack_to_rgb565(packed, MONITOR_DISPLAY_WIDTH, MONITOR_DISPLAY_HEIGHT,
-                             MONITOR_FRAME_INVERTED, back);
-    CHECK(memcmp(rgb, back, MONITOR_RGB565_BYTES) == 0, "pack/unpack inverted round trip");
-
-    free(rgb); free(back); free(packed);
+    for(uint32_t i = 0; i < MONITOR_DISPLAY_WIDTH * MONITOR_DISPLAY_HEIGHT; ++i) {
+        CHECK(back[i] == ((i1[i / 8U] & (0x80U >> (i % 8U))) ? 0xffffU : 0),
+              "I1 MSB-first pixels survive panel mapping");
+    }
+    free(i1); free(packed); free(back);
 }
 
 static void test_pack_layout(void)
 {
-    uint16_t *rgb = (uint16_t *)malloc(MONITOR_RGB565_BYTES);
-    uint8_t *packed = (uint8_t *)malloc(MONITOR_FRAME_BYTES);
-    CHECK(rgb && packed, "layout allocations");
-    if(!rgb || !packed) { free(rgb); free(packed); return; }
+    /* A padded, offset two-row flush must preserve every unrelated pixel. */
+    uint8_t packed[MONITOR_FRAME_BYTES];
+    uint16_t *back = malloc(MONITOR_RGB565_BYTES);
+    CHECK(back != NULL, "I1 layout allocation");
+    if(!back) return;
+    memset(packed, 0xff, sizeof(packed));
+    const uint8_t rows[] = {0x7f, 0xff, 0x00, 0x00, 0xff, 0xfe, 0x00, 0x00};
+    monitor_pack_i1_region(rows, 4, MONITOR_DISPLAY_WIDTH, MONITOR_DISPLAY_HEIGHT,
+                           8, 39, 23, 40, packed);
+    monitor_unpack_to_rgb565(packed, MONITOR_DISPLAY_WIDTH, MONITOR_DISPLAY_HEIGHT,
+                             MONITOR_FRAME_NORMAL, back);
+    for(uint32_t y = 0; y < MONITOR_DISPLAY_HEIGHT; ++y) {
+        for(uint32_t x = 0; x < MONITOR_DISPLAY_WIDTH; ++x) {
+            bool black = (x == 8 && y == 39) || (x == 23 && y == 40);
+            CHECK(back[y * MONITOR_DISPLAY_WIDTH + x] == (black ? 0 : 0xffffU),
+                  "offset I1 region preserves neighbors and ignores padding");
+        }
+    }
+    memset(packed, 0xff, sizeof(packed));
+    const uint8_t black = 0;
+    monitor_pack_i1_region(&black, 1, MONITOR_DISPLAY_WIDTH, MONITOR_DISPLAY_HEIGHT,
+                           0, 0, 0, 0, packed);
+    CHECK(packed[MONITOR_DISPLAY_HEIGHT / 4U - 1U] == 0xfd,
+          "top-left black pixel clears panel bit 1");
+    CHECK(packed[0] == 0xff, "opposite corner remains white");
+    free(back);
+}
 
-    for(uint32_t i = 0; i < MONITOR_DISPLAY_WIDTH * MONITOR_DISPLAY_HEIGHT; ++i) rgb[i] = 0xffffU;
-    rgb[0] = 0x0000U;
-    monitor_pack_rgb565(rgb, MONITOR_DISPLAY_WIDTH, MONITOR_DISPLAY_HEIGHT,
-                        MONITOR_FRAME_NORMAL, packed);
-    /* 1 means white on the panel. With one black pixel, only the top-left
-       corner bit (bit 1 of the final byte in column 0) must be clear. */
-    CHECK(packed[(MONITOR_DISPLAY_HEIGHT / 4U) - 1U] == 0xfdU,
-          "top-left black pixel clears the corresponding white bit");
-    CHECK(packed[0] == 0xffU, "first packed byte remains white for a single top-left black pixel");
-
-    free(rgb); free(packed);
+static void test_i1_coverage_blending(void)
+{
+    /* Exercise LVGL's actual dispatcher, including non-byte-aligned pixels,
+       padded rows and both polarities. Fractional coverage must not turn every
+       black edge pixel on or every white edge pixel off. */
+    for(unsigned inverted = 0; inverted < 2; ++inverted) {
+        for(unsigned opacity = 0; opacity < 256; ++opacity) {
+            uint8_t pixels[4];
+            memset(pixels, inverted ? 0 : 0xff, sizeof(pixels));
+            const lv_opa_t mask[] = {64, 192, 0, 0, 127, 128, 0, 0};
+            lv_draw_sw_blend_fill_dsc_t dsc = {0};
+            dsc.dest_buf = pixels;
+            dsc.dest_w = 2;
+            dsc.dest_h = 2;
+            dsc.dest_stride = 2;
+            dsc.mask_buf = mask;
+            dsc.mask_stride = 4;
+            dsc.color = inverted ? lv_color_white() : lv_color_black();
+            dsc.opa = opacity;
+            dsc.relative_area.x1 = 3;
+            lv_draw_sw_blend_color_to_i1(&dsc);
+            for(unsigned y = 0; y < 2; ++y) {
+                for(unsigned bit = 0; bit < 16; ++bit) {
+                    bool ink = bit >= 3 && bit < 5 &&
+                        (mask[y * 4 + bit - 3] * opacity / 255U) >= 128U;
+                    bool white = inverted ? ink : !ink;
+                    CHECK(((pixels[y * 2 + bit / 8] & (0x80U >> (bit % 8))) != 0) == white,
+                          "I1 masked coverage uses midpoint and preserves neighboring bits");
+                }
+            }
+            /* The opacity-only path has the same midpoint behavior. */
+            dsc.mask_buf = NULL;
+            memset(pixels, inverted ? 0 : 0xff, sizeof(pixels));
+            lv_draw_sw_blend_color_to_i1(&dsc);
+            bool white = inverted ? opacity >= 128 : opacity < 128;
+            CHECK(((pixels[0] & 0x10U) != 0) == white,
+                  "I1 opacity-only blend uses midpoint for both polarities");
+        }
+    }
 }
 
 static void test_render_determinism(void)
 {
     monitor_renderer_t a, b;
     CHECK(monitor_renderer_init(&a, monitor_ui_create), "init renderer A");
+    CHECK(lv_display_get_color_format(a.display) == LV_COLOR_FORMAT_I1, "renderer uses native I1");
     CHECK(monitor_renderer_render(&a), "render A");
     char da[65];
     monitor_sha256(monitor_renderer_packed(&a), MONITOR_FRAME_BYTES, da);
@@ -128,6 +172,63 @@ static void test_future_scene_factory(void)
         CHECK((packed[black_pixel_byte] & 0x80U) == 0,
               "arbitrary scene packs a new black widget");
     }
+    monitor_renderer_deinit(&renderer);
+}
+
+static void test_i1_partial_refresh(void)
+{
+    monitor_renderer_t renderer;
+    CHECK(monitor_renderer_init(&renderer, create_future_style_scene), "init partial I1 renderer");
+    CHECK(monitor_renderer_render(&renderer), "initial I1 render");
+    uint8_t before[MONITOR_FRAME_BYTES];
+    memcpy(before, renderer.packed, sizeof(before));
+    lv_obj_t *panel = lv_obj_get_child(renderer.root, 0);
+    lv_obj_set_pos(panel, 23, 43);
+    lv_obj_set_size(panel, 109, 73);
+    CHECK(monitor_renderer_render(&renderer), "partial I1 update across byte and buffer boundaries");
+    CHECK(memcmp(before, renderer.packed, sizeof(before)) != 0, "partial update changes frame");
+    memcpy(before, renderer.packed, sizeof(before));
+    monitor_renderer_invalidate_all(&renderer);
+    CHECK(monitor_renderer_render(&renderer), "full I1 reference render");
+    CHECK(memcmp(before, renderer.packed, sizeof(before)) == 0,
+          "partial I1 flush matches full redraw and clears old widget pixels");
+    lv_obj_set_style_bg_color(panel, lv_color_white(), 0);
+    CHECK(monitor_renderer_render(&renderer), "erase I1 panel");
+    for(uint32_t i = 0; i < MONITOR_FRAME_BYTES; ++i)
+        CHECK(renderer.packed[i] == 0xff, "white update clears every previous black bit");
+    monitor_renderer_deinit(&renderer);
+}
+
+static lv_obj_t *create_rounded_border_scene(lv_obj_t *parent)
+{
+    lv_obj_t *root = lv_obj_create(parent);
+    lv_obj_remove_style_all(root);
+    lv_obj_set_size(root, MONITOR_DISPLAY_WIDTH, MONITOR_DISPLAY_HEIGHT);
+    lv_obj_set_style_bg_opa(root, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(root, lv_color_white(), 0);
+    lv_obj_t *box = lv_obj_create(root);
+    lv_obj_remove_style_all(box);
+    lv_obj_set_pos(box, 19, 19);
+    lv_obj_set_size(box, 81, 63);
+    lv_obj_set_style_border_width(box, 2, 0);
+    lv_obj_set_style_border_color(box, lv_color_black(), 0);
+    lv_obj_set_style_radius(box, 9, 0);
+    return root;
+}
+
+static void test_i1_rounded_border(void)
+{
+    monitor_renderer_t renderer;
+    CHECK(monitor_renderer_init(&renderer, create_rounded_border_scene), "init rounded I1 scene");
+    CHECK(monitor_renderer_render(&renderer), "render black rounded border");
+    uint8_t normal[MONITOR_FRAME_BYTES];
+    memcpy(normal, renderer.packed, sizeof(normal));
+    lv_obj_set_style_bg_color(renderer.root, lv_color_black(), 0);
+    lv_obj_set_style_border_color(lv_obj_get_child(renderer.root, 0), lv_color_white(), 0);
+    CHECK(monitor_renderer_render(&renderer), "render white rounded border");
+    for(uint32_t i = 0; i < MONITOR_FRAME_BYTES; ++i)
+        CHECK((normal[i] ^ renderer.packed[i]) == 0xffU,
+              "rounded corners and straight strokes have identical coverage in both polarities");
     monitor_renderer_deinit(&renderer);
 }
 
@@ -328,6 +429,9 @@ int main(void)
     test_sha256_vectors();
     test_pack_round_trip();
     test_pack_layout();
+    test_i1_coverage_blending();
+    test_i1_partial_refresh();
+    test_i1_rounded_border();
     test_render_determinism();
     test_weather_conditions();
     test_future_scene_factory();
