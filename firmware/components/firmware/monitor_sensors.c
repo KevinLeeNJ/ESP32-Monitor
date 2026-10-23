@@ -109,6 +109,7 @@ static bool read_environment(bool *display_changed)
 static void sensor_task(void *arg)
 {
     (void)arg;
+    bool initial_sample = true;
     for (;;) {
         bool display_changed = false;
         bool value_changed = false;
@@ -117,7 +118,9 @@ static void sensor_task(void *arg)
         value_changed = false;
         if (!read_environment(&value_changed)) { portENTER_CRITICAL(&s_data_mux); s_data.environment_valid = false; portEXIT_CRITICAL(&s_data_mux); }
         display_changed |= value_changed;
-        if (display_changed) monitor_display_refresh_request();
+        if (display_changed) monitor_display_refresh_request_reason(
+            initial_sample ? MONITOR_REFRESH_RECOVER : MONITOR_REFRESH_SENSORS);
+        initial_sample = false;
         const TickType_t wait = monitor_clock_is_valid() ? portMAX_DELAY : pdMS_TO_TICKS(60000);
         (void)ulTaskNotifyTake(pdTRUE, wait);
     }

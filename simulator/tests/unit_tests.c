@@ -8,6 +8,8 @@
 #include "scene_registry.h"
 #include "sha256.h"
 #include "cJSON.h"
+#include "monitor_schedule.h"
+#include "monitor_display_refresh.h"
 
 static int failures = 0;
 
@@ -277,8 +279,49 @@ static void test_devices_ui_replacement(void)
     monitor_renderer_deinit(&renderer);
 }
 
+static void test_aligned_refresh(void)
+{
+    const uint32_t all = MONITOR_SCHEDULE_DEVICES | MONITOR_SCHEDULE_SENSORS | MONITOR_SCHEDULE_WEATHER;
+    CHECK(monitor_schedule_due(-1, 7) == all, "first valid time initializes every producer");
+    CHECK(monitor_schedule_due(29, 30) == MONITOR_SCHEDULE_DEVICES, "Devices refresh at :30");
+    CHECK(monitor_schedule_due(59, 60) == (MONITOR_SCHEDULE_DEVICES | MONITOR_SCHEDULE_SENSORS),
+          "minute boundary shares Devices and sensors");
+    CHECK(monitor_schedule_due(899, 900) == all, "quarter hour shares every producer");
+    CHECK(monitor_schedule_due(86399, 86400) == all, "midnight shares every producer");
+    CHECK(monitor_schedule_due(900, 901) == 0, "extra wakeup in same slot does not refresh");
+    CHECK(monitor_schedule_due(900, 899) == all, "backward time correction realigns every slot");
+    CHECK(monitor_schedule_due(10, 1900) == all, "forward correction schedules one batch without catch-up");
+    CHECK(monitor_schedule_delay_ms(29123456) == 877, "deadline keeps fractional seconds and rounds up");
+    CHECK(monitor_schedule_delay_ms(29999999) == 1, "sub-millisecond boundary never spins");
+    CHECK(monitor_schedule_delay_ms(30000000) == 30000, "exact boundary waits for the next slot");
+
+    /* Simulate an hour starting off-boundary, with request completions and
+     * unrelated wakeups at every second. Only :00/:30 may commit a normal batch. */
+    unsigned devices = 0, sensors = 0, weather = 0, renders = 0;
+    for (int64_t now = 8; now <= 3607; ++now) {
+        uint32_t due = monitor_schedule_due(now - 1, now);
+        devices += (due & MONITOR_SCHEDULE_DEVICES) != 0;
+        sensors += (due & MONITOR_SCHEDULE_SENSORS) != 0;
+        weather += (due & MONITOR_SCHEDULE_WEATHER) != 0;
+        uint32_t reasons = MONITOR_REFRESH_SENSORS | MONITOR_REFRESH_WEATHER | MONITOR_REFRESH_DEVICES;
+        if (due) reasons |= MONITOR_REFRESH_CLOCK;
+        if (monitor_display_refresh_should_render(reasons, true)) {
+            CHECK(now % 30 == 0, "asynchronous completions never cause off-boundary periodic draws");
+            renders++;
+        }
+    }
+    CHECK(devices == 120 && sensors == 60 && weather == 4 && renders == 120,
+          "one hour coalesces 120 Devices, 60 sensor and 4 weather updates into 120 display batches");
+    CHECK(monitor_display_refresh_should_render(MONITOR_REFRESH_RECOVER, true),
+          "startup, configuration and expiry bypass periodic batching");
+    CHECK(monitor_display_refresh_should_render(MONITOR_REFRESH_WIFI, true), "Wi-Fi changes render promptly");
+    CHECK(monitor_display_refresh_should_render(MONITOR_REFRESH_SENSORS, false),
+          "fallback sampling is visible before time becomes valid");
+}
+
 int main(void)
 {
+    test_aligned_refresh();
     test_devices_url();
     test_devices_parser();
     test_devices_ui_replacement();

@@ -4,6 +4,8 @@
 #include "monitor_rtc_pcf85063.h"
 #include "monitor_sensors.h"
 #include "monitor_weather.h"
+#include "monitor_devices.h"
+#include "monitor_schedule.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -107,8 +109,10 @@ static void sync_worker(void *arg)
             s_sync_retry_index = 0;
             if (monitor_clock_is_valid()) {
                 monitor_weather_on_time_valid();
-                monitor_sensors_request_sample();
+                monitor_devices_request_refresh();
             }
+            /* Recompute the absolute deadline even when validity is unchanged. */
+            if (s_clock_task) xTaskNotify(s_clock_task, 0, eNoAction);
             ESP_LOGI(TAG, "SNTP synchronized; RTC write %s", rtc_err == ESP_OK ? "verified" : "failed");
         } else {
             static const uint32_t retry_seconds[] = {60, 300, 900, 3600};
@@ -124,18 +128,12 @@ static void sync_worker(void *arg)
     }
 }
 
-static uint32_t seconds_to_next_deadline(void)
+static uint32_t milliseconds_to_next_deadline(void)
 {
-    time_t now;
-    time(&now);
-    uint32_t next_minute = 60U - (uint32_t)(now % 60);
-    struct tm local;
-    localtime_r(&now, &local);
-    local.tm_hour = 2; local.tm_min = 0; local.tm_sec = 0;
-    if (mktime(&local) <= now) local.tm_mday++;
-    time_t target = mktime(&local);
-    uint32_t until_2am = target > now ? (uint32_t)(target - now) : 60;
-    return next_minute < until_2am ? next_minute : until_2am;
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    /* The daily 02:00 SNTP deadline is also a half-minute boundary. */
+    return monitor_schedule_delay_ms((int64_t)now.tv_sec * 1000000 + now.tv_usec);
 }
 
 static void clock_task(void *arg)
@@ -143,24 +141,25 @@ static void clock_task(void *arg)
     (void)arg;
     uint32_t rtc_retry_s = 5;
     int64_t next_rtc_retry = 0;
-    int64_t last_sensor_minute = -1;
+    int64_t last_schedule_time = -1;
     if (s_time_valid) {
         time_t initial_time;
         time(&initial_time);
-        last_sensor_minute = (int64_t)initial_time / 60;
+        last_schedule_time = (int64_t)initial_time;
     }
     for (;;) {
-        uint32_t wait_s = s_time_valid ? seconds_to_next_deadline() : rtc_retry_s;
-        if (!s_time_valid && s_rtc_present) wait_s = UINT32_MAX;
+        uint32_t wait_ms = s_time_valid ? milliseconds_to_next_deadline() : rtc_retry_s * 1000;
+        if (!s_time_valid && s_rtc_present) wait_ms = UINT32_MAX;
         const int64_t before_wait_us = esp_timer_get_time();
         const bool should_retry_rtc = !s_rtc_present || (s_time_valid && !s_rtc_healthy);
         if (should_retry_rtc && next_rtc_retry > before_wait_us) {
-            uint32_t retry_left = (uint32_t)((next_rtc_retry - before_wait_us + 999999LL) / 1000000LL);
-            if (retry_left < wait_s) wait_s = retry_left;
+            uint32_t retry_left = (uint32_t)((next_rtc_retry - before_wait_us + 999LL) / 1000LL);
+            if (retry_left < wait_ms) wait_ms = retry_left;
         }
-        if (wait_s == 0) wait_s = 1;
+        if (wait_ms == 0) wait_ms = 1;
         uint32_t notified = 0;
-        TickType_t wait_ticks = wait_s == UINT32_MAX ? portMAX_DELAY : pdMS_TO_TICKS(wait_s * 1000);
+        TickType_t wait_ticks = wait_ms == UINT32_MAX ? portMAX_DELAY : pdMS_TO_TICKS(wait_ms);
+        if (wait_ticks == 0) wait_ticks = 1;
         xTaskNotifyWait(0, UINT32_MAX, &notified, wait_ticks);
         if ((notified & CLOCK_EVT_SYNC) && s_sync_task) xTaskNotifyGive(s_sync_task);
         int64_t now_us = esp_timer_get_time();
@@ -176,16 +175,15 @@ static void clock_task(void *arg)
             }
         }
         time_t now; time(&now);
-        if (s_time_valid) {
-            const int64_t current_minute = (int64_t)now / 60;
-            if (last_sensor_minute >= 0 && current_minute != last_sensor_minute)
-                monitor_sensors_request_sample();
-            last_sensor_minute = current_minute;
-        }
+        uint32_t due = s_time_valid ? monitor_schedule_due(last_schedule_time, (int64_t)now) : 0;
+        if (s_time_valid) last_schedule_time = (int64_t)now;
+        if (due & MONITOR_SCHEDULE_SENSORS) monitor_sensors_request_sample();
+        if (due & MONITOR_SCHEDULE_WEATHER) monitor_weather_request_refresh();
+        if (due & MONITOR_SCHEDULE_DEVICES) monitor_devices_request_refresh();
         struct tm local; localtime_r(&now, &local);
-        if (s_time_valid && local.tm_hour == 2 && local.tm_min == 0 && s_sync_task)
+        if ((due & MONITOR_SCHEDULE_SENSORS) && local.tm_hour == 2 && local.tm_min == 0 && s_sync_task)
             xTaskNotifyGive(s_sync_task);
-        monitor_display_refresh_request();
+        if (due) monitor_display_refresh_request_reason(MONITOR_REFRESH_CLOCK);
     }
 }
 

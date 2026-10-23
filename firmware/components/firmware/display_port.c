@@ -84,6 +84,7 @@ static esp_err_t panel_init_sequence(rlcd_port_t *port)
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xd8), "rlcd", "vcom");
     ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0x80, 0xe9}, 2), "rlcd", "vcom args");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xb2), "rlcd", "frame rate");
+    /* ST7305 FRCTRL LFRA[2:0]=2 selects a 1 Hz panel scan in LPM. */
     ESP_RETURN_ON_ERROR(send_data1(port, 0x02), "rlcd", "frame rate arg");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xb3), "rlcd", "waveform b3");
     ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0xe5,0xf6,0x05,0x46,0x77,0x77,0x77,0x77,0x76,0x45}, 10),
@@ -115,7 +116,7 @@ static esp_err_t panel_init_sequence(rlcd_port_t *port)
     ESP_RETURN_ON_ERROR(send_data1(port, 0x00), "rlcd", "te arg");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xd0), "rlcd", "d0");
     ESP_RETURN_ON_ERROR(send_data1(port, 0xff), "rlcd", "d0 arg");
-    ESP_RETURN_ON_ERROR(send_cmd(port, 0x38), "rlcd", "idle off");
+    ESP_RETURN_ON_ERROR(send_cmd(port, 0x39), "rlcd", "low power mode on (1 Hz)");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0x29), "rlcd", "display on");
     return ESP_OK;
 }
