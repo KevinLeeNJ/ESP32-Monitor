@@ -1,0 +1,2 @@
+version: "9.4.0"
+description: Project wrapper for the pinned LVGL submodule and shared lv_conf.h

@@ -51,9 +51,22 @@ typedef int esp_err_t;
 #define configTICK_RATE_HZ 1000U
 #define MONITOR_REFRESH_CLOCK 1U
 #define TAG "test"
-typedef struct { bool mode_known, animation_mode, te_enabled; int frame_ready; struct { int te; } pins; } rlcd_port_t;
+typedef struct { int mosi, sclk, dc, cs, rst, te; } rlcd_pins_t;
+typedef struct { bool mode_known, animation_mode, te_enabled; int frame_ready;
+    rlcd_pins_t pins; int awake_lock; bool awake_lock_held; } rlcd_port_t;
+static unsigned pm_acquires, pm_releases, pm_active;
+static uint64_t retained_pins;
+static int esp_pm_lock_acquire(int lock) {
+    (void)lock; ++pm_acquires; ++pm_active; return ESP_OK;
+}
+static int esp_pm_lock_release(int lock) {
+    (void)lock; assert(pm_active); ++pm_releases; --pm_active; return ESP_OK;
+}
+static int gpio_sleep_sel_dis(int pin) {
+    assert(pin >= 0 && pin < 64); retained_pins |= 1ULL << pin; return ESP_OK;
+}
 typedef struct { unsigned remaining; } lv_obj_t;
-typedef struct { lv_obj_t root; } monitor_renderer_t;
+typedef struct { lv_obj_t root; } monitor_lvgl_t;
 typedef struct { char time_text[8], date_text[16]; } display_snapshot_t;
 static uint32_t tick, priority=1, first_clock_roll, first_draw;
 static unsigned command_count, fail_command, failed_draw, draws, notifications;
@@ -104,11 +117,13 @@ static int send_data(rlcd_port_t *p,const uint8_t *data,size_t len) {
     return ESP_OK;
 }
 static int send_data1(rlcd_port_t *p,uint8_t data) { return send_data(p,&data,1); }
-static lv_obj_t *monitor_renderer_root(monitor_renderer_t *r) { return &r->root; }
+static lv_obj_t *monitor_lvgl_root(monitor_lvgl_t *r) { return &r->root; }
 static bool monitor_ui_animation_active(lv_obj_t *r) { return r->remaining>0; }
 static void monitor_ui_set_animations_enabled(lv_obj_t *r,bool enabled) { if(!enabled) r->remaining=0; }
 static void monitor_ui_advance(lv_obj_t *r,uint32_t elapsed) { assert(elapsed>=31); if(r->remaining) r->remaining--; }
-static int commit_monitor_frame(monitor_renderer_t *r,rlcd_port_t *p) {
+static rlcd_port_t *test_port;
+static int commit_monitor_frame(monitor_lvgl_t *r) {
+    rlcd_port_t *p = test_port;
     assert(priority>=5);
     if(r->root.remaining) assert(p->mode_known && p->animation_mode);
     if(!draws) first_draw=tick;
@@ -118,7 +133,7 @@ static int commit_monitor_frame(monitor_renderer_t *r,rlcd_port_t *p) {
 static void monitor_clock_get_text(char *t,size_t n,char *d,size_t dn) {
     snprintf(t,n,"00:%02u",(tick/60000)%60); snprintf(d,dn,"DATE");
 }
-static void apply_display_snapshot(monitor_renderer_t *r,const display_snapshot_t *s,bool devices) {
+static void apply_display_snapshot(monitor_lvgl_t *r,const display_snapshot_t *s,bool devices) {
     (void)s; (void)devices; first_clock_roll=tick;
     if(r->root.remaining<10) r->root.remaining=10;
 }
@@ -126,7 +141,7 @@ static void apply_display_snapshot(monitor_renderer_t *r,const display_snapshot_
 constants = '\n'.join(re.findall(r'^#define (?:ANIMATION_TASK_PRIORITY|MINUTE_PREPARE_MS) .*$', main, re.M))
 constants += '\n' + re.search(r'^#define RLCD_HPM_PREPARE_MS .*$', header, re.M).group()
 code = prefix + constants + '\n'
-for source, names in [(driver, ['set_frame_sync', 'rlcd_port_frame_sync_active', 'wait_panel_frame',
+for source, names in [(driver, ['retain_panel_pins', 'set_panel_awake', 'set_frame_sync', 'rlcd_port_frame_sync_active', 'wait_panel_frame',
                                'set_frame_rates', 'set_mode_voltages', 'rlcd_port_set_animation_mode']),
                        (main, ['restore_panel_lpm', 'wait_animation_frame', 'raise_animation_priority',
                                'wall_time_us', 'milliseconds_to_minute', 'minute_needs_hpm',
@@ -136,10 +151,18 @@ code += r'''
 static void reset(void) {
     tick=0; priority=1; command_count=fail_command=failed_draw=draws=notifications=0;
     first_clock_roll=first_draw=0; clock_valid=true;storm=false;
+    pm_acquires=pm_releases=pm_active=0;
     te_signal=te_token=false;te_waits=irq_enabled=0;
 }
 int main(void) {
     rlcd_port_t p={.mode_known=true};
+    test_port=&p;
+    rlcd_pins_t pins={.mosi=12,.sclk=11,.dc=5,.cs=40,.rst=41,.te=6};
+    const uint64_t outputs=(1ULL<<12)|(1ULL<<11)|(1ULL<<5)|(1ULL<<40)|(1ULL<<41);
+    assert(retain_panel_pins(&pins)==ESP_OK && retained_pins==(outputs|(1ULL<<6)));
+    retained_pins=0; pins.te=-1;
+    assert(retain_panel_pins(&pins)==ESP_OK && retained_pins==outputs);
+    puts("RST, CS, DC, clock, MOSI and optional TE retain active configuration in Light Sleep: PASS");
     assert(MONITOR_UI_ANIMATION_FPS==32 && MONITOR_UI_ANIMATION_FRAME_MS==32);
     assert(set_frame_rates(&p)==ESP_OK);
     assert(command_count==2 && commands[0]==0xd8 && commands[1]==0xb2);
@@ -148,12 +171,15 @@ int main(void) {
     assert(rlcd_port_set_animation_mode(&p,true)==ESP_OK);
     const uint8_t high[]={0x38,0xc1,0xc2,0xc4,0xc5,0xc9};
     assert(tick==320 && command_count==6 && !memcmp(commands,high,6));
+    assert(pm_acquires==1 && pm_active==1 && p.awake_lock_held);
     assert(command_at[0]==0 && command_at[1]==300);
     assert(rlcd_port_set_animation_mode(&p,true)==ESP_OK && tick==320 && command_count==6);
+    assert(pm_acquires==1);
     assert(rlcd_port_set_animation_mode(&p,false)==ESP_OK);
     const uint8_t low[]={0xc1,0xc2,0xc4,0xc5,0xc9,0x39};
     assert(tick==440 && command_count==12 && !memcmp(commands+6,low,6));
     assert(command_at[6]==320 && command_at[11]==340);
+    assert(pm_releases==1 && !pm_active && !p.awake_lock_held);
     puts("Datasheet HPM/LPM command order, settling and idempotence: PASS");
     for(unsigned fault=1;fault<=6;fault++) {
         reset();p=(rlcd_port_t){.mode_known=true};fail_command=fault;
@@ -162,6 +188,7 @@ int main(void) {
         unsigned next=command_count;
         assert(rlcd_port_set_animation_mode(&p,false)==ESP_OK);
         assert(commands[next]==0x38 && p.mode_known && !p.animation_mode);
+        assert(pm_acquires==1 && pm_releases==1 && !pm_active);
     }
     for(unsigned fault=1;fault<=6;fault++) {
         reset();p=(rlcd_port_t){.mode_known=true,.animation_mode=true};fail_command=fault;
@@ -181,14 +208,14 @@ int main(void) {
     puts("Minute preparation at :59.600, ready at :59.920, dispatch at :00.000; notification storm does not delay it: PASS");
     for(unsigned base=1;base<=7;base+=6) for(unsigned fault=0;fault<=1;fault++) {
         reset();priority=base;tick=1000;failed_draw=fault?3:0;
-        p=(rlcd_port_t){.mode_known=true};monitor_renderer_t r={.root.remaining=12};
+        p=(rlcd_port_t){.mode_known=true};monitor_lvgl_t r={.root.remaining=12};
         assert(present_monitor(&r,&p,NULL)==(fault?ESP_FAIL:ESP_OK));
         assert(first_draw==1320 && priority==base && !p.animation_mode && !r.root.remaining);
     }
     puts("All animation frames run at high priority after HPM settling; success and draw failure restore priority and LPM: PASS");
     reset();tick=1000;te_signal=true;
     p=(rlcd_port_t){.mode_known=true,.frame_ready=1};
-    monitor_renderer_t synced={.root.remaining=12};
+    monitor_lvgl_t synced={.root.remaining=12};
     assert(present_monitor(&synced,&p,NULL)==ESP_OK);
     assert(te_waits==13 && !irq_enabled && !p.animation_mode && !p.te_enabled);
     assert(tick==1940); /* 320 HPM + 13*(29 TE + 7 transfer) + 32 final scan + 120 LPM */
@@ -204,18 +231,18 @@ int main(void) {
     assert(rlcd_port_set_animation_mode(&p,true)==ESP_OK && rlcd_port_frame_sync_active(&p));
     puts("Stale TE tokens drain; missing TE times out once, falls back, and recovers on next HPM: PASS");
     reset();tick=1000;fail_command=1;
-    p=(rlcd_port_t){.mode_known=true};monitor_renderer_t failed={.root.remaining=12};
+    p=(rlcd_port_t){.mode_known=true};monitor_lvgl_t failed={.root.remaining=12};
     assert(present_monitor(&failed,&p,NULL)==ESP_FAIL);
     assert(priority==1 && p.mode_known && !p.animation_mode && !failed.root.remaining);
     puts("Failed HPM preparation cancels the timeline and restores priority/LPM: PASS");
     reset();tick=59470;p=(rlcd_port_t){.mode_known=true,.animation_mode=true};
-    monitor_renderer_t imminent={.root.remaining=1};
+    monitor_lvgl_t imminent={.root.remaining=1};
     assert(present_monitor(&imminent,&p,NULL)==ESP_OK && p.animation_mode);
     assert(wait_display_refresh(&p)&MONITOR_REFRESH_CLOCK);
     assert(tick==60000 && command_count==0 && priority==1);
     puts("Device animation ending near minute retains HPM, avoiding a late LPM/HPM round trip: PASS");
     reset();tick=59000;p=(rlcd_port_t){.mode_known=true,.animation_mode=true};
-    monitor_renderer_t r={.root.remaining=70};
+    monitor_lvgl_t r={.root.remaining=70};
     display_snapshot_t s={.time_text="00:00",.date_text="DATE"};
     assert(present_monitor(&r,&p,&s)==ESP_OK);
     assert(!strcmp(s.time_text,"00:01") && first_clock_roll>=60000 && first_clock_roll<=60032);

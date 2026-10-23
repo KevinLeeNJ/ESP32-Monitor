@@ -4,9 +4,10 @@
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "driver/gpio.h"
 
 #include "display_port.h"
-#include "monitor_render.h"
+#include "monitor_lvgl.h"
 #include "monitor_ui.h"
 #include "monitor_wifi_manager.h"
 #include "monitor_clock.h"
@@ -102,11 +103,10 @@ static lv_obj_t *monitor_screen_factory(lv_obj_t *parent)
     return monitor_ui_create_waiting(parent, MONITOR_FRAME_NORMAL);
 }
 
-static esp_err_t commit_monitor_frame(monitor_renderer_t *renderer, rlcd_port_t *port)
+static esp_err_t commit_monitor_frame(monitor_lvgl_t *renderer)
 {
     ESP_RETURN_ON_ERROR(esp_pm_lock_acquire(g_render_cpu_lock), TAG, "render CPU lock");
-    esp_err_t result = monitor_renderer_render(renderer) ?
-        rlcd_port_draw_diff(port, monitor_renderer_packed(renderer), MONITOR_FRAME_BYTES) : ESP_FAIL;
+    esp_err_t result = monitor_lvgl_render(renderer);
     esp_err_t release = esp_pm_lock_release(g_render_cpu_lock);
     return result != ESP_OK ? result : release;
 }
@@ -187,12 +187,12 @@ static uint32_t wait_display_refresh(rlcd_port_t *port)
     }
 }
 
-static void apply_display_snapshot(monitor_renderer_t *renderer, const display_snapshot_t *snapshot,
+static void apply_display_snapshot(monitor_lvgl_t *renderer, const display_snapshot_t *snapshot,
                                    bool devices_changed);
 
 /* An already running device transition must not defer a minute roll. HPM is
  * already stable, so merge the clock into that timeline at the next frame. */
-static void update_animation_clock(monitor_renderer_t *renderer, display_snapshot_t *displayed)
+static void update_animation_clock(monitor_lvgl_t *renderer, display_snapshot_t *displayed)
 {
     if (!displayed) return;
     char previous_time[sizeof(displayed->time_text)], previous_date[sizeof(displayed->date_text)];
@@ -208,10 +208,10 @@ static void update_animation_clock(monitor_renderer_t *renderer, display_snapsho
 /* The UI owns finite timelines, the display task owns panel mode and cadence.
  * No animation task/timer remains running after the last frame. Data producer
  * notifications stay queued while a short animation is being presented. */
-static esp_err_t present_monitor(monitor_renderer_t *renderer, rlcd_port_t *port,
+static esp_err_t present_monitor(monitor_lvgl_t *renderer, rlcd_port_t *port,
                                  display_snapshot_t *displayed)
 {
-    lv_obj_t *root = monitor_renderer_root(renderer);
+    lv_obj_t *root = monitor_lvgl_root(renderer);
     bool animated = monitor_ui_animation_active(root);
     const UBaseType_t original_priority = raise_animation_priority();
     esp_err_t result = animated ? rlcd_port_set_animation_mode(port, true) : ESP_OK;
@@ -220,7 +220,7 @@ static esp_err_t present_monitor(monitor_renderer_t *renderer, rlcd_port_t *port
     TickType_t previous = frame_tick;
     do {
         if (animated && result == ESP_OK) update_animation_clock(renderer, displayed);
-        esp_err_t draw = commit_monitor_frame(renderer, port);
+        esp_err_t draw = commit_monitor_frame(renderer);
         if (draw != ESP_OK) { result = draw; break; }
         if (!monitor_ui_animation_active(root)) break;
         if (!rlcd_port_frame_sync_active(port)) wait_animation_frame(&frame_tick, portMAX_DELAY);
@@ -232,7 +232,7 @@ static esp_err_t present_monitor(monitor_renderer_t *renderer, rlcd_port_t *port
         /* Errors also leave a settled scene and attempt to restore LPM. */
         monitor_ui_set_animations_enabled(root, false);
         monitor_ui_set_animations_enabled(root, true);
-        esp_err_t retry = commit_monitor_frame(renderer, port);
+        esp_err_t retry = commit_monitor_frame(renderer);
         if (retry != ESP_OK) ESP_LOGE(TAG, "settled frame retry failed: %s", esp_err_to_name(retry));
     }
     if (animated) vTaskDelay(pdMS_TO_TICKS(MONITOR_UI_ANIMATION_FRAME_MS)); /* Let the final HPM scan finish. */
@@ -245,7 +245,7 @@ static esp_err_t present_monitor(monitor_renderer_t *renderer, rlcd_port_t *port
     return low_power != ESP_OK ? low_power : result;
 }
 
-static void apply_display_snapshot(monitor_renderer_t *renderer, const display_snapshot_t *snapshot,
+static void apply_display_snapshot(monitor_lvgl_t *renderer, const display_snapshot_t *snapshot,
                                      bool devices_changed)
 {
     monitor_ui_snapshot_t ui = {
@@ -255,8 +255,8 @@ static void apply_display_snapshot(monitor_renderer_t *renderer, const display_s
         .temperature_tenths_c = snapshot->temperature_tenths_c,
         .humidity_percent = snapshot->humidity_percent, .aqi = snapshot->aqi,
     };
-    monitor_ui_apply_snapshot(monitor_renderer_root(renderer), &ui);
-    if (devices_changed) monitor_ui_apply_devices_snapshot(monitor_renderer_root(renderer), &snapshot->devices);
+    monitor_ui_apply_snapshot(monitor_lvgl_root(renderer), &ui);
+    if (devices_changed) monitor_ui_apply_devices_snapshot(monitor_lvgl_root(renderer), &snapshot->devices);
 }
 
 static bool boot_data_complete(const display_snapshot_t *snapshot)
@@ -271,10 +271,10 @@ static bool boot_data_complete(const display_snapshot_t *snapshot)
             snapshot->devices.status == MONITOR_DEVICES_STALE);
 }
 
-static esp_err_t present_boot_monitor(monitor_renderer_t *renderer, rlcd_port_t *port,
+static esp_err_t present_boot_monitor(monitor_lvgl_t *renderer, rlcd_port_t *port,
                                        display_snapshot_t *displayed)
 {
-    lv_obj_t *root = monitor_renderer_root(renderer);
+    lv_obj_t *root = monitor_lvgl_root(renderer);
     const TickType_t timeout = pdMS_TO_TICKS(BOOT_ANIMATION_TIMEOUT_MS);
     const TickType_t started = xTaskGetTickCount();
     TickType_t previous = started;
@@ -308,7 +308,7 @@ static esp_err_t present_boot_monitor(monitor_renderer_t *renderer, rlcd_port_t 
          * its first frame must not inherit an old, long-expired deadline. */
         if (!was_animating && monitor_ui_animation_active(root)) frame_tick = now;
         if (changed) {
-            result = commit_monitor_frame(renderer, port);
+            result = commit_monitor_frame(renderer);
             if (result != ESP_OK) break;
         }
         if (boot_data_complete(displayed) && !monitor_ui_animation_active(root)) {
@@ -332,7 +332,7 @@ static esp_err_t present_boot_monitor(monitor_renderer_t *renderer, rlcd_port_t 
          * partial roll/pop, retain unavailable placeholders, then restore LPM. */
         monitor_ui_set_animations_enabled(root, false);
         monitor_ui_set_animations_enabled(root, true);
-        esp_err_t commit = commit_monitor_frame(renderer, port);
+        esp_err_t commit = commit_monitor_frame(renderer);
         if (result == ESP_OK) result = commit;
     }
     vTaskDelay(pdMS_TO_TICKS(MONITOR_UI_ANIMATION_FRAME_MS)); /* Finish the final HPM scan before LPM. */
@@ -369,8 +369,15 @@ void app_main(void)
         .min_freq_mhz = 40,
         .light_sleep_enable = true,
     };
+    /* USB Serial/JTAG normally hides startup sleep bugs by keeping the chip
+     * awake. Protect reset/initialization explicitly for standalone power. */
+    esp_pm_lock_handle_t startup_lock;
+    ESP_ERROR_CHECK(esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "lcd_startup", &startup_lock));
+    ESP_ERROR_CHECK(esp_pm_lock_acquire(startup_lock));
     ESP_ERROR_CHECK(esp_pm_configure(&pm_config));
     ESP_ERROR_CHECK(esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "render", &g_render_cpu_lock));
+    /* One shared, IRAM-safe GPIO ISR service for panel TE and both buttons. */
+    ESP_ERROR_CHECK(gpio_install_isr_service(ESP_INTR_FLAG_IRAM));
     monitor_display_refresh_register();
 
     rlcd_port_t *port = NULL;
@@ -386,14 +393,18 @@ void app_main(void)
         ESP_LOGE(TAG, "Wi-Fi manager failed: %s", esp_err_to_name(wifi_err));
     }
     reset_demo();
-    monitor_renderer_t renderer;
-    if(!monitor_renderer_init(&renderer, monitor_screen_factory)) {
+    monitor_lvgl_t *renderer = NULL;
+    if(monitor_lvgl_init(&renderer, port, monitor_screen_factory) != ESP_OK) {
         ESP_LOGE(TAG, "LVGL renderer initialization failed");
+        ESP_ERROR_CHECK(esp_pm_lock_release(startup_lock));
+        ESP_ERROR_CHECK(esp_pm_lock_delete(startup_lock));
         return;
     }
 
-    monitor_renderer_invalidate_all(&renderer);
-    ESP_ERROR_CHECK(present_monitor(&renderer, port, NULL));
+    monitor_lvgl_invalidate_all(renderer);
+    ESP_ERROR_CHECK(present_monitor(renderer, port, NULL));
+    ESP_ERROR_CHECK(esp_pm_lock_release(startup_lock));
+    ESP_ERROR_CHECK(esp_pm_lock_delete(startup_lock));
     /* Start the hold after the complete placeholder frame has been transferred.
      * Data tasks may fill their caches, but only this task applies UI snapshots.
      * vTaskDelay is not interrupted by their notifications: even a valid RTC
@@ -401,7 +412,7 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(BOOT_UI_HOLD_MS));
     /* Sample the latest caches after the hold, then reuse normal animations. */
     display_snapshot_t displayed;
-    ESP_ERROR_CHECK(present_boot_monitor(&renderer, port, &displayed));
+    ESP_ERROR_CHECK(present_boot_monitor(renderer, port, &displayed));
     for(;;) {
         uint32_t reasons = wait_display_refresh(port);
         if (!monitor_display_refresh_should_render(reasons, monitor_clock_is_valid())) continue;
@@ -410,8 +421,8 @@ void app_main(void)
         display_snapshot_t current;
         capture_display_snapshot(&current);
         if (!display_snapshot_equal(&displayed, &current)) {
-            apply_display_snapshot(&renderer, &current, displayed.devices.version != current.devices.version);
-            esp_err_t draw_err = present_monitor(&renderer, port, &current);
+            apply_display_snapshot(renderer, &current, displayed.devices.version != current.devices.version);
+            esp_err_t draw_err = present_monitor(renderer, port, &current);
             if (draw_err != ESP_OK) ESP_LOGE(TAG, "display commit failed: %s", esp_err_to_name(draw_err));
             else displayed = current;
         }

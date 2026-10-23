@@ -1,0 +1,6 @@
+dependencies:
+  espressif/esp_lvgl_adapter:
+    version: "0.7.3"
+  lvgl/lvgl:
+    version: "9.4.0"
+    override_path: "../components/lvgl"
