@@ -36,7 +36,26 @@ void monitor_pack_i1_region(const uint8_t *pixels, uint32_t stride,
 
     for(int32_t y = y1; y <= y2; ++y) {
         const uint8_t *row = pixels + (uint32_t)(y - y1) * stride;
-        for(int32_t x = x1; x <= x2; ++x) {
+        int32_t x = x1;
+        /* Each source byte contains four panel pixel pairs. Merge each pair
+         * with one read/write instead of remapping every individual pixel.
+         * Odd origins and short tails retain the general pixel path. */
+        if((x1 & 1) == 0) {
+            const uint32_t column_bytes = height / 4U;
+            const uint32_t inv_y = height - 1U - (uint32_t)y;
+            const uint32_t shift = 6U - 2U * (inv_y & 3U);
+            const uint8_t mask = (uint8_t)(3U << shift);
+            uint32_t index = ((uint32_t)x1 / 2U) * column_bytes + inv_y / 4U;
+            for(; x + 7 <= x2; x += 8) {
+                const uint8_t bits = row[(uint32_t)(x - x1) / 8U];
+                for(uint32_t pair = 0; pair < 4U; ++pair) {
+                    const uint8_t value = (uint8_t)(((bits >> (6U - 2U * pair)) & 3U) << shift);
+                    packed_inout[index] = (uint8_t)((packed_inout[index] & (uint8_t)~mask) | value);
+                    index += column_bytes;
+                }
+            }
+        }
+        for(; x <= x2; ++x) {
             const uint32_t local_x = (uint32_t)(x - x1);
             const bool white = (row[local_x / 8U] & (0x80U >> (local_x % 8U))) != 0;
             const uint32_t index = pack_index((uint32_t)x, (uint32_t)y, height);

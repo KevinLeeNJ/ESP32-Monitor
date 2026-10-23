@@ -80,6 +80,36 @@ static void test_pack_layout(void)
     free(back);
 }
 
+static void test_pack_regions(void)
+{
+    /* Compare byte-pair packing to the pixel layout contract over odd/even
+     * origins, short tails, row padding and all four vertical bit positions. */
+    uint8_t packed[MONITOR_FRAME_BYTES], expected[MONITOR_FRAME_BYTES];
+    uint8_t pixels[32 * 9];
+    for(unsigned i = 0; i < sizeof(pixels); ++i) pixels[i] = (uint8_t)(i * 37U + 13U);
+    for(unsigned x1 = 0; x1 < 10; ++x1) {
+        for(unsigned width = 1; width < 65; ++width) {
+            for(unsigned y1 = 37; y1 < 41; ++y1) {
+                memset(packed, 0xa5, sizeof(packed));
+                memcpy(expected, packed, sizeof(expected));
+                for(unsigned y = y1; y < y1 + 9; ++y) {
+                    for(unsigned x = x1; x < x1 + width; ++x) {
+                        unsigned inv_y = MONITOR_DISPLAY_HEIGHT - 1U - y;
+                        unsigned index = (x / 2U) * (MONITOR_DISPLAY_HEIGHT / 4U) + inv_y / 4U;
+                        uint8_t mask = (uint8_t)(1U << (7U - (inv_y % 4U) * 2U - x % 2U));
+                        bool white = pixels[(y - y1) * 32U + (x - x1) / 8U] & (0x80U >> ((x - x1) % 8U));
+                        if(white) expected[index] |= mask;
+                        else expected[index] &= (uint8_t)~mask;
+                    }
+                }
+                monitor_pack_i1_region(pixels, 32, MONITOR_DISPLAY_WIDTH, MONITOR_DISPLAY_HEIGHT,
+                                       x1, y1, x1 + width - 1, y1 + 8, packed);
+                CHECK(!memcmp(packed, expected, sizeof(packed)), "I1 region matches pixel mapping and preserves neighbors");
+            }
+        }
+    }
+}
+
 static void test_i1_coverage_blending(void)
 {
     /* Exercise LVGL's actual dispatcher, including non-byte-aligned pixels,
@@ -429,6 +459,7 @@ int main(void)
     test_sha256_vectors();
     test_pack_round_trip();
     test_pack_layout();
+    test_pack_regions();
     test_i1_coverage_blending();
     test_i1_partial_refresh();
     test_i1_rounded_border();

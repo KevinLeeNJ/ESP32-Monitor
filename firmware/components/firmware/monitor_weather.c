@@ -71,13 +71,20 @@ static bool http_get(const char *url, char *out, size_t out_size, const char *ap
         (uint8_t)out[0] == 0x1f && (uint8_t)out[1] == 0x8b &&
         (uint8_t)out[2] == 0x08) {
         char *decoded = (char *)malloc(out_size);
+        /* The convenience wrapper puts the large Huffman state on the task
+         * stack. Keep it on the heap, including with compiler inlining. */
+        tinfl_decompressor *decomp = malloc(sizeof(*decomp));
         size_t decoded_len = 0;
-        if (decoded != NULL) {
+        if (decoded != NULL && decomp != NULL) {
             // Standard gzip header (10 bytes) and trailer (8 bytes).
-            decoded_len = tinfl_decompress_mem_to_mem(
-                decoded, out_size - 1, out + 10, response.length - 18,
+            size_t input_len = response.length - 18;
+            decoded_len = out_size - 1;
+            tinfl_init(decomp);
+            tinfl_status status = tinfl_decompress(
+                decomp, (const mz_uint8 *)out + 10, &input_len,
+                (mz_uint8 *)decoded, (mz_uint8 *)decoded, &decoded_len,
                 TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
-            if (decoded_len != TINFL_DECOMPRESS_MEM_TO_MEM_FAILED) {
+            if (status == TINFL_STATUS_DONE) {
                 response.length = decoded_len;
                 memcpy(out, decoded, decoded_len);
                 out[decoded_len] = '\0';
@@ -86,11 +93,12 @@ static bool http_get(const char *url, char *out, size_t out_size, const char *ap
                          (unsigned)response.length);
                 response.length = 0;
             }
-            free(decoded);
         } else {
             ESP_LOGW(TAG, "gzip decode buffer allocation failed");
             response.length = 0;
         }
+        free(decomp);
+        free(decoded);
     }
     bool ok = perform_err == ESP_OK && status == 200 && response.length > 0;
     if (!ok) {
@@ -118,9 +126,16 @@ static bool read_configured_location(float *lat, float *lon)
 
 static bool locate_by_public_ip(float *lat, float *lon)
 {
-    char response[RESPONSE_MAX];
-    if (!http_get("http://ipwho.is/", response, sizeof(response), NULL)) return false;
+    /* PERF may inline this function into update_weather and keep its stack
+     * frame alive during the later TLS requests. Do not reserve 8 KB there. */
+    char *response = malloc(RESPONSE_MAX);
+    if (response == NULL) return false;
+    if (!http_get("http://ipwho.is/", response, RESPONSE_MAX, NULL)) {
+        free(response);
+        return false;
+    }
     cJSON *json = cJSON_Parse(response);
+    free(response);
     if (json == NULL) return false;
     cJSON *success = cJSON_GetObjectItem(json, "success");
     cJSON *lat_item = cJSON_GetObjectItem(json, "latitude");

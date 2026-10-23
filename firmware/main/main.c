@@ -365,7 +365,7 @@ void app_main(void)
     ESP_ERROR_CHECK(nvs_err);
 
     const esp_pm_config_t pm_config = {
-        .max_freq_mhz = 160,
+        .max_freq_mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
         .min_freq_mhz = 40,
         .light_sleep_enable = true,
     };
