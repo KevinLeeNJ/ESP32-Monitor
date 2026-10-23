@@ -27,7 +27,7 @@
  *====================*/
 
 /** Color depth: 1 (I1), 8 (L8), 16 (RGB565), 24 (RGB888), 32 (XRGB8888) */
-#define LV_COLOR_DEPTH 16
+#define LV_COLOR_DEPTH 1
 
 /*=========================
    STDLIB WRAPPER SETTINGS
@@ -218,10 +218,10 @@
         #define LV_DRAW_SW_CIRCLE_CACHE_SIZE 4
     #endif
 
-    #define  LV_USE_DRAW_SW_ASM     LV_DRAW_SW_ASM_NONE
+    #define  LV_USE_DRAW_SW_ASM     LV_DRAW_SW_ASM_CUSTOM
 
     #if LV_USE_DRAW_SW_ASM == LV_DRAW_SW_ASM_CUSTOM
-        #define  LV_DRAW_SW_ASM_CUSTOM_INCLUDE ""
+        #define  LV_DRAW_SW_ASM_CUSTOM_INCLUDE "monitor_i1_blend.h"
     #endif
 
     /** Enable drawing complex gradients in software: linear at an angle, radial or conical */
