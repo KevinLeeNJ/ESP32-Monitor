@@ -107,7 +107,13 @@
  * - LV_OS_MQX
  * - LV_OS_SDL2
  * - LV_OS_CUSTOM */
-#define LV_USE_OS   LV_OS_NONE
+#ifndef LV_USE_OS
+    #ifdef CONFIG_LV_USE_OS
+        #define LV_USE_OS CONFIG_LV_USE_OS
+    #else
+        #define LV_USE_OS LV_OS_NONE
+    #endif
+#endif
 
 #if LV_USE_OS == LV_OS_CUSTOM
     #define LV_OS_CUSTOM_INCLUDE <stdint.h>
@@ -516,7 +522,9 @@
 #define LV_COLOR_MIX_ROUND_OFS  0
 
 /** Add 2 x 32-bit variables to each `lv_obj_t` to speed up getting style properties */
-#define LV_OBJ_STYLE_CACHE      1
+#ifndef LV_OBJ_STYLE_CACHE
+    #define LV_OBJ_STYLE_CACHE 1
+#endif
 
 /** Add `id` field to `lv_obj_t` */
 #define LV_USE_OBJ_ID           0

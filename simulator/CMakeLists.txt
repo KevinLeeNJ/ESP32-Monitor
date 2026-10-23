@@ -82,6 +82,9 @@ if(BUILD_TESTING)
     add_test(NAME monitor_firmware_animation_tests
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/firmware_animation_test.py"
                 "${CMAKE_C_COMPILER}")
+    add_test(NAME monitor_lvgl_adapter_tests
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/lvgl_adapter_test.py"
+                "${CMAKE_C_COMPILER}")
     add_test(NAME monitor_devices_transport_tests
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/devices_transport_test.py"
                 "${CMAKE_C_COMPILER}")

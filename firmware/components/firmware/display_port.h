@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 #include "esp_err.h"
+#include "esp_lcd_panel_io.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,7 +26,10 @@ typedef struct {
 
 typedef struct rlcd_port rlcd_port_t;
 
+/* Caller installs the shared IRAM-safe GPIO ISR service before initialization. */
 esp_err_t rlcd_port_init(rlcd_port_t **out_port, const rlcd_pins_t *pins);
+/* Borrowed IO handle; display_port retains DMA callback ownership. */
+esp_lcd_panel_io_handle_t rlcd_port_panel_io(rlcd_port_t *port);
 esp_err_t rlcd_port_draw(rlcd_port_t *port, const uint8_t *packed, uint32_t len);
 esp_err_t rlcd_port_draw_diff(rlcd_port_t *port, const uint8_t *packed, uint32_t len);
 /* Call on the display task, between completed draws. HPM=32 Hz, LPM=1 Hz.

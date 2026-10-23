@@ -8,6 +8,7 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_attr.h"
+#include "esp_pm.h"
 #include "esp_lcd_io_spi.h"
 #include "esp_lcd_panel_io.h"
 #include "freertos/FreeRTOS.h"
@@ -28,7 +29,33 @@ struct rlcd_port {
     bool te_enabled;
     bool animation_mode;
     bool mode_known;
+    esp_pm_lock_handle_t awake_lock;
+    bool awake_lock_held;
 };
+
+static esp_err_t retain_panel_pins(const rlcd_pins_t *pins)
+{
+    /* The default sleep configuration isolates GPIOs. RST must remain high
+     * after initialization, and CS/DC must not float during static display. */
+    const int gpio[] = {pins->rst, pins->cs, pins->dc, pins->mosi, pins->sclk, pins->te};
+    for (size_t i = 0; i < sizeof(gpio) / sizeof(gpio[0]); ++i) {
+        if (gpio[i] >= 0) ESP_RETURN_ON_ERROR(gpio_sleep_sel_dis(gpio[i]), "rlcd", "retain panel GPIO");
+    }
+    return ESP_OK;
+}
+
+static esp_err_t set_panel_awake(rlcd_port_t *port, bool awake)
+{
+    if (port->awake_lock_held == awake) return ESP_OK;
+    esp_err_t err = awake ? esp_pm_lock_acquire(port->awake_lock) : esp_pm_lock_release(port->awake_lock);
+    if (err == ESP_OK) port->awake_lock_held = awake;
+    return err;
+}
+
+esp_lcd_panel_io_handle_t rlcd_port_panel_io(rlcd_port_t *port)
+{
+    return port ? port->io : NULL;
+}
 
 static void IRAM_ATTR frame_ready_isr(void *ctx)
 {
@@ -189,6 +216,9 @@ esp_err_t rlcd_port_set_animation_mode(rlcd_port_t *port, bool active)
 {
     ESP_RETURN_ON_FALSE(port != NULL, ESP_ERR_INVALID_ARG, "rlcd", "invalid port");
     if (port->mode_known && port->animation_mode == active) return ESP_OK;
+    /* TE is an edge interrupt, not a Light Sleep wake source. Keep the chip
+     * awake throughout HPM settling and presentation, including frame waits. */
+    ESP_RETURN_ON_ERROR(set_panel_awake(port, true), "rlcd", "panel wake lock");
     set_frame_sync(port, false);
     const bool unknown = !port->mode_known;
     port->mode_known = false;
@@ -203,6 +233,7 @@ esp_err_t rlcd_port_set_animation_mode(rlcd_port_t *port, bool active)
         ESP_RETURN_ON_ERROR(send_cmd(port, 0x39), "rlcd", "LPM switch");
         vTaskDelay(pdMS_TO_TICKS(100));
     }
+    if (!active) ESP_RETURN_ON_ERROR(set_panel_awake(port, false), "rlcd", "panel wake unlock");
     port->animation_mode = active;
     port->mode_known = true;
     set_frame_sync(port, active);
@@ -226,6 +257,9 @@ esp_err_t rlcd_port_init(rlcd_port_t **out_port, const rlcd_pins_t *pins)
     rlcd_port_t *port = calloc(1, sizeof(*port));
     ESP_RETURN_ON_FALSE(port != NULL, ESP_ERR_NO_MEM, "rlcd", "no memory");
     port->pins = *pins;
+    ESP_RETURN_ON_ERROR(esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "rlcd_hpm", &port->awake_lock),
+                        "rlcd", "panel wake lock creation");
+    ESP_RETURN_ON_ERROR(retain_panel_pins(pins), "rlcd", "panel sleep GPIO configuration");
 
     gpio_config_t rst_cfg = {
         .pin_bit_mask = 1ULL << pins->rst,
@@ -255,8 +289,7 @@ esp_err_t rlcd_port_init(rlcd_port_t **out_port, const rlcd_pins_t *pins)
                                 .intr_type=GPIO_INTR_POSEDGE};
         ESP_RETURN_ON_ERROR(gpio_config(&te_cfg), "rlcd", "TE gpio");
         gpio_intr_disable(pins->te);
-        esp_err_t isr = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
-        ESP_RETURN_ON_FALSE(isr == ESP_OK || isr == ESP_ERR_INVALID_STATE, isr, "rlcd", "TE ISR service");
+        /* app_main installs the shared IRAM-safe GPIO ISR service once. */
         ESP_RETURN_ON_ERROR(gpio_isr_handler_add(pins->te, frame_ready_isr, port), "rlcd", "TE ISR handler");
     }
 
@@ -368,6 +401,8 @@ esp_err_t rlcd_port_deinit(rlcd_port_t *port)
     }
     if(port->io) esp_lcd_panel_io_del(port->io);
     if(port->tx_done) vSemaphoreDelete(port->tx_done);
+    if(port->awake_lock_held) esp_pm_lock_release(port->awake_lock);
+    if(port->awake_lock) esp_pm_lock_delete(port->awake_lock);
     if(port->staging) heap_caps_free(port->staging);
     spi_bus_free(RLCD_SPI_HOST);
     free(port->packed);

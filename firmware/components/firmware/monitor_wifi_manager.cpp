@@ -168,8 +168,7 @@ static void button_task(void *arg)
         .intr_type = GPIO_INTR_ANYEDGE,
     };
     if (gpio_config(&config) != ESP_OK) { vTaskDelete(NULL); return; }
-    esp_err_t isr_err = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
-    if (isr_err != ESP_OK && isr_err != ESP_ERR_INVALID_STATE) { vTaskDelete(NULL); return; }
+    // app_main owns the shared IRAM-safe GPIO ISR service (buttons and TE).
     if (gpio_isr_handler_add(BOOT_BUTTON_GPIO, button_gpio_isr, (void *)(uintptr_t)BTN_BOOT) != ESP_OK ||
         gpio_isr_handler_add(KEY_BUTTON_GPIO, button_gpio_isr, (void *)(uintptr_t)BTN_KEY) != ESP_OK) {
         vTaskDelete(NULL); return;
