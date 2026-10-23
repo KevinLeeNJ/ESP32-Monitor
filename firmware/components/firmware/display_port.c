@@ -6,6 +6,8 @@
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_check.h"
+#include "esp_log.h"
+#include "esp_attr.h"
 #include "esp_lcd_io_spi.h"
 #include "esp_lcd_panel_io.h"
 #include "freertos/FreeRTOS.h"
@@ -22,7 +24,44 @@ struct rlcd_port {
     uint8_t *packed;
     uint8_t *staging;
     SemaphoreHandle_t tx_done;
+    SemaphoreHandle_t frame_ready;
+    bool te_enabled;
+    bool animation_mode;
+    bool mode_known;
 };
+
+static void IRAM_ATTR frame_ready_isr(void *ctx)
+{
+    rlcd_port_t *port = ctx;
+    BaseType_t wake = pdFALSE;
+    xSemaphoreGiveFromISR(port->frame_ready, &wake);
+    if (wake) portYIELD_FROM_ISR();
+}
+
+static void set_frame_sync(rlcd_port_t *port, bool enabled)
+{
+    if (!port->frame_ready) return;
+    gpio_intr_disable(port->pins.te);
+    port->te_enabled = enabled;
+    xSemaphoreTake(port->frame_ready, 0);
+    if (enabled) gpio_intr_enable(port->pins.te);
+}
+
+bool rlcd_port_frame_sync_active(const rlcd_port_t *port)
+{
+    return port && port->animation_mode && port->te_enabled;
+}
+
+static void wait_panel_frame(rlcd_port_t *port)
+{
+    if (!rlcd_port_frame_sync_active(port)) return;
+    /* Ignore an edge from before this frame was ready; start the write at the
+     * next vertical scan boundary. Only one semaphore token can accumulate. */
+    xSemaphoreTake(port->frame_ready, 0);
+    if (xSemaphoreTake(port->frame_ready, pdMS_TO_TICKS(100))) return;
+    set_frame_sync(port, false);
+    ESP_LOGW("rlcd", "TE timeout; using nominal animation cadence until next HPM");
+}
 
 static esp_err_t send_cmd(rlcd_port_t *port, uint8_t cmd)
 {
@@ -64,6 +103,18 @@ static esp_err_t wait_color_done(rlcd_port_t *port)
     return xSemaphoreTake(port->tx_done, pdMS_TO_TICKS(1000)) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
+static esp_err_t set_frame_rates(rlcd_port_t *port)
+{
+    ESP_RETURN_ON_ERROR(send_cmd(port, 0xd8), "rlcd", "vcom");
+    /* ST7305 OSCSET OSCSW=111: select the 32 Hz HPM oscillator. */
+    ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0xa6, 0xe9}, 2), "rlcd", "oscillator args");
+    ESP_RETURN_ON_ERROR(send_cmd(port, 0xb2), "rlcd", "frame rate");
+    /* FRCTRL HFRA=1: 32 Hz HPM; LFRA=2: 1 Hz LPM.
+     * https://files.waveshare.com/wiki/common/ST_7305_V0_2.pdf pp.76,92 */
+    ESP_RETURN_ON_ERROR(send_data1(port, 0x12), "rlcd", "frame rate arg");
+    return ESP_OK;
+}
+
 static esp_err_t panel_init_sequence(rlcd_port_t *port)
 {
     /* Register sequence from Waveshare's Examples/09_LVGL_V9_Test. */
@@ -81,11 +132,7 @@ static esp_err_t panel_init_sequence(rlcd_port_t *port)
     ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0x4b, 0x4b, 0x4b, 0x4b}, 4), "rlcd", "vshn args");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xc5), "rlcd", "vsln");
     ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0x19, 0x19, 0x19, 0x19}, 4), "rlcd", "vsln args");
-    ESP_RETURN_ON_ERROR(send_cmd(port, 0xd8), "rlcd", "vcom");
-    ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0x80, 0xe9}, 2), "rlcd", "vcom args");
-    ESP_RETURN_ON_ERROR(send_cmd(port, 0xb2), "rlcd", "frame rate");
-    /* ST7305 FRCTRL LFRA[2:0]=2 selects a 1 Hz panel scan in LPM. */
-    ESP_RETURN_ON_ERROR(send_data1(port, 0x02), "rlcd", "frame rate arg");
+    ESP_RETURN_ON_ERROR(set_frame_rates(port), "rlcd", "frame rate setup");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xb3), "rlcd", "waveform b3");
     ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0xe5,0xf6,0x05,0x46,0x77,0x77,0x77,0x77,0x76,0x45}, 10),
                         "rlcd", "waveform b3 args");
@@ -116,8 +163,50 @@ static esp_err_t panel_init_sequence(rlcd_port_t *port)
     ESP_RETURN_ON_ERROR(send_data1(port, 0x00), "rlcd", "te arg");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xd0), "rlcd", "d0");
     ESP_RETURN_ON_ERROR(send_data1(port, 0xff), "rlcd", "d0 arg");
-    ESP_RETURN_ON_ERROR(send_cmd(port, 0x39), "rlcd", "low power mode on (1 Hz)");
+    ESP_RETURN_ON_ERROR(rlcd_port_set_animation_mode(port, false), "rlcd", "initial low power mode (1 Hz)");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0x29), "rlcd", "display on");
+    port->mode_known = true;
+    port->animation_mode = false;
+    return ESP_OK;
+}
+
+static esp_err_t set_mode_voltages(rlcd_port_t *port)
+{
+    /* Preserve this Waveshare panel's calibrated values. All four voltage
+     * banks currently use the same levels, in both HPM and LPM (C9=0). */
+    static const uint8_t commands[] = {0xc1, 0xc2, 0xc4, 0xc5};
+    static const uint8_t levels[] = {0x69, 0x19, 0x4b, 0x19};
+    for (size_t i = 0; i < sizeof(commands); ++i) {
+        const uint8_t data[] = {levels[i], levels[i], levels[i], levels[i]};
+        ESP_RETURN_ON_ERROR(send_cmd(port, commands[i]), "rlcd", "mode voltage command");
+        ESP_RETURN_ON_ERROR(send_data(port, data, sizeof(data)), "rlcd", "mode voltage data");
+    }
+    ESP_RETURN_ON_ERROR(send_cmd(port, 0xc9), "rlcd", "mode voltage select");
+    return send_data1(port, 0x00);
+}
+
+esp_err_t rlcd_port_set_animation_mode(rlcd_port_t *port, bool active)
+{
+    ESP_RETURN_ON_FALSE(port != NULL, ESP_ERR_INVALID_ARG, "rlcd", "invalid port");
+    if (port->mode_known && port->animation_mode == active) return ESP_OK;
+    set_frame_sync(port, false);
+    const bool unknown = !port->mode_known;
+    port->mode_known = false;
+    /* ST7305 v0.2 section 7.11, p53. Recover an unknown state via HPM first. */
+    if (active || unknown) {
+        ESP_RETURN_ON_ERROR(send_cmd(port, 0x38), "rlcd", "HPM switch");
+        vTaskDelay(pdMS_TO_TICKS(300));
+    }
+    ESP_RETURN_ON_ERROR(set_mode_voltages(port), "rlcd", "mode voltages");
+    vTaskDelay(pdMS_TO_TICKS(20));
+    if (!active) {
+        ESP_RETURN_ON_ERROR(send_cmd(port, 0x39), "rlcd", "LPM switch");
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    port->animation_mode = active;
+    port->mode_known = true;
+    set_frame_sync(port, active);
+    ESP_LOGI("rlcd", "panel mode: %s", active ? "HPM 32 Hz (animation)" : "LPM 1 Hz (static)");
     return ESP_OK;
 }
 
@@ -159,6 +248,17 @@ esp_err_t rlcd_port_init(rlcd_port_t **out_port, const rlcd_pins_t *pins)
 
     port->tx_done = xSemaphoreCreateBinary();
     ESP_RETURN_ON_FALSE(port->tx_done != NULL, ESP_ERR_NO_MEM, "rlcd", "completion semaphore");
+    if (pins->te >= 0) {
+        port->frame_ready = xSemaphoreCreateBinary();
+        ESP_RETURN_ON_FALSE(port->frame_ready != NULL, ESP_ERR_NO_MEM, "rlcd", "TE semaphore");
+        gpio_config_t te_cfg = {.pin_bit_mask=1ULL << pins->te, .mode=GPIO_MODE_INPUT,
+                                .intr_type=GPIO_INTR_POSEDGE};
+        ESP_RETURN_ON_ERROR(gpio_config(&te_cfg), "rlcd", "TE gpio");
+        gpio_intr_disable(pins->te);
+        esp_err_t isr = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+        ESP_RETURN_ON_FALSE(isr == ESP_OK || isr == ESP_ERR_INVALID_STATE, isr, "rlcd", "TE ISR service");
+        ESP_RETURN_ON_ERROR(gpio_isr_handler_add(pins->te, frame_ready_isr, port), "rlcd", "TE ISR handler");
+    }
 
     esp_lcd_panel_io_spi_config_t io_cfg = {
         .dc_gpio_num = pins->dc,
@@ -198,10 +298,12 @@ esp_err_t rlcd_port_draw(rlcd_port_t *port, const uint8_t *packed, uint32_t len)
 {
     ESP_RETURN_ON_FALSE(port != NULL && packed != NULL, ESP_ERR_INVALID_ARG, "rlcd", "invalid frame");
     ESP_RETURN_ON_FALSE(len == RLCD_PACKED_BYTES, ESP_ERR_INVALID_SIZE, "rlcd", "wrong frame size");
+    memcpy(port->staging, packed, len);
+    wait_panel_frame(port);
     ESP_RETURN_ON_ERROR(set_window(port, 0x12, 0x2a, 0x00, 0xc7), "rlcd", "set full window");
-    memcpy(port->packed, packed, len);
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_color(port->io, 0x2c, port->packed, len), "rlcd", "full frame");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_color(port->io, 0x2c, port->staging, len), "rlcd", "full frame");
     ESP_RETURN_ON_ERROR(wait_color_done(port), "rlcd", "full frame timeout");
+    memcpy(port->packed, packed, len);
     return ESP_OK;
 }
 
@@ -221,11 +323,13 @@ esp_err_t rlcd_port_draw_diff(rlcd_port_t *port, const uint8_t *packed, uint32_t
         if (tile < first_tile) first_tile = tile;
         if (tile > last_tile) last_tile = tile;
     }
-    if (!changed) return ESP_OK;
+    if (!changed) { wait_panel_frame(port); return ESP_OK; }
     const uint32_t pages = last_page - first_page + 1U;
     const uint32_t tiles = last_tile - first_tile + 1U;
     const uint32_t bytes = pages * tiles * 3U;
-    if (bytes > RLCD_PACKED_BYTES / 2U) return rlcd_port_draw(port, packed, len);
+    /* Devices occupy more than half of the panel. Preserve their local window
+     * throughout a reflow instead of transmitting a full frame on every step. */
+    if (bytes == RLCD_PACKED_BYTES) return rlcd_port_draw(port, packed, len);
 
     uint32_t out = 0;
     for (uint32_t page = first_page; page <= last_page; ++page) {
@@ -239,6 +343,7 @@ esp_err_t rlcd_port_draw_diff(rlcd_port_t *port, const uint8_t *packed, uint32_t
        panel's highest column address. X is the logical 12-pixel axis. */
     const uint8_t xs = (uint8_t)(0x2aU - last_tile);
     const uint8_t xe = (uint8_t)(0x2aU - first_tile);
+    wait_panel_frame(port);
     ESP_RETURN_ON_ERROR(set_window(port, xs, xe, (uint8_t)first_page, (uint8_t)last_page),
                         "rlcd", "set partial window");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_color(port->io, 0x2c, port->staging, bytes),
@@ -256,6 +361,11 @@ esp_err_t rlcd_port_draw_diff(rlcd_port_t *port, const uint8_t *packed, uint32_t
 esp_err_t rlcd_port_deinit(rlcd_port_t *port)
 {
     if(port == NULL) return ESP_OK;
+    if(port->frame_ready) {
+        set_frame_sync(port, false);
+        gpio_isr_handler_remove(port->pins.te);
+        vSemaphoreDelete(port->frame_ready);
+    }
     if(port->io) esp_lcd_panel_io_del(port->io);
     if(port->tx_done) vSemaphoreDelete(port->tx_done);
     if(port->staging) heap_caps_free(port->staging);

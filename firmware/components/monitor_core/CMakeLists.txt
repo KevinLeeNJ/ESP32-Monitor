@@ -20,3 +20,6 @@ idf_component_register(
         "../../app/ui"
     REQUIRES lvgl cjson
 )
+if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+    target_compile_options(${COMPONENT_LIB} PRIVATE -O2)
+endif()
