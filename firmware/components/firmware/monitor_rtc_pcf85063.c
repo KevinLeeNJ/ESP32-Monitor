@@ -69,7 +69,16 @@ esp_err_t monitor_rtc_init(i2c_master_bus_handle_t bus)
         .device_address = RTC_ADDRESS,
         .scl_speed_hz = 100000,
     };
-    return i2c_master_bus_add_device(bus, &config, &s_device);
+    esp_err_t err = i2c_master_bus_add_device(bus, &config, &s_device);
+    if (err != ESP_OK) return err;
+
+    uint8_t control = 0;
+    err = i2c_master_transmit_receive(
+        s_device, (uint8_t[]){RTC_REG_CONTROL_1}, 1, &control, 1, 100);
+    if (err != ESP_OK) return err;
+    control &= (uint8_t)~RTC_12H_BIT; /* 12_24 = 0 selects 24-hour mode. */
+    return i2c_master_transmit(s_device,
+                              (uint8_t[]){RTC_REG_CONTROL_1, control}, 2, 100);
 }
 
 esp_err_t monitor_rtc_read(monitor_rtc_sample_t *out)
