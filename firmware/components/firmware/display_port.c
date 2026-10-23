@@ -146,22 +146,22 @@ static esp_err_t panel_init_sequence(rlcd_port_t *port)
 {
     /* Register sequence from Waveshare's Examples/09_LVGL_V9_Test. */
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xd6), "rlcd", "nvm load");
-    ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0x17, 0x02}, 2), "rlcd", "nvm args");
+    ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0x13, 0x02}, 2), "rlcd", "nvm args");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xd1), "rlcd", "booster");
     ESP_RETURN_ON_ERROR(send_data1(port, 0x01), "rlcd", "booster arg");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xc0), "rlcd", "gate voltage");
-    ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0x11, 0x04}, 2), "rlcd", "gate args");
+    ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0x12, 0x0a}, 2), "rlcd", "gate args");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xc1), "rlcd", "vshp");
-    ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0x69, 0x69, 0x69, 0x69}, 4), "rlcd", "vshp args");
+    ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0x3c, 0x3e, 0x3c, 0x3c}, 4), "rlcd", "vshp args");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xc2), "rlcd", "vslp");
-    ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0x19, 0x19, 0x19, 0x19}, 4), "rlcd", "vslp args");
+    ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0x23, 0x21, 0x23, 0x23}, 4), "rlcd", "vslp args");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xc4), "rlcd", "vshn");
-    ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0x4b, 0x4b, 0x4b, 0x4b}, 4), "rlcd", "vshn args");
+    ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0x5a, 0x5c, 0x5a, 0x5a}, 4), "rlcd", "vshn args");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xc5), "rlcd", "vsln");
-    ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0x19, 0x19, 0x19, 0x19}, 4), "rlcd", "vsln args");
+    ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0x37, 0x35, 0x37, 0x37}, 4), "rlcd", "vsln args");
     ESP_RETURN_ON_ERROR(set_frame_rates(port), "rlcd", "frame rate setup");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xb3), "rlcd", "waveform b3");
-    ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0xe5,0xf6,0x05,0x46,0x77,0x77,0x77,0x77,0x76,0x45}, 10),
+    ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0xe5,0xf6,0x17,0x77,0x77,0x77,0x77,0x77,0x77,0x71}, 10),
                         "rlcd", "waveform b3 args");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xb4), "rlcd", "waveform b4");
     ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0x05,0x46,0x77,0x77,0x77,0x77,0x76,0x45}, 8),
@@ -197,21 +197,6 @@ static esp_err_t panel_init_sequence(rlcd_port_t *port)
     return ESP_OK;
 }
 
-static esp_err_t set_mode_voltages(rlcd_port_t *port)
-{
-    /* Preserve this Waveshare panel's calibrated values. All four voltage
-     * banks currently use the same levels, in both HPM and LPM (C9=0). */
-    static const uint8_t commands[] = {0xc1, 0xc2, 0xc4, 0xc5};
-    static const uint8_t levels[] = {0x69, 0x19, 0x4b, 0x19};
-    for (size_t i = 0; i < sizeof(commands); ++i) {
-        const uint8_t data[] = {levels[i], levels[i], levels[i], levels[i]};
-        ESP_RETURN_ON_ERROR(send_cmd(port, commands[i]), "rlcd", "mode voltage command");
-        ESP_RETURN_ON_ERROR(send_data(port, data, sizeof(data)), "rlcd", "mode voltage data");
-    }
-    ESP_RETURN_ON_ERROR(send_cmd(port, 0xc9), "rlcd", "mode voltage select");
-    return send_data1(port, 0x00);
-}
-
 esp_err_t rlcd_port_set_animation_mode(rlcd_port_t *port, bool active)
 {
     ESP_RETURN_ON_FALSE(port != NULL, ESP_ERR_INVALID_ARG, "rlcd", "invalid port");
@@ -227,8 +212,6 @@ esp_err_t rlcd_port_set_animation_mode(rlcd_port_t *port, bool active)
         ESP_RETURN_ON_ERROR(send_cmd(port, 0x38), "rlcd", "HPM switch");
         vTaskDelay(pdMS_TO_TICKS(300));
     }
-    ESP_RETURN_ON_ERROR(set_mode_voltages(port), "rlcd", "mode voltages");
-    vTaskDelay(pdMS_TO_TICKS(20));
     if (!active) {
         ESP_RETURN_ON_ERROR(send_cmd(port, 0x39), "rlcd", "LPM switch");
         vTaskDelay(pdMS_TO_TICKS(100));
