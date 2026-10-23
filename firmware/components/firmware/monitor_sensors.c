@@ -82,15 +82,20 @@ static uint8_t shtc3_crc(const uint8_t *data)
 
 static bool read_environment(bool *display_changed)
 {
+    const uint8_t wakeup[] = {0x35, 0x17};
     const uint8_t command[] = {0x78, 0x66};
+    const uint8_t sleep[] = {0xb0, 0x98};
     uint8_t data[6];
-    if (i2c_master_transmit(s_shtc3, command, sizeof(command), 100) != ESP_OK) return false;
+    bool sample_valid = false;
+    if (i2c_master_transmit(s_shtc3, wakeup, sizeof(wakeup), 100) != ESP_OK) return false;
+    vTaskDelay(pdMS_TO_TICKS(1));
+    if (i2c_master_transmit(s_shtc3, command, sizeof(command), 100) != ESP_OK) goto sleep_sensor;
     vTaskDelay(pdMS_TO_TICKS(20));
-    if (i2c_master_receive(s_shtc3, data, sizeof(data), 100) != ESP_OK) return false;
-    if (shtc3_crc(data) != data[2] || shtc3_crc(&data[3]) != data[5]) return false;
+    if (i2c_master_receive(s_shtc3, data, sizeof(data), 100) != ESP_OK) goto sleep_sensor;
+    if (shtc3_crc(data) != data[2] || shtc3_crc(&data[3]) != data[5]) goto sleep_sensor;
     const uint16_t raw_t = ((uint16_t)data[0] << 8) | data[1];
     const uint16_t raw_h = ((uint16_t)data[3] << 8) | data[4];
-    const float temperature = -45.0f + 175.0f * raw_t / 65536.0f - 4.0f;
+    const float temperature = -45.0f + 175.0f * raw_t / 65536.0f;
     const float humidity = 100.0f * raw_h / 65536.0f;
     const int temperature_tenths_c = (int)lroundf(temperature * 10.0f);
     const int humidity_percent = (int)lroundf(humidity);
@@ -103,7 +108,11 @@ static bool read_environment(bool *display_changed)
     s_data.humidity_percent = humidity_percent;
     s_data.environment_valid = true;
     portEXIT_CRITICAL(&s_data_mux);
-    return true;
+    sample_valid = true;
+
+sleep_sensor:
+    (void)i2c_master_transmit(s_shtc3, sleep, sizeof(sleep), 100);
+    return sample_valid;
 }
 
 static void sensor_task(void *arg)
@@ -146,6 +155,9 @@ esp_err_t monitor_sensors_start(void)
         .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = SHTC3_ADDRESS, .scl_speed_hz = 400000,
     };
     ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(bus, &dev_config, &s_shtc3), TAG, "SHTC3 init failed");
+    const uint8_t sleep[] = {0xb0, 0x98};
+    ESP_RETURN_ON_ERROR(i2c_master_transmit(s_shtc3, sleep, sizeof(sleep), 100), TAG,
+                        "SHTC3 sleep command failed");
     if (xTaskCreate(sensor_task, "monitor_sensors", 4096, NULL, 4, &s_task) != pdPASS) return ESP_ERR_NO_MEM;
     return ESP_OK;
 }
