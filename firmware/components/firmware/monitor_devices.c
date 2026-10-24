@@ -4,6 +4,9 @@
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#ifdef ESP_PLATFORM
+#include "esp_task_wdt.h"
+#endif
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -17,7 +20,7 @@
 
 #define PERIOD_US (30LL * 1000000)
 #define RETAIN_US (90LL * 1000000)
-#define REQUEST_US (8LL * 1000000)
+#define REQUEST_US (4LL * 1000000)
 static const char *TAG = "monitor_devices";
 static TaskHandle_t s_task;
 static esp_timer_handle_t s_expiry_timer;
@@ -131,6 +134,14 @@ typedef struct {
     esp_http_client_handle_t client;
     response_guard_t guard;
 } devices_transport_t;
+
+static void feed_task_watchdog(void)
+{
+#ifdef ESP_PLATFORM
+    (void)esp_task_wdt_reset();
+#endif
+}
+
 /* Shutdown interrupts a slow header/body read without touching the HTTP/TLS
  * object's ownership. DISCONNECTED clears the descriptor before it is closed,
  * and stop_blocking joins this callback before cleanup frees the context. */
@@ -144,6 +155,7 @@ static void request_deadline(void *arg)
 }
 static esp_err_t guard_event(esp_http_client_event_t *event)
 {
+    feed_task_watchdog();
     response_guard_t *guard = event->user_data;
     xSemaphoreTake(guard->lock, portMAX_DELAY);
     if (event->event_id == HTTP_EVENT_ON_CONNECTED) {
@@ -205,7 +217,7 @@ static bool fetch_attempt(devices_transport_t *transport, const devices_config_t
         char url[MONITOR_DEVICES_URL_MAX + sizeof("/v1/devices/summary")];
         snprintf(url, sizeof(url), "%s/v1/devices/summary", settings->url);
         esp_http_client_config_t config = {
-            .url = url, .timeout_ms = 8000, .disable_auto_redirect = true,
+            .url = url, .timeout_ms = 4000, .disable_auto_redirect = true,
             .crt_bundle_attach = esp_crt_bundle_attach,
             .event_handler = guard_event, .user_data = guard,
             /* Normal 30s polls keep the socket busy without extra probes. */
@@ -283,11 +295,12 @@ static bool fetch(devices_transport_t *transport, const devices_config_t *settin
     if (!body || esp_timer_create(&args, &deadline_timer) != ESP_OK) goto done;
     if (esp_timer_start_once(deadline_timer, REQUEST_US) != ESP_OK) goto done;
     for (unsigned attempt = 0; attempt < 2; ++attempt) {
+        feed_task_watchdog();
         bool retryable = false;
         ok = fetch_attempt(transport, settings, body, out, status, &retryable);
         if (ok || !had_client || attempt || !retryable) break;
         /* A proxy may have silently expired the idle connection. Retry this
-         * idempotent GET once, sharing the original eight-second deadline. */
+         * idempotent GET once, sharing the original four-second deadline. */
         if (!remaining(transport->client, guard)) break;
         transport_close_client(transport);
         xSemaphoreTake(guard->lock, portMAX_DELAY);
@@ -308,6 +321,10 @@ done:
 static void devices_task(void *arg)
 {
     (void)arg;
+    esp_err_t wdt_err = esp_task_wdt_add(NULL);
+    if (wdt_err != ESP_OK && wdt_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "task watchdog registration failed: %s", esp_err_to_name(wdt_err));
+    }
     int64_t next_poll = 0;
     devices_transport_t transport = {.guard.socket = -1};
     uint32_t transport_generation = UINT32_MAX;
@@ -346,6 +363,7 @@ static void devices_task(void *arg)
             next_poll = monitor_clock_is_valid() ? INT64_MAX : now + PERIOD_US;
             bool reused = false;
             bool ok = fetch(&transport, &config, &candidate, &status, &reused);
+            feed_task_watchdog();
             now = esp_timer_get_time();
             /* Merge refreshes received during this request. A newer config or
              * connection generation starts a new request immediately below. */
@@ -391,8 +409,11 @@ static void devices_task(void *arg)
             int64_t poll = clock_ready ? next_poll : INT64_MAX;
             if (poll < wake) wake = poll;
         }
-        TickType_t wait = wake == INT64_MAX ? portMAX_DELAY : pdMS_TO_TICKS((wake > now ? wake - now : 1000) / 1000 + 1);
+        TickType_t wait = wake == INT64_MAX ? pdMS_TO_TICKS(1000) :
+                          pdMS_TO_TICKS((wake > now ? wake - now : 1000) / 1000 + 1);
+        if (wait > pdMS_TO_TICKS(1000)) wait = pdMS_TO_TICKS(1000);
         if (ulTaskNotifyTake(pdTRUE, wait)) next_poll = 0;
+        feed_task_watchdog();
     }
 }
 esp_err_t monitor_devices_start(void)

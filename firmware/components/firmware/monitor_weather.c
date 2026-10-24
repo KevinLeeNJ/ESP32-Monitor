@@ -12,6 +12,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs.h"
@@ -20,7 +21,7 @@
 #define TAG "monitor_weather"
 #define WEATHER_EVT_UPDATE BIT0
 #define WEATHER_EVT_WIFI_CHANGED BIT1
-#define HTTP_TIMEOUT_MS 10000
+#define HTTP_TIMEOUT_MS 4000
 #define RESPONSE_MAX 8192
 
 static TaskHandle_t s_task;
@@ -32,10 +33,16 @@ static monitor_weather_data_t s_data = {
     .location_valid = false, .weather_valid = false, .aqi_valid = false,
 };
 
+static void feed_task_watchdog(void)
+{
+    (void)esp_task_wdt_reset();
+}
+
 typedef struct { char *buffer; size_t capacity; size_t length; } response_context_t;
 
 static esp_err_t http_collect_event(esp_http_client_event_t *event)
 {
+    feed_task_watchdog();
     response_context_t *ctx = (response_context_t *)event->user_data;
     if (ctx != NULL && event->event_id == HTTP_EVENT_ON_DATA && event->data_len > 0) {
         size_t copy = (size_t)event->data_len;
@@ -182,6 +189,7 @@ static bool read_qweather_config(char *host, size_t host_size, char *key, size_t
 
 static void update_weather(void)
 {
+    feed_task_watchdog();
     float lat, lon;
     bool location_ok = read_configured_location(&lat, &lon);
     if (!location_ok) {
@@ -191,6 +199,7 @@ static void update_weather(void)
         portEXIT_CRITICAL(&s_data_mux);
     }
     if (!location_ok) location_ok = locate_by_public_ip(&lat, &lon);
+    feed_task_watchdog();
     if (!location_ok) { ESP_LOGW(TAG, "location unavailable"); return; }
 
     char host[192];
@@ -242,6 +251,7 @@ static void update_weather(void)
         }
         if (json) cJSON_Delete(json);
     }
+    feed_task_watchdog();
     if (http_get(aqi_url, response, RESPONSE_MAX, key)) {
         cJSON *json = cJSON_Parse(response);
         cJSON *indexes = json ? cJSON_GetObjectItem(json, "indexes") : NULL;
@@ -273,9 +283,14 @@ static void update_weather(void)
 static void weather_task(void *arg)
 {
     (void)arg;
+    esp_err_t wdt_err = esp_task_wdt_add(NULL);
+    if (wdt_err != ESP_OK && wdt_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "task watchdog registration failed: %s", esp_err_to_name(wdt_err));
+    }
     for (;;) {
         uint32_t notified = 0;
-        xTaskNotifyWait(0, UINT32_MAX, &notified, portMAX_DELAY);
+        xTaskNotifyWait(0, UINT32_MAX, &notified, pdMS_TO_TICKS(1000));
+        feed_task_watchdog();
         if (s_wifi_available && monitor_clock_is_valid() && (notified & WEATHER_EVT_UPDATE)) update_weather();
     }
 }
