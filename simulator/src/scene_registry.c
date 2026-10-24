@@ -55,9 +55,9 @@ static lv_obj_t *create_device_transition(lv_obj_t *parent, monitor_frame_varian
 {
     monitor_device_t before[3] = {REVIEW_DEVICES[0], REVIEW_DEVICES[2], REVIEW_DEVICES[3]};
     lv_obj_t *root = monitor_ui_create_with_devices_variant(parent, online ? before : REVIEW_DEVICES,
-                                                            online ? 2 : 3, variant);
+                                                            online ? 3 : 4, variant);
     monitor_ui_set_animations_enabled(root, true);
-    monitor_devices_snapshot_t next = {.count = online ? 3 : 2, .status = MONITOR_DEVICES_READY};
+    monitor_devices_snapshot_t next = {.count = online ? 4 : 3, .status = MONITOR_DEVICES_READY};
     memcpy(next.devices, online ? REVIEW_DEVICES : before, next.count * sizeof(next.devices[0]));
     monitor_ui_apply_devices_snapshot(root, &next);
     return root;
@@ -66,6 +66,17 @@ static lv_obj_t *create_online(lv_obj_t *parent, monitor_frame_variant_t variant
 { return create_device_transition(parent, variant, true); }
 static lv_obj_t *create_offline(lv_obj_t *parent, monitor_frame_variant_t variant)
 { return create_device_transition(parent, variant, false); }
+
+static lv_obj_t *create_offline_two(lv_obj_t *parent, monitor_frame_variant_t variant)
+{
+    lv_obj_t *root = monitor_ui_create_with_devices_variant(parent, REVIEW_DEVICES, 4, variant);
+    monitor_ui_set_animations_enabled(root, true);
+    monitor_devices_snapshot_t next = {.count = 2, .status = MONITOR_DEVICES_READY};
+    next.devices[0] = REVIEW_DEVICES[0];
+    next.devices[1] = REVIEW_DEVICES[3];
+    monitor_ui_apply_devices_snapshot(root, &next);
+    return root;
+}
 
 static lv_obj_t *create_clock_transition(lv_obj_t *parent, monitor_frame_variant_t variant, bool rollover)
 {
@@ -159,6 +170,7 @@ static const simulator_scene_t SCENES[] = {
     { .name = "animation-info", .description = "Clock, weather, temperature, humidity and AQI roll together", .create = create_info_update },
     { .name = "animation-online", .description = "Existing cards make room, new card pops in", .create = create_online },
     { .name = "animation-offline", .description = "Middle card shrinks, survivors fill the gap", .create = create_offline },
+    { .name = "animation-offline-two", .description = "PI and PC leave in one snapshot; NAS and ROUTER remain", .create = create_offline_two },
     { .name = "animation-minute", .description = "19:55 to 19:56, last digit rolls", .create = create_minute },
     { .name = "animation-rollover", .description = "19:59 to 20:00, four digits roll together", .create = create_rollover },
     {
