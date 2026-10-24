@@ -69,16 +69,25 @@ esp_err_t monitor_rtc_init(i2c_master_bus_handle_t bus)
         .device_address = RTC_ADDRESS,
         .scl_speed_hz = 100000,
     };
-    esp_err_t err = i2c_master_bus_add_device(bus, &config, &s_device);
+    i2c_master_dev_handle_t device = NULL;
+    esp_err_t err = i2c_master_bus_add_device(bus, &config, &device);
     if (err != ESP_OK) return err;
 
     uint8_t control = 0;
     err = i2c_master_transmit_receive(
-        s_device, (uint8_t[]){RTC_REG_CONTROL_1}, 1, &control, 1, 100);
-    if (err != ESP_OK) return err;
-    control &= (uint8_t)~RTC_12H_BIT; /* 12_24 = 0 selects 24-hour mode. */
-    return i2c_master_transmit(s_device,
-                              (uint8_t[]){RTC_REG_CONTROL_1, control}, 2, 100);
+        device, (uint8_t[]){RTC_REG_CONTROL_1}, 1, &control, 1, 100);
+    if (err == ESP_OK) {
+        control &= (uint8_t)~RTC_12H_BIT; /* 12_24 = 0 selects 24-hour mode. */
+        err = i2c_master_transmit(device,
+                                 (uint8_t[]){RTC_REG_CONTROL_1, control}, 2, 100);
+    }
+    if (err != ESP_OK) {
+        i2c_master_bus_rm_device(device);
+        return err;
+    }
+    /* Publish only a configured device so failed initialization can retry. */
+    s_device = device;
+    return ESP_OK;
 }
 
 esp_err_t monitor_rtc_read(monitor_rtc_sample_t *out)
@@ -109,12 +118,13 @@ esp_err_t monitor_rtc_write_utc(int64_t utc_epoch_s)
     uint8_t control = 0;
     esp_err_t err = i2c_master_transmit_receive(s_device, (uint8_t[]){RTC_REG_CONTROL_1}, 1,
                                                 &control, 1, 100);
-    bool stopped = false;
-    if (err == ESP_OK) {
-        stopped = (control & RTC_STOP_BIT) != 0;
-        uint8_t stop = (uint8_t)(control | RTC_STOP_BIT);
-        err = i2c_master_transmit(s_device, (uint8_t[]){RTC_REG_CONTROL_1, stop}, 2, 100);
+    if (err != ESP_OK) {
+        /* Never overwrite unknown control bits after a failed read. */
+        xSemaphoreGive(s_lock);
+        return err;
     }
+    uint8_t stop = (uint8_t)(control | RTC_STOP_BIT);
+    err = i2c_master_transmit(s_device, (uint8_t[]){RTC_REG_CONTROL_1, stop}, 2, 100);
     uint8_t data[8] = {RTC_REG_SECONDS,
         to_bcd((unsigned)tmv.tm_sec), to_bcd((unsigned)tmv.tm_min), to_bcd((unsigned)tmv.tm_hour),
         to_bcd((unsigned)tmv.tm_mday), to_bcd((unsigned)tmv.tm_wday),
@@ -123,7 +133,6 @@ esp_err_t monitor_rtc_write_utc(int64_t utc_epoch_s)
     esp_err_t restart = i2c_master_transmit(s_device,
         (uint8_t[]){RTC_REG_CONTROL_1, (uint8_t)(control & (uint8_t)~RTC_STOP_BIT)}, 2, 100);
     if (err == ESP_OK) err = restart;
-    (void)stopped;
     xSemaphoreGive(s_lock);
     if (err != ESP_OK) return err;
     monitor_rtc_sample_t check;

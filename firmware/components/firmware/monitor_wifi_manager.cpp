@@ -149,7 +149,7 @@ static void set_event(WifiEvent event, const std::string &data)
             monitor_devices_set_wifi_available(false);
             monitor_clock_on_wifi_disconnected();
             monitor_weather_on_wifi_disconnected();
-            if(!s_provisioning) {
+            if(!s_provisioning && s_state != MONITOR_WIFI_OFFLINE) {
                 update_wifi_state(MONITOR_WIFI_DISCONNECTED);
                 if (s_manager_task) xTaskNotify(s_manager_task, BTN_RECONNECT, eSetBits);
                 // Do not automatically enter configuration mode on a failed
@@ -224,7 +224,8 @@ static void process_manager_events(uint32_t pending)
     }
     if (pending & BTN_RECONNECT) {
         if (!s_provisioning && s_state != MONITOR_WIFI_OFFLINE &&
-            !WifiManager::GetInstance().IsConnected()) {
+            !WifiManager::GetInstance().IsConnected() &&
+            !esp_timer_is_active(s_station_timeout_timer)) {
             esp_timer_stop(s_station_timeout_timer);
             s_station_deadline = esp_timer_get_time() + STATION_CONNECT_TIMEOUT_US;
             esp_timer_start_once(s_station_timeout_timer, STATION_CONNECT_TIMEOUT_US);
@@ -320,14 +321,27 @@ extern "C" esp_err_t monitor_wifi_start(void)
     }
     if(!manager.Initialize(config)) {
         ESP_LOGE(TAG, "esp-wifi-connect initialization failed");
+        esp_timer_delete(s_config_timeout_timer);
+        s_config_timeout_timer = nullptr;
         return ESP_FAIL;
     }
     timer_args.callback = [](void *) {
         if (s_manager_task) xTaskNotify(s_manager_task, BTN_STATION_TIMEOUT, eSetBits);
     };
     timer_args.name = "station_connect_timeout";
-    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &s_station_timeout_timer));
-    if (xTaskCreate(button_task, "wifi_config_button", 4096, NULL, 4, &s_manager_task) != pdPASS) return ESP_ERR_NO_MEM;
+    esp_err_t timer_err = esp_timer_create(&timer_args, &s_station_timeout_timer);
+    if (timer_err != ESP_OK) {
+        esp_timer_delete(s_config_timeout_timer);
+        s_config_timeout_timer = nullptr;
+        return timer_err;
+    }
+    if (xTaskCreate(button_task, "wifi_config_button", 4096, NULL, 4, &s_manager_task) != pdPASS) {
+        esp_timer_delete(s_station_timeout_timer);
+        esp_timer_delete(s_config_timeout_timer);
+        s_station_timeout_timer = s_config_timeout_timer = nullptr;
+        s_manager_task = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
     s_started = true;
     if(SsidManager::GetInstance().GetSsidList().empty()) {
         ESP_LOGI(TAG, "no saved Wi-Fi credentials; entering esp-wifi-connect config mode");

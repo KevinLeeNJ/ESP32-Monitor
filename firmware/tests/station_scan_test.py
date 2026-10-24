@@ -51,20 +51,21 @@ static esp_timer_create_args_t timer;
 static bool periodic, timer_active;
 static unsigned scans, reads, closes;
 static std::vector<wifi_ap_record_t> driver_results;
-static int scan_error;
+static int scan_error, scan_num_error, scan_records_error;
+static unsigned scheduled_scans;
 static int esp_wifi_scan_start(void *config, bool blocking) {
     assert(!config && !blocking); ++scans; return scan_error;
 }
-static int esp_wifi_scan_get_ap_num(uint16_t *count) { *count = driver_results.size(); return ESP_OK; }
+static int esp_wifi_scan_get_ap_num(uint16_t *count) { if(scan_num_error)return ESP_FAIL;*count = driver_results.size(); return ESP_OK; }
 static int esp_wifi_scan_get_ap_records(uint16_t *count, wifi_ap_record_t *records) {
-    ++reads; std::copy(driver_results.begin(), driver_results.end(), records);
+    ++reads; if(scan_records_error)return ESP_FAIL;std::copy(driver_results.begin(), driver_results.end(), records);
     assert(*count == driver_results.size()); driver_results.clear(); return ESP_OK;
 }
 static int esp_timer_create(esp_timer_create_args_t *args, int *handle) { timer = *args; *handle = 1; return ESP_OK; }
 static int esp_timer_start_periodic(int, int64_t interval) {
     assert(interval == 10000000); periodic = timer_active = true; return ESP_OK;
 }
-static int esp_timer_start_once(int, int64_t) { return ESP_OK; }
+static int esp_timer_start_once(int, int64_t) { ++scheduled_scans;return ESP_OK; }
 static int esp_timer_stop(int) { timer_active = false; return ESP_OK; }
 static int esp_timer_delete(int) { timer.callback = nullptr; return ESP_OK; }
 static int httpd_stop(httpd_handle_t);
@@ -129,6 +130,22 @@ int main() {
     portal.StartScanTimer(); assert(scans == 4);
     timer.callback(timer.arg); assert(scans == 5);
     portal.StopWebServer();
+    station.connect_queue_.clear();
+    // SDK scan failures retain the last published list, rather than clearing it.
+    driver_results={{{'S','a','v','e','d',0},-50,1,3,{}}};portal.SetAccessPoints(driver_results);
+    auto cached=portal.GetAccessPoints();scan_num_error=1;
+    station.HandleScanResult();assert(portal.GetAccessPoints().size()==cached.size());scan_num_error=0;
+    scan_records_error=1;station.HandleScanResult();assert(portal.GetAccessPoints()[0].rssi==-50);scan_records_error=0;
+    station.HandleScanResult();assert(driver_results.empty());
+    // A successful empty scan removes stale portal results without reconnecting a connected STA.
+    station.connected=true;station.HandleScanResult();assert(portal.GetAccessPoints().empty());
+    station.connected=false;station.last_scan_used_saved_channels_=false;
+    unsigned before=scheduled_scans;station.HandleScanResult();assert(scheduled_scans==before+1);
+    station.last_scan_used_saved_channels_=true;before=station.reconnect_scans;
+    station.HandleScanResult();assert(station.reconnect_scans==before+1 && !station.last_scan_used_saved_channels_);
+    // A failed connected scan is deferred and cannot modify connection ownership.
+    station.connected=true;scan_error=ESP_FAIL;before=station.reconnects;
+    station.ScanForConfig();assert(station.reconnects==before && station.connect_queue_.empty());
 }
 '''
 code = prefix

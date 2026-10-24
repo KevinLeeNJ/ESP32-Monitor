@@ -1,4 +1,4 @@
-"""Run with: python3 -m unittest discover -s simulator/tests -p test_api_server.py"""
+"""Run with: python3 -m unittest discover -s firmware/tests -p test_api_server.py"""
 import contextlib
 import http.client
 import importlib.util
@@ -9,7 +9,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location("api_server", Path(__file__).resolve().parents[1] / "api_server.py")
+spec = importlib.util.spec_from_file_location("api_server", Path(__file__).resolve().parents[2] / "simulator/api_server.py")
 api = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(api)
 

@@ -128,7 +128,7 @@ ctest --test-dir simulator/build --output-on-failure
 |---|---|
 | `simulator/src/main.c` | 场景 CLI 和产物写入 |
 | `simulator/src/scene_registry.c` | LVGL 场景注册表 |
-| `simulator/tests/` | 单元与端到端检查 |
+| `firmware/tests/` | 单元与端到端检查 |
 | `firmware/app/ui/monitor_ui.c` | 模拟器和固件共用的 LVGL UI |
 | `firmware/src/display/monitor_render.c` | 可复用的离屏 RGB565 渲染器 |
 | `firmware/src/display/monitor_pack.c` | 共用的 RLCD 1bpp 转换 |
