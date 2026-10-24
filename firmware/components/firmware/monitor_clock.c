@@ -76,7 +76,10 @@ static void read_rtc_and_update_system(void)
     int64_t difference = (int64_t)current.tv_sec - sample.utc_epoch_s;
     if (!s_time_valid || difference < -2 || difference > 2) {
         struct timeval restored = {.tv_sec = (time_t)sample.utc_epoch_s, .tv_usec = 0};
-        settimeofday(&restored, NULL);
+        if (settimeofday(&restored, NULL) != 0) {
+            publish_time_valid(false, true);
+            return;
+        }
     }
     publish_time_valid(true, true);
 }

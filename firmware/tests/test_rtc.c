@@ -60,8 +60,8 @@ static void test_initialization(void)
     mutex_ok=false; TEST_ASSERT_EQUAL(ESP_ERR_NO_MEM,monitor_rtc_init((void *)1));
     mutex_ok=true;add_error=ESP_FAIL;
     TEST_ASSERT_EQUAL(ESP_FAIL,monitor_rtc_init((void *)1));
-    add_error=0;registers[0]=0x82;init();
-    TEST_ASSERT_EQUAL_HEX8(0x80,registers[0]); /* preserve unrelated control bits */
+    add_error=0;registers[0]=0xc7;init();
+    TEST_ASSERT_EQUAL_HEX8(0x05,registers[0]); /* clear test/reserved/12h, preserve CIE/CAP */
     unsigned before=adds;init();TEST_ASSERT_EQUAL_UINT(before,adds);
 }
 static void test_init_retry_after_io_failure(void)
@@ -107,6 +107,8 @@ static void test_clock_flags_and_io(void)
     registers[4]&=0x7f;registers[0]=0x20;
     TEST_ASSERT_EQUAL(ESP_OK,monitor_rtc_read(&out));TEST_ASSERT_FALSE(out.running || out.time_valid);
     registers[0]=2;TEST_ASSERT_EQUAL(ESP_OK,monitor_rtc_read(&out));TEST_ASSERT_FALSE(out.time_valid);
+    registers[0]=0xc5;TEST_ASSERT_EQUAL(ESP_OK,monitor_rtc_read(&out));
+    TEST_ASSERT_FALSE(out.running || out.time_valid); /* STOP=0, but EXT_TEST=1 */
     lock_ok=false;TEST_ASSERT_EQUAL(ESP_ERR_TIMEOUT,monitor_rtc_read(&out));lock_ok=true;
     fail_read=reads+1;TEST_ASSERT_EQUAL(ESP_FAIL,monitor_rtc_read(&out));TEST_ASSERT_FALSE(out.present);
     fail_read=reads+2;TEST_ASSERT_EQUAL(ESP_OK,monitor_rtc_read(&out));TEST_ASSERT_FALSE(out.time_valid);
@@ -133,13 +135,22 @@ static void test_write_read_failure_preserves_control(void)
     TEST_ASSERT_EQUAL_UINT(before,writes);
     TEST_ASSERT_EQUAL_HEX8(0x80,registers[0]);
 }
+static void test_write_exits_external_test_mode(void)
+{
+    init();registers[0]=0xc7;
+    TEST_ASSERT_EQUAL(ESP_OK,monitor_rtc_write_utc(1704067200LL));
+    TEST_ASSERT_EQUAL_HEX8(0x05,registers[0]);
+    monitor_rtc_sample_t out;
+    TEST_ASSERT_EQUAL(ESP_OK,monitor_rtc_read(&out));
+    TEST_ASSERT_TRUE(out.running && out.time_valid);
+}
 static void test_write_failures_release_lock_and_restart(void)
 {
     for (unsigned stage=1;stage<=3;++stage) {
-        setUp();init();registers[0]=0x80;fail_write=writes+stage;
+        setUp();init();registers[0]=0x05;fail_write=writes+stage;
         TEST_ASSERT_EQUAL(ESP_FAIL,monitor_rtc_write_utc(1704067200LL));
         TEST_ASSERT_FALSE(held);
-        if (stage<3) TEST_ASSERT_EQUAL_HEX8(0x80,registers[0]);
+        if (stage<3) TEST_ASSERT_EQUAL_HEX8(0x05,registers[0]);
     }
 }
 int main(void)
@@ -152,6 +163,7 @@ int main(void)
     RUN_TEST(test_clock_flags_and_io);
     RUN_TEST(test_write_roundtrip);
     RUN_TEST(test_write_read_failure_preserves_control);
+    RUN_TEST(test_write_exits_external_test_mode);
     RUN_TEST(test_write_failures_release_lock_and_restart);
     return UNITY_END();
 }

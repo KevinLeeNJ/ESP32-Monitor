@@ -9,8 +9,15 @@
 #define RTC_REG_CONTROL_1 0x00
 #define RTC_REG_SECONDS 0x04
 #define RTC_OS_BIT 0x80
+#define RTC_EXT_TEST_BIT 0x80
 #define RTC_STOP_BIT 0x20
 #define RTC_12H_BIT 0x02
+#define RTC_CIE_BIT 0x04
+#define RTC_CAP_SEL_BIT 0x01
+/* Normal 24-hour mode, preserving only supported configuration and STOP.
+ * In particular EXT_TEST must be zero: it replaces the crystal clock with
+ * pulses supplied on CLKOUT, so STOP=0 alone does not prove time is ticking. */
+#define RTC_NORMAL_CONTROL_MASK (RTC_STOP_BIT | RTC_CIE_BIT | RTC_CAP_SEL_BIT)
 
 static i2c_master_dev_handle_t s_device;
 static SemaphoreHandle_t s_lock;
@@ -28,10 +35,11 @@ static bool decode(const uint8_t r[7], int64_t *epoch, bool *os, bool *running)
     if (i2c_master_transmit_receive(s_device, (uint8_t[]){RTC_REG_CONTROL_1}, 1,
                                     &control, 1, 100) != ESP_OK) return false;
     const bool stopped = (control & RTC_STOP_BIT) != 0;
+    const bool external_test = (control & RTC_EXT_TEST_BIT) != 0;
     const bool oscillator = (r[0] & RTC_OS_BIT) != 0;
     *os = oscillator;
-    *running = !stopped;
-    if (oscillator || stopped || (control & RTC_12H_BIT) != 0) return false;
+    *running = !stopped && !external_test;
+    if (oscillator || stopped || external_test || (control & RTC_12H_BIT) != 0) return false;
     if (!valid_bcd(r[0] & 0x7f, 59) || !valid_bcd(r[1] & 0x7f, 59) ||
         !valid_bcd(r[2] & 0x3f, 23) || !valid_bcd(r[3] & 0x3f, 31) ||
         !valid_bcd(r[4] & 0x07, 6) || !valid_bcd(r[5] & 0x1f, 12) ||
@@ -77,7 +85,7 @@ esp_err_t monitor_rtc_init(i2c_master_bus_handle_t bus)
     err = i2c_master_transmit_receive(
         device, (uint8_t[]){RTC_REG_CONTROL_1}, 1, &control, 1, 100);
     if (err == ESP_OK) {
-        control &= (uint8_t)~RTC_12H_BIT; /* 12_24 = 0 selects 24-hour mode. */
+        control &= RTC_NORMAL_CONTROL_MASK;
         err = i2c_master_transmit(device,
                                  (uint8_t[]){RTC_REG_CONTROL_1, control}, 2, 100);
     }
@@ -123,6 +131,7 @@ esp_err_t monitor_rtc_write_utc(int64_t utc_epoch_s)
         xSemaphoreGive(s_lock);
         return err;
     }
+    control &= RTC_NORMAL_CONTROL_MASK;
     uint8_t stop = (uint8_t)(control | RTC_STOP_BIT);
     err = i2c_master_transmit(s_device, (uint8_t[]){RTC_REG_CONTROL_1, stop}, 2, 100);
     uint8_t data[8] = {RTC_REG_SECONDS,
