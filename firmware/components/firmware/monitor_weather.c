@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
+#include <limits.h>
 
 #include "cJSON.h"
 #include "esp_check.h"
@@ -116,6 +118,33 @@ static bool http_get(const char *url, char *out, size_t out_size, const char *ap
     return ok;
 }
 
+static bool parse_coordinate(const char *text, float min, float max, float *out)
+{
+    char *end;
+    float value = strtof(text, &end);
+    if (end == text || *end || !isfinite(value) || value < min || value > max) return false;
+    *out = value;
+    return true;
+}
+
+static bool json_nonnegative_int(const cJSON *item, int *out)
+{
+    if (cJSON_IsNumber(item)) {
+        double n = item->valuedouble;
+        if (!isfinite(n) || n < 0 || n > INT_MAX || floor(n) != n) return false;
+        *out = (int)n;
+        return true;
+    }
+    if (!cJSON_IsString(item) || !item->valuestring[0]) return false;
+    int value = 0;
+    for (const char *p = item->valuestring; *p; ++p) {
+        if (*p < '0' || *p > '9' || value > (INT_MAX - (*p - '0')) / 10) return false;
+        value = value * 10 + (*p - '0');
+    }
+    *out = value;
+    return true;
+}
+
 static bool read_configured_location(float *lat, float *lon)
 {
     nvs_handle_t nvs;
@@ -126,9 +155,12 @@ static bool read_configured_location(float *lat, float *lon)
     esp_err_t b = nvs_get_str(nvs, "longitude", lon_text, &lon_size);
     nvs_close(nvs);
     if (a != ESP_OK || b != ESP_OK || lat_text[0] == '\0' || lon_text[0] == '\0') return false;
-    *lat = strtof(lat_text, NULL);
-    *lon = strtof(lon_text, NULL);
-    return *lat >= -90.0f && *lat <= 90.0f && *lon >= -180.0f && *lon <= 180.0f;
+    float latitude, longitude;
+    if (!parse_coordinate(lat_text, -90, 90, &latitude) ||
+        !parse_coordinate(lon_text, -180, 180, &longitude)) return false;
+    *lat = latitude;
+    *lon = longitude;
+    return true;
 }
 
 static bool locate_by_public_ip(float *lat, float *lon)
@@ -147,7 +179,10 @@ static bool locate_by_public_ip(float *lat, float *lon)
     cJSON *success = cJSON_GetObjectItem(json, "success");
     cJSON *lat_item = cJSON_GetObjectItem(json, "latitude");
     cJSON *lon_item = cJSON_GetObjectItem(json, "longitude");
-    bool ok = (success == NULL || cJSON_IsTrue(success)) && cJSON_IsNumber(lat_item) && cJSON_IsNumber(lon_item);
+    bool ok = (success == NULL || cJSON_IsTrue(success)) && cJSON_IsNumber(lat_item) && cJSON_IsNumber(lon_item) &&
+              isfinite(lat_item->valuedouble) && isfinite(lon_item->valuedouble) &&
+              lat_item->valuedouble >= -90 && lat_item->valuedouble <= 90 &&
+              lon_item->valuedouble >= -180 && lon_item->valuedouble <= 180;
     if (ok) { *lat = (float)lat_item->valuedouble; *lon = (float)lon_item->valuedouble; }
     cJSON_Delete(json);
     return ok;
@@ -190,6 +225,13 @@ static bool read_qweather_config(char *host, size_t host_size, char *key, size_t
 static void update_weather(void)
 {
     feed_task_watchdog();
+    char host[192];
+    char key[128];
+    if (!read_qweather_config(host, sizeof(host), key, sizeof(key))) {
+        ESP_LOGW(TAG, "QWeather API host/key is not configured; set both in provisioning Advanced settings");
+        return;
+    }
+
     float lat, lon;
     bool location_ok = read_configured_location(&lat, &lon);
     if (!location_ok) {
@@ -201,13 +243,6 @@ static void update_weather(void)
     if (!location_ok) location_ok = locate_by_public_ip(&lat, &lon);
     feed_task_watchdog();
     if (!location_ok) { ESP_LOGW(TAG, "location unavailable"); return; }
-
-    char host[192];
-    char key[128];
-    if (!read_qweather_config(host, sizeof(host), key, sizeof(key))) {
-        ESP_LOGW(TAG, "QWeather API host/key is not configured; set both in provisioning Advanced settings");
-        return;
-    }
 
     char weather_url[384];
     char aqi_url[384];
@@ -236,8 +271,10 @@ static void update_weather(void)
         if (cJSON_IsString(api_code) && strcmp(api_code->valuestring, "200") != 0) {
             ESP_LOGW(TAG, "QWeather weather API returned code=%s", api_code->valuestring);
         }
-        if (cJSON_IsString(code)) {
-            int condition_code = atoi(code->valuestring);
+        int condition_code;
+        if (cJSON_IsString(api_code) && strcmp(api_code->valuestring, "200") == 0 &&
+            cJSON_IsString(code) && json_nonnegative_int(code, &condition_code) &&
+            condition_code >= 100 && condition_code <= 999) {
             portENTER_CRITICAL(&s_data_mux);
             monitor_weather_condition_t condition = condition_from_qweather(condition_code);
             display_changed |= !s_data.weather_valid || s_data.condition != condition;
@@ -258,9 +295,8 @@ static void update_weather(void)
         cJSON *index = cJSON_IsArray(indexes) ? cJSON_GetArrayItem(indexes, 0) : NULL;
         cJSON *aqi_display = index ? cJSON_GetObjectItem(index, "aqiDisplay") : NULL;
         cJSON *aqi = index ? cJSON_GetObjectItem(index, "aqi") : NULL;
-        int value = cJSON_IsString(aqi_display) ? atoi(aqi_display->valuestring) :
-                    (cJSON_IsNumber(aqi) ? aqi->valueint : (cJSON_IsString(aqi) ? atoi(aqi->valuestring) : -1));
-        if (value >= 0) {
+        int value;
+        if (json_nonnegative_int(aqi_display, &value) || json_nonnegative_int(aqi, &value)) {
             portENTER_CRITICAL(&s_data_mux);
             display_changed |= !s_data.aqi_valid || s_data.aqi != value;
             s_data.aqi = value;
@@ -297,6 +333,7 @@ static void weather_task(void *arg)
 
 esp_err_t monitor_weather_start(void)
 {
+    if (s_task != NULL) return ESP_OK;
     if (xTaskCreate(weather_task, "monitor_weather", 16384, NULL, 3, &s_task) != pdPASS) return ESP_ERR_NO_MEM;
     return ESP_OK;
 }

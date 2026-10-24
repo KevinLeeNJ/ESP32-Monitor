@@ -100,6 +100,7 @@ static int xTaskNotifyWait(uint32_t in, uint32_t out, uint32_t *reasons, uint32_
     tick += storm && timeout > 1 ? 1 : timeout;
     *reasons=storm?2:0; return storm;
 }
+static void feed_task_watchdog(void) {}
 static bool monitor_clock_is_valid(void) { return clock_valid; }
 static int send_cmd(rlcd_port_t *p, uint8_t cmd) {
     (void)p; assert(command_count<256);
@@ -138,11 +139,11 @@ static void apply_display_snapshot(monitor_lvgl_t *r,const display_snapshot_t *s
     if(r->root.remaining<10) r->root.remaining=10;
 }
 '''
-constants = '\n'.join(re.findall(r'^#define (?:ANIMATION_TASK_PRIORITY|MINUTE_PREPARE_MS) .*$', main, re.M))
+constants = '\n'.join(re.findall(r'^#define (?:ANIMATION_TASK_PRIORITY|MINUTE_PREPARE_MS|TASK_WDT_WAIT_MS) .*$', main, re.M))
 constants += '\n' + re.search(r'^#define RLCD_HPM_PREPARE_MS .*$', header, re.M).group()
 code = prefix + constants + '\n'
 for source, names in [(driver, ['retain_panel_pins', 'set_panel_awake', 'set_frame_sync', 'rlcd_port_frame_sync_active', 'wait_panel_frame',
-                               'set_frame_rates', 'set_mode_voltages', 'rlcd_port_set_animation_mode']),
+                               'set_frame_rates', 'rlcd_port_set_animation_mode']),
                        (main, ['restore_panel_lpm', 'wait_animation_frame', 'raise_animation_priority',
                                'wall_time_us', 'milliseconds_to_minute', 'minute_needs_hpm',
                                'wait_display_refresh', 'update_animation_clock', 'present_monitor'])]:
@@ -169,19 +170,19 @@ int main(void) {
     reset();
     puts("Panel OSCSET=A6 E9, FRCTRL=12: 32Hz HPM, 1Hz LPM, shared 32fps configuration: PASS");
     assert(rlcd_port_set_animation_mode(&p,true)==ESP_OK);
-    const uint8_t high[]={0x38,0xc1,0xc2,0xc4,0xc5,0xc9};
-    assert(tick==320 && command_count==6 && !memcmp(commands,high,6));
+    const uint8_t high[]={0x38};
+    assert(tick==300 && command_count==1 && !memcmp(commands,high,1));
     assert(pm_acquires==1 && pm_active==1 && p.awake_lock_held);
-    assert(command_at[0]==0 && command_at[1]==300);
-    assert(rlcd_port_set_animation_mode(&p,true)==ESP_OK && tick==320 && command_count==6);
+    assert(command_at[0]==0);
+    assert(rlcd_port_set_animation_mode(&p,true)==ESP_OK && tick==300 && command_count==1);
     assert(pm_acquires==1);
     assert(rlcd_port_set_animation_mode(&p,false)==ESP_OK);
-    const uint8_t low[]={0xc1,0xc2,0xc4,0xc5,0xc9,0x39};
-    assert(tick==440 && command_count==12 && !memcmp(commands+6,low,6));
-    assert(command_at[6]==320 && command_at[11]==340);
+    const uint8_t low[]={0x39};
+    assert(tick==400 && command_count==2 && !memcmp(commands+1,low,1));
+    assert(command_at[1]==300);
     assert(pm_releases==1 && !pm_active && !p.awake_lock_held);
     puts("Datasheet HPM/LPM command order, settling and idempotence: PASS");
-    for(unsigned fault=1;fault<=6;fault++) {
+    for(unsigned fault=1;fault<=1;fault++) {
         reset();p=(rlcd_port_t){.mode_known=true};fail_command=fault;
         assert(rlcd_port_set_animation_mode(&p,true)==ESP_FAIL && !p.mode_known);
         fail_command=0;
@@ -190,27 +191,27 @@ int main(void) {
         assert(commands[next]==0x38 && p.mode_known && !p.animation_mode);
         assert(pm_acquires==1 && pm_releases==1 && !pm_active);
     }
-    for(unsigned fault=1;fault<=6;fault++) {
+    for(unsigned fault=1;fault<=1;fault++) {
         reset();p=(rlcd_port_t){.mode_known=true,.animation_mode=true};fail_command=fault;
         assert(rlcd_port_set_animation_mode(&p,false)==ESP_FAIL && !p.mode_known);
         fail_command=0;
         assert(restore_panel_lpm(&p)==ESP_OK && p.mode_known && !p.animation_mode);
     }
-    puts("Failures at each HPM/LPM command recover through HPM to LPM: PASS");
+    puts("Failures at HPM/LPM command recover through HPM to LPM: PASS");
     for(unsigned base=1;base<=7;base+=6) {
         reset();priority=base;tick=1000;p=(rlcd_port_t){.mode_known=true};
         assert(wait_display_refresh(&p)&MONITOR_REFRESH_CLOCK);
-        assert(tick==60000 && command_at[0]==59600 && p.animation_mode && priority==base);
-        assert(command_at[1]==59900);
-        reset();priority=base;tick=59600;storm=true;p=(rlcd_port_t){.mode_known=true};
+        assert(tick==60000 && command_at[0]==59620 && p.animation_mode && priority==base);
+        assert(command_at[0]+RLCD_HPM_PREPARE_MS==59920);
+        reset();priority=base;tick=59620;storm=true;p=(rlcd_port_t){.mode_known=true};
         assert(wait_display_refresh(&p)==3 && tick==60000 && notifications==80 && priority==base);
     }
-    puts("Minute preparation at :59.600, ready at :59.920, dispatch at :00.000; notification storm does not delay it: PASS");
+    puts("Minute preparation at :59.620, ready at :59.920, dispatch at :00.000; notification storm does not delay it: PASS");
     for(unsigned base=1;base<=7;base+=6) for(unsigned fault=0;fault<=1;fault++) {
         reset();priority=base;tick=1000;failed_draw=fault?3:0;
         p=(rlcd_port_t){.mode_known=true};monitor_lvgl_t r={.root.remaining=12};
         assert(present_monitor(&r,&p,NULL)==(fault?ESP_FAIL:ESP_OK));
-        assert(first_draw==1320 && priority==base && !p.animation_mode && !r.root.remaining);
+        assert(first_draw==1300 && priority==base && !p.animation_mode && !r.root.remaining);
     }
     puts("All animation frames run at high priority after HPM settling; success and draw failure restore priority and LPM: PASS");
     reset();tick=1000;te_signal=true;
@@ -218,7 +219,7 @@ int main(void) {
     monitor_lvgl_t synced={.root.remaining=12};
     assert(present_monitor(&synced,&p,NULL)==ESP_OK);
     assert(te_waits==13 && !irq_enabled && !p.animation_mode && !p.te_enabled);
-    assert(tick==1940); /* 320 HPM + 13*(29 TE + 7 transfer) + 32 final scan + 120 LPM */
+    assert(tick==1900); /* 300 HPM + 13*(29 TE + 7 transfer) + 32 final scan + 100 LPM */
     puts("TE presentation drives the timeline without an additional nominal frame sleep: PASS");
     reset();p=(rlcd_port_t){.mode_known=true,.animation_mode=true,.frame_ready=1};
     set_frame_sync(&p,true);te_token=true;te_signal=true;

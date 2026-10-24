@@ -71,42 +71,5 @@ target_link_libraries(monitor_simulator PRIVATE monitor_sim_core)
 
 include(CTest)
 if(BUILD_TESTING)
-    add_executable(monitor_unit_tests tests/unit_tests.c)
-    target_include_directories(monitor_unit_tests PRIVATE "${FIRMWARE_ROOT}/components/firmware")
-    target_link_libraries(monitor_unit_tests PRIVATE monitor_sim_core)
-    add_test(NAME monitor_unit_tests COMMAND monitor_unit_tests)
-    add_executable(monitor_animation_tests tests/animation_tests.c)
-    target_link_libraries(monitor_animation_tests PRIVATE monitor_sim_core)
-    add_test(NAME monitor_animation_tests COMMAND monitor_animation_tests)
-    find_package(Python3 COMPONENTS Interpreter REQUIRED)
-    add_test(NAME monitor_station_scan_tests
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/station_scan_test.py")
-    add_test(NAME monitor_wifi_buttons_tests
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/wifi_buttons_test.py")
-    add_test(NAME monitor_wifi_session_tests
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/wifi_session_test.py")
-    add_test(NAME monitor_firmware_animation_tests
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/firmware_animation_test.py"
-                "${CMAKE_C_COMPILER}")
-    add_test(NAME monitor_lvgl_adapter_tests
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/lvgl_adapter_test.py"
-                "${CMAKE_C_COMPILER}")
-    add_test(NAME monitor_devices_transport_tests
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/devices_transport_test.py"
-                "${CMAKE_C_COMPILER}")
-    add_test(NAME monitor_firmware_watchdog_tests
-        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/firmware_watchdog_test.py")
-    find_program(NODE_EXECUTABLE node)
-    if(NODE_EXECUTABLE)
-        add_test(NAME monitor_config_page_tests
-            COMMAND "${NODE_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/config_page_test.cjs")
-    endif()
-
-    add_test(
-        NAME monitor_simulator_e2e
-        COMMAND "${CMAKE_COMMAND}"
-            "-DSIMULATOR_EXE=$<TARGET_FILE:monitor_simulator>"
-            "-DOUTPUT_DIR=${CMAKE_BINARY_DIR}/e2e-output"
-            -P "${CMAKE_CURRENT_LIST_DIR}/tests/e2e_check.cmake"
-    )
+    include("${FIRMWARE_ROOT}/tests/host.cmake")
 endif()

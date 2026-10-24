@@ -149,7 +149,7 @@ ctest --test-dir simulator/build --output-on-failure
 |---|---|
 | `simulator/src/main.c` | Scene-aware CLI and artifact writer |
 | `simulator/src/scene_registry.c` | Registry of simulated LVGL screens |
-| `simulator/tests/` | Unit and end-to-end checks |
+| `firmware/tests/` | Unit and end-to-end checks |
 | `firmware/app/ui/monitor_ui.c` | Shared LVGL UI used by simulator and firmware |
 | `firmware/src/display/monitor_render.c` | Reusable off-screen RGB565 renderer |
 | `firmware/src/display/monitor_pack.c` | Shared RLCD 1bpp conversion |
