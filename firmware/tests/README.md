@@ -48,7 +48,7 @@ idf.py -C firmware/tests -B "$PWD/firmware/tests/build/esp32s3" -p /dev/cu.usbmo
 | `devices_lifecycle_test.py` | 执行真实 `devices_task`：无配置/坏配置、离线、HTTPS 等待有效时间、HTTP 无时钟回退、固定周期轮询无忙等、首次/重复数据、旧值保留、90 秒精确过期、鉴权失败、API 恢复、请求期间断线/换配置、移除配置、过期定时器与请求竞态 |
 | `wifi_retry_test.py` | 执行真实 Station 事件回调：每轮最多 5 次直接重连调用、断线通知去重、10/20/40/80/160/300 秒扫描退避和封顶、自定义封顶、候选 AP 切换、成功后重置、停止时先注销事件再删除定时器与关闭驱动 |
 | `weather_behavior_test.py` | 天气任务的 Wi-Fi/时钟/通知门控、启动失败重试及幂等；host/key 未配置不访问定位服务；NVS 失败、经纬度边界/非数/尾随垃圾、IP 定位与缓存；首次/重复/部分数据、错误 JSON/业务码、非法 AQI 与整数溢出、分配失败、保留旧值及恢复 |
-| `weather_transport_test.py` | 真实 HTTP 收集/清理代码：4 秒 SDK 超时配置、不同分片长度、容量边界与越界、HTTP/鉴权/限流/服务端错误、空响应；gzip 正常/损坏流/解码容量不足、两处分配失败与清理。ROM tinfl 边界使用主机 zlib 适配，不等于在主机验证 ESP ROM 解压器 |
+| `weather_transport_test.py` | 真实 HTTP 收集/清理代码：4 秒 SDK 超时配置、不同分片长度、容量边界与越界、HTTP/鉴权/限流/服务端错误、空响应；1KB 接收缓冲与回调内增量 gzip 解压；逐字节和全部分片边界、FEXTRA/FNAME/FCOMMENT/FHCRC、CRC/ISIZE、截断、输出上限、分配失败清理、回调错误忽略与重定向重置。优先编译与固件相同的锁定 zlib 源码；未下载组件时使用主机 zlib（需开发头文件），不使用模拟解码器 |
 | `firmware_animation_test.py`、`lvgl_adapter_test.py`、`firmware_watchdog_test.py` | 原行为测试按当前 native LVGL 和 HPM/LPM 实现更新：单帧提交、错误传播、模式切换恢复、优先级、TE 丢失与恢复、分钟边界、tick 回绕、看门狗 |
 | `config_page_test.cjs` | 原配置网页行为测试 |
 | `test_api_server.py` | 原 API 服务的 4 个测试，现在接入 CTest：0～4 台、鉴权、路由、方法、随机指标边界及 CLI 参数 |
