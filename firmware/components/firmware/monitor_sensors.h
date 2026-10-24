@@ -18,6 +18,7 @@ typedef struct {
 
 esp_err_t monitor_sensors_start(void);
 void monitor_sensors_request_sample(void);
+void monitor_sensors_request_sample_deferred(void);
 void monitor_sensors_get(monitor_sensor_data_t *out);
 
 #ifdef __cplusplus

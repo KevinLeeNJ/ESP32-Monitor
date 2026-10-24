@@ -177,11 +177,11 @@ static void clock_task(void *arg)
         time_t now; time(&now);
         uint32_t due = s_time_valid ? monitor_schedule_due(last_schedule_time, (int64_t)now) : 0;
         if (s_time_valid) last_schedule_time = (int64_t)now;
-        if (due & MONITOR_SCHEDULE_SENSORS) monitor_sensors_request_sample();
+        if (due & MONITOR_SCHEDULE_SENSORS) monitor_sensors_request_sample_deferred();
         if (due & MONITOR_SCHEDULE_WEATHER) monitor_weather_request_refresh();
         if (due & MONITOR_SCHEDULE_DEVICES) monitor_devices_request_refresh();
         struct tm local; localtime_r(&now, &local);
-        if ((due & MONITOR_SCHEDULE_SENSORS) && local.tm_hour == 2 && local.tm_min == 0 && s_sync_task)
+        if ((due & MONITOR_SCHEDULE_DEVICES) && local.tm_hour == 2 && local.tm_min == 0 && s_sync_task)
             xTaskNotifyGive(s_sync_task);
         if (due) monitor_display_refresh_request_reason(MONITOR_REFRESH_CLOCK);
     }

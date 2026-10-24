@@ -414,11 +414,14 @@ static void test_aligned_refresh(void)
 {
     const uint32_t all = MONITOR_SCHEDULE_DEVICES | MONITOR_SCHEDULE_SENSORS | MONITOR_SCHEDULE_WEATHER;
     CHECK(monitor_schedule_due(-1, 7) == all, "first valid time initializes every producer");
-    CHECK(monitor_schedule_due(29, 30) == MONITOR_SCHEDULE_DEVICES, "Devices refresh at :30");
-    CHECK(monitor_schedule_due(59, 60) == (MONITOR_SCHEDULE_DEVICES | MONITOR_SCHEDULE_SENSORS),
-          "minute boundary shares Devices and sensors");
-    CHECK(monitor_schedule_due(899, 900) == all, "quarter hour shares every producer");
-    CHECK(monitor_schedule_due(86399, 86400) == all, "midnight shares every producer");
+    CHECK(monitor_schedule_due(29, 30) == (MONITOR_SCHEDULE_DEVICES | MONITOR_SCHEDULE_SENSORS),
+          "sensor sample runs at :30 ahead of the minute animation");
+    CHECK(monitor_schedule_due(59, 60) == MONITOR_SCHEDULE_DEVICES,
+          "Device API keeps its 30-second cadence at the minute boundary");
+    CHECK(monitor_schedule_due(899, 900) == (MONITOR_SCHEDULE_DEVICES | MONITOR_SCHEDULE_WEATHER),
+          "quarter-hour weather shares the unchanged Device API cadence");
+    CHECK(monitor_schedule_due(86399, 86400) == (MONITOR_SCHEDULE_DEVICES | MONITOR_SCHEDULE_WEATHER),
+          "midnight weather shares the unchanged Device API cadence");
     CHECK(monitor_schedule_due(900, 901) == 0, "extra wakeup in same slot does not refresh");
     CHECK(monitor_schedule_due(900, 899) == all, "backward time correction realigns every slot");
     CHECK(monitor_schedule_due(10, 1900) == all, "forward correction schedules one batch without catch-up");
@@ -442,7 +445,7 @@ static void test_aligned_refresh(void)
         }
     }
     CHECK(devices == 120 && sensors == 60 && weather == 4 && renders == 120,
-          "one hour coalesces 120 Devices, 60 sensor and 4 weather updates into 120 display batches");
+          "one hour keeps 120 API polls and aligns 60 pre-minute sensor samples with every other poll");
     CHECK(monitor_display_refresh_should_render(MONITOR_REFRESH_RECOVER, true),
           "startup, configuration and expiry bypass periodic batching");
     CHECK(monitor_display_refresh_should_render(MONITOR_REFRESH_WIFI, true), "Wi-Fi changes render promptly");
