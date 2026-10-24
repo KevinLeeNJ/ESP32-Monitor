@@ -39,7 +39,7 @@ static jmp_buf worker_done;
 static bool monitor_clock_is_valid(void){return clock_ready;}
 static int esp_task_wdt_add(void *p){(void)p;return ESP_OK;}
 static int xTaskCreate(void (*fn)(void *),const char *name,unsigned stack,void *arg,unsigned priority,void **out){
-    (void)fn;(void)name;(void)stack;(void)arg;(void)priority;
+    (void)fn;(void)name;(void)arg;(void)priority;assert(stack==8192);
     ++task_creates;if(task_ok)*out=(void *)1;return task_ok?pdPASS:0;
 }
 static void xTaskNotify(void *task,unsigned bits,int action){assert(task && action==0);queued|=bits;}
@@ -101,6 +101,8 @@ int main(void){
     update_weather();assert(notifications==1); // unchanged success is silent
     monitor_weather_data_t before=s_data;
     weather_body=aqi_body=NULL;update_weather();
+    assert(!memcmp(&before,&s_data,sizeof(before)) && notifications==1);
+    weather_body=aqi_body="\x1f\x8b\x08";update_weather();
     assert(!memcmp(&before,&s_data,sizeof(before)) && notifications==1);
     // Independent sources: one failed endpoint must not destroy the other cache.
     aqi_body="{\"indexes\":[{\"aqi\":100}]}";update_weather();

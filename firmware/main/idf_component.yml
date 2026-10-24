@@ -1,4 +1,5 @@
 dependencies:
+  espressif/zlib: "1.3.2~1"
   lvgl/lvgl:
     version: "9.4.0"
     override_path: "../components/lvgl"

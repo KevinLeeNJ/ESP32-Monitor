@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <math.h>
 #include <limits.h>
 
@@ -18,7 +19,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs.h"
-#include "miniz.h"
+#include "zlib.h"
 
 #define TAG "monitor_weather"
 #define WEATHER_EVT_UPDATE BIT0
@@ -40,30 +41,100 @@ static void feed_task_watchdog(void)
     (void)esp_task_wdt_reset();
 }
 
-typedef struct { char *buffer; size_t capacity; size_t length; } response_context_t;
+typedef struct {
+    char *buffer;
+    size_t capacity;
+    size_t length;
+    z_stream inflater;
+    bool gzip;
+    bool initialized;
+    bool finished;
+    bool failed;
+} response_context_t;
+
+static void response_reset(response_context_t *ctx)
+{
+    if (ctx->initialized) inflateEnd(&ctx->inflater);
+    char *buffer = ctx->buffer;
+    size_t capacity = ctx->capacity;
+    *ctx = (response_context_t){.buffer = buffer, .capacity = capacity};
+    buffer[0] = '\0';
+}
+
+static bool response_collect(response_context_t *ctx, const void *data, size_t length)
+{
+    if (ctx->failed || ctx->finished) return false;
+    if (!ctx->gzip) {
+        if (length > ctx->capacity - 1 - ctx->length) return false;
+        memcpy(ctx->buffer + ctx->length, data, length);
+        ctx->length += length;
+        ctx->buffer[ctx->length] = '\0';
+        return true;
+    }
+    if (!ctx->initialized) {
+        /* zlib owns the gzip header, optional fields, CRC32 and ISIZE checks.
+         * Its state/window live on the heap, never on the weather task stack. */
+        if (inflateInit2(&ctx->inflater, MAX_WBITS + 16) != Z_OK) return false;
+        ctx->initialized = true;
+    }
+    z_stream *stream = &ctx->inflater;
+    stream->next_in = (Bytef *)data;
+    stream->avail_in = (uInt)length;
+    while (stream->avail_in > 0) {
+        feed_task_watchdog();
+        stream->next_out = (Bytef *)ctx->buffer + ctx->length;
+        /* Include the NUL slot so a full JSON buffer can still consume a
+         * trailer in a later callback. Any output into that slot is rejected. */
+        stream->avail_out = (uInt)(ctx->capacity - ctx->length);
+        uInt input_before = stream->avail_in;
+        uInt output_before = stream->avail_out;
+        int result = inflate(stream, Z_NO_FLUSH);
+        ctx->length += output_before - stream->avail_out;
+        if (ctx->length >= ctx->capacity) return false;
+        ctx->buffer[ctx->length] = '\0';
+        if (result == Z_STREAM_END) {
+            ctx->finished = true;
+            /* This endpoint returns one JSON document, not a gzip archive. */
+            return stream->avail_in == 0;
+        }
+        if (result != Z_OK ||
+            (input_before == stream->avail_in && output_before == stream->avail_out)) return false;
+    }
+    /* All input was consumed synchronously; never retain the SDK buffer. */
+    stream->next_in = Z_NULL;
+    return true;
+}
 
 static esp_err_t http_collect_event(esp_http_client_event_t *event)
 {
     feed_task_watchdog();
     response_context_t *ctx = (response_context_t *)event->user_data;
-    if (ctx != NULL && event->event_id == HTTP_EVENT_ON_DATA && event->data_len > 0) {
-        size_t copy = (size_t)event->data_len;
-        if (copy > ctx->capacity - 1 - ctx->length) return ESP_FAIL;
-        memcpy(ctx->buffer + ctx->length, event->data, copy);
-        ctx->length += copy;
-        ctx->buffer[ctx->length] = '\0';
+    if (ctx == NULL) return ESP_OK;
+    if (event->event_id == HTTP_EVENT_HEADERS_SENT) {
+        /* A redirect/authentication retry starts a new response. */
+        response_reset(ctx);
+    } else if (event->event_id == HTTP_EVENT_ON_HEADER &&
+               event->header_key != NULL && event->header_value != NULL &&
+               strcasecmp(event->header_key, "Content-Encoding") == 0) {
+        if (strcasecmp(event->header_value, "gzip") == 0) ctx->gzip = true;
+        else if (strcasecmp(event->header_value, "identity") != 0) ctx->failed = true;
+    } else if (event->event_id == HTTP_EVENT_ON_DATA && event->data_len > 0) {
+        if (!response_collect(ctx, event->data, (size_t)event->data_len)) ctx->failed = true;
     }
-    return ESP_OK;
+    /* Some SDK dispatch sites ignore callback errors. Keep failure sticky and
+     * check it after perform(), so a partial response never reaches cJSON. */
+    return ctx->failed ? ESP_FAIL : ESP_OK;
 }
 
 static bool http_get(const char *url, char *out, size_t out_size, const char *api_key)
 {
-    response_context_t response = {.buffer = out, .capacity = out_size, .length = 0};
-    if (out_size == 0) return false;
+    if (out_size == 0 || out_size > UINT_MAX) return false;
+    response_context_t response = {.buffer = out, .capacity = out_size};
     out[0] = '\0';
     esp_http_client_config_t config = {
         .url = url,
         .timeout_ms = HTTP_TIMEOUT_MS,
+        .buffer_size = 1024,
         .disable_auto_redirect = false,
         .event_handler = http_collect_event,
         .user_data = &response,
@@ -71,50 +142,20 @@ static bool http_get(const char *url, char *out, size_t out_size, const char *ap
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (client == NULL) return false;
-    esp_err_t perform_err = esp_http_client_perform(client);
+    esp_err_t perform_err = esp_http_client_set_header(client, "Accept-Encoding", "gzip, identity");
+    if (perform_err == ESP_OK) perform_err = esp_http_client_perform(client);
     int status = esp_http_client_get_status_code(client);
-    // QWeather currently returns gzip bodies. The ESP-IDF HTTP client
-    // exposes the wire body to the event callback, so decode the gzip
-    // deflate payload before handing it to cJSON.
-    if (perform_err == ESP_OK && response.length >= 18 &&
-        (uint8_t)out[0] == 0x1f && (uint8_t)out[1] == 0x8b &&
-        (uint8_t)out[2] == 0x08) {
-        char *decoded = (char *)malloc(out_size);
-        /* The convenience wrapper puts the large Huffman state on the task
-         * stack. Keep it on the heap, including with compiler inlining. */
-        tinfl_decompressor *decomp = malloc(sizeof(*decomp));
-        size_t decoded_len = 0;
-        if (decoded != NULL && decomp != NULL) {
-            // Standard gzip header (10 bytes) and trailer (8 bytes).
-            size_t input_len = response.length - 18;
-            decoded_len = out_size - 1;
-            tinfl_init(decomp);
-            tinfl_status status = tinfl_decompress(
-                decomp, (const mz_uint8 *)out + 10, &input_len,
-                (mz_uint8 *)decoded, (mz_uint8 *)decoded, &decoded_len,
-                TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
-            if (status == TINFL_STATUS_DONE) {
-                response.length = decoded_len;
-                memcpy(out, decoded, decoded_len);
-                out[decoded_len] = '\0';
-            } else {
-                ESP_LOGW(TAG, "gzip decode failed: compressed_len=%u",
-                         (unsigned)response.length);
-                response.length = 0;
-            }
-        } else {
-            ESP_LOGW(TAG, "gzip decode buffer allocation failed");
-            response.length = 0;
-        }
-        free(decomp);
-        free(decoded);
-    }
-    bool ok = perform_err == ESP_OK && status == 200 && response.length > 0;
+    bool ok = perform_err == ESP_OK && status == 200 && !response.failed &&
+              response.length > 0 && (!response.gzip || response.finished) &&
+              esp_http_client_is_complete_data_received(client);
     if (!ok) {
-        ESP_LOGW(TAG, "HTTP GET failed: err=%s status=%d response_len=%u",
-                 esp_err_to_name(perform_err), status, (unsigned)response.length);
+        ESP_LOGW(TAG, "HTTP GET failed: err=%s status=%d response_len=%u decode_failed=%d gzip_complete=%d",
+                 esp_err_to_name(perform_err), status, (unsigned)response.length,
+                 response.failed, !response.gzip || response.finished);
+        out[0] = '\0';
     }
     esp_http_client_cleanup(client);
+    if (response.initialized) inflateEnd(&response.inflater);
     return ok;
 }
 
@@ -334,7 +375,7 @@ static void weather_task(void *arg)
 esp_err_t monitor_weather_start(void)
 {
     if (s_task != NULL) return ESP_OK;
-    if (xTaskCreate(weather_task, "monitor_weather", 16384, NULL, 3, &s_task) != pdPASS) return ESP_ERR_NO_MEM;
+    if (xTaskCreate(weather_task, "monitor_weather", 8192, NULL, 3, &s_task) != pdPASS) return ESP_ERR_NO_MEM;
     return ESP_OK;
 }
 
