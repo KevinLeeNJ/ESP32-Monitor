@@ -45,6 +45,12 @@ std::vector<wifi_ap_record_t> WifiConfigurationAp::GetAccessPoints()
     return ap_records_;
 }   
 
+void WifiConfigurationAp::SetAccessPoints(const std::vector<wifi_ap_record_t>& records)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    ap_records_ = records;
+}
+
 WifiConfigurationAp::~WifiConfigurationAp()
 {
     Stop();
@@ -82,15 +88,29 @@ void WifiConfigurationAp::StartStationWebServer()
         return;
     }
     ESP_LOGI(TAG, "Starting configuration web server on station interface");
+    station_web_mode_ = true;
+    ap_records_.clear();
     StartWebServer();
+    StartScanTimer();
 }
 
 void WifiConfigurationAp::StopWebServer()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (server_ != nullptr) {
-        httpd_stop(server_);
+    if (scan_timer_) {
+        esp_timer_stop(scan_timer_);
+        esp_timer_delete(scan_timer_);
+        scan_timer_ = nullptr;
+    }
+    httpd_handle_t server;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        server = server_;
         server_ = nullptr;
+    }
+    // Requests and scan-result callbacks also use mutex_. Never hold it while
+    // waiting for the HTTP task to finish its current request.
+    if (server) {
+        httpd_stop(server);
         ESP_LOGI(TAG, "Configuration web server stopped");
     }
 }
@@ -112,27 +132,36 @@ void WifiConfigurationAp::Start()
     StartAccessPoint();
     StartWebServer();
     
-    // Start scan immediately
-    esp_wifi_scan_start(nullptr, false);
-    // Setup periodic WiFi scan timer.
-    // skip_unhandled_events = false so the timer can wake the CPU from light
-    // sleep on its own; otherwise the AP-mode scan list would stop refreshing
-    // whenever the user paused interacting with the config web UI. See
-    // esp_timer_get_next_alarm_for_wake_up in components/esp_timer/src/esp_timer.c.
+    station_web_mode_ = false;
+    StartScanTimer();
+}
+
+void WifiConfigurationAp::StartScanTimer()
+{
     esp_timer_create_args_t timer_args = {
         .callback = [](void* arg) {
             auto* self = static_cast<WifiConfigurationAp*>(arg);
-            if (!self->is_connecting_) {
+            if (self->is_connecting_) return;
+            if (self->station_web_mode_) {
+                if (self->on_station_scan_requested_) self->on_station_scan_requested_();
+            } else {
                 esp_wifi_scan_start(nullptr, false);
             }
         },
         .arg = this,
         .dispatch_method = ESP_TIMER_TASK,
-        .name = "wifi_scan_timer",
+        .name = "config_wifi_scan",
         .skip_unhandled_events = false
     };
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &scan_timer_));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(scan_timer_, 10LL * 1000000));
+    if (station_web_mode_) {
+        if (on_station_scan_requested_) on_station_scan_requested_();
+    } else {
+        esp_wifi_scan_start(nullptr, false);
+    }
 }
+
 
 std::string WifiConfigurationAp::GetSsid()
 {
@@ -343,7 +372,7 @@ void WifiConfigurationAp::StartWebServer()
         .method = HTTP_GET,
         .handler = [](httpd_req_t *req) -> esp_err_t {
             auto *this_ = static_cast<WifiConfigurationAp *>(req->user_ctx);
-            std::lock_guard<std::mutex> lock(this_->mutex_);
+            const auto records = this_->GetAccessPoints();
 
             // Check if 5G is supported
             bool support_5g = false;
@@ -357,16 +386,20 @@ void WifiConfigurationAp::StartWebServer()
             httpd_resp_sendstr_chunk(req, "{\"support_5g\":");
             httpd_resp_sendstr_chunk(req, support_5g ? "true" : "false");
             httpd_resp_sendstr_chunk(req, ",\"aps\":[");
-            for (int i = 0; i < this_->ap_records_.size(); i++) {
-                ESP_LOGI(TAG, "SSID: %s, RSSI: %d, Authmode: %d",
-                    (char *)this_->ap_records_[i].ssid, this_->ap_records_[i].rssi, this_->ap_records_[i].authmode);
-                char buf[128];
-                snprintf(buf, sizeof(buf), "{\"ssid\":\"%s\",\"rssi\":%d,\"authmode\":%d}",
-                    (char *)this_->ap_records_[i].ssid, this_->ap_records_[i].rssi, this_->ap_records_[i].authmode);
-                httpd_resp_sendstr_chunk(req, buf);
-                if (i < this_->ap_records_.size() - 1) {
-                    httpd_resp_sendstr_chunk(req, ",");
-                }
+            for (size_t i = 0; i < records.size(); i++) {
+                const auto& ap = records[i];
+                cJSON *item = cJSON_CreateObject();
+                if (!item) return ESP_FAIL;
+                cJSON_AddStringToObject(item, "ssid", reinterpret_cast<const char *>(ap.ssid));
+                cJSON_AddNumberToObject(item, "rssi", ap.rssi);
+                cJSON_AddNumberToObject(item, "authmode", ap.authmode);
+                char *json = cJSON_PrintUnformatted(item);
+                cJSON_Delete(item);
+                if (!json) return ESP_FAIL;
+                esp_err_t err = httpd_resp_sendstr_chunk(req, json);
+                cJSON_free(json);
+                if (err != ESP_OK) return err;
+                if (i + 1 < records.size()) httpd_resp_sendstr_chunk(req, ",");
             }
             httpd_resp_sendstr_chunk(req, "]}");
             httpd_resp_sendstr_chunk(req, NULL);
@@ -614,6 +647,20 @@ void WifiConfigurationAp::StartWebServer()
     };
     ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &advanced_config));
 
+    // Only actual edits extend a configuration session. Scans and page polling
+    // deliberately do not count as activity.
+    httpd_uri_t activity = {
+        .uri = "/activity",
+        .method = HTTP_POST,
+        .handler = [](httpd_req_t *req) -> esp_err_t {
+            auto *self = static_cast<WifiConfigurationAp *>(req->user_ctx);
+            if (self->on_activity_) self->on_activity_();
+            return httpd_resp_send(req, "{}", HTTPD_RESP_USE_STRLEN);
+        },
+        .user_ctx = this
+    };
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &activity));
+
     // Register the /advanced/submit URI
     httpd_uri_t advanced_submit = {
         .uri = "/advanced/submit",
@@ -653,6 +700,19 @@ void WifiConfigurationAp::StartWebServer()
                 cJSON_Delete(json);
                 httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
                 return ESP_FAIL;
+            }
+
+            auto *this_ = static_cast<WifiConfigurationAp *>(req->user_ctx);
+            if (this_->on_activity_) this_->on_activity_();
+            const cJSON *ssid = cJSON_GetObjectItemCaseSensitive(json, "ssid");
+            const cJSON *password = cJSON_GetObjectItemCaseSensitive(json, "password");
+            if ((ssid && (!cJSON_IsString(ssid) || strlen(ssid->valuestring) > 32)) ||
+                (password && (!cJSON_IsString(password) || strlen(password->valuestring) > 64)) ||
+                (cJSON_IsString(password) && password->valuestring[0] &&
+                 (!cJSON_IsString(ssid) || !ssid->valuestring[0]))) {
+                cJSON_Delete(json);
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid Wi-Fi credentials");
+                return ESP_OK;
             }
 
             // Validate Devices fields before modifying any persistent configuration.
@@ -701,9 +761,6 @@ void WifiConfigurationAp::StartWebServer()
                 httpd_resp_send(req, response, HTTPD_RESP_USE_STRLEN);
                 return ESP_OK;
             }
-
-            // 获取当前对象
-            auto *this_ = static_cast<WifiConfigurationAp *>(req->user_ctx);
 
             // 打开NVS
             nvs_handle_t nvs;
@@ -784,11 +841,13 @@ void WifiConfigurationAp::StartWebServer()
 
             // 保存WiFi功率
             cJSON *max_tx_power = cJSON_GetObjectItem(json, "max_tx_power");
-            if (cJSON_IsNumber(max_tx_power)) {
+            if (err == ESP_OK && cJSON_IsNumber(max_tx_power)) {
                 this_->max_tx_power_ = max_tx_power->valueint;
                 err = esp_wifi_set_max_tx_power(this_->max_tx_power_);
                 if (err != ESP_OK) {
                     ESP_LOGE(TAG, "Failed to set WiFi power: %d", err);
+                    nvs_close(nvs);
+                    cJSON_Delete(json);
                     httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to set WiFi power");
                     return ESP_FAIL;
                 }
@@ -800,7 +859,7 @@ void WifiConfigurationAp::StartWebServer()
 
             // 保存BSSID记忆设置
             cJSON *remember_bssid = cJSON_GetObjectItem(json, "remember_bssid");
-            if (cJSON_IsBool(remember_bssid)) {
+            if (err == ESP_OK && cJSON_IsBool(remember_bssid)) {
                 this_->remember_bssid_ = cJSON_IsTrue(remember_bssid);
                 err = nvs_set_u8(nvs, "remember_bssid", this_->remember_bssid_ ? 1 : 0);
                 if (err != ESP_OK) {
@@ -810,7 +869,7 @@ void WifiConfigurationAp::StartWebServer()
 
             // 保存睡眠模式设置
             cJSON *sleep_mode = cJSON_GetObjectItem(json, "sleep_mode");
-            if (cJSON_IsBool(sleep_mode)) {
+            if (err == ESP_OK && cJSON_IsBool(sleep_mode)) {
                 this_->sleep_mode_ = cJSON_IsTrue(sleep_mode);
                 err = nvs_set_u8(nvs, "sleep_mode", this_->sleep_mode_ ? 1 : 0);
                 if (err != ESP_OK) {
@@ -819,8 +878,12 @@ void WifiConfigurationAp::StartWebServer()
             }
 
             // 提交更改
-            err = nvs_commit(nvs);
+            if (err == ESP_OK) err = nvs_commit(nvs);
             nvs_close(nvs);
+            if (err == ESP_OK && cJSON_IsString(ssid) && ssid->valuestring[0] &&
+                !this_->Save(ssid->valuestring, cJSON_IsString(password) ? password->valuestring : "")) {
+                err = ESP_FAIL;
+            }
             cJSON_Delete(json);
 
             if (err != ESP_OK) {
@@ -837,6 +900,9 @@ void WifiConfigurationAp::StartWebServer()
             ESP_LOGI(TAG, "Saved settings: ota_url=%s, max_tx_power=%d, remember_bssid=%d, sleep_mode=%d, qweather_key=%s",
                 this_->ota_url_.c_str(), this_->max_tx_power_, this_->remember_bssid_, this_->sleep_mode_,
                 qweather_key_saved ? "configured" : "not configured");
+            // The application closes HTTP/AP from its own task after this
+            // response. Never stop the server from within its request handler.
+            if (this_->on_exit_requested_) this_->on_exit_requested_();
             return ESP_OK;
         },
         .user_ctx = this
@@ -988,7 +1054,7 @@ bool WifiConfigurationAp::ConnectToWifi(const std::string &ssid, const std::stri
     }
 }
 
-void WifiConfigurationAp::Save(const std::string &ssid, const std::string &password)
+bool WifiConfigurationAp::Save(const std::string &ssid, const std::string &password)
 {
     uint8_t channel = last_connected_channel_;
     if (channel == 0) {
@@ -1001,7 +1067,7 @@ void WifiConfigurationAp::Save(const std::string &ssid, const std::string &passw
         }
     }
     ESP_LOGI(TAG, "Save SSID %s channel %u", ssid.c_str(), channel);
-    SsidManager::GetInstance().AddSsid(ssid, password, channel);
+    return SsidManager::GetInstance().AddSsid(ssid, password, channel);
 }
 
 void WifiConfigurationAp::OnExitRequested(std::function<void()> callback)
@@ -1035,8 +1101,6 @@ void WifiConfigurationAp::WifiEventHandler(void* arg, esp_event_base_t event_bas
         self->ap_records_.resize(ap_num);
         esp_wifi_scan_get_ap_records(&ap_num, self->ap_records_.data());
 
-        // 扫描完成，等待10秒后再次扫描
-        esp_timer_start_once(self->scan_timer_, 10 * 1000000);
     }
 }
 
@@ -1121,13 +1185,6 @@ void WifiConfigurationAp::Stop() {
     }
     esp_smartconfig_stop();
 #endif
-
-    // 停止定时器
-    if (scan_timer_) {
-        esp_timer_stop(scan_timer_);
-        esp_timer_delete(scan_timer_);
-        scan_timer_ = nullptr;
-    }
 
     // Stop the web server before tearing down the AP or station interface.
     StopWebServer();

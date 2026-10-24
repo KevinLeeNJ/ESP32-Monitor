@@ -225,15 +225,29 @@ void WifiStation::StartScan() {
     }
 }
 
+void WifiStation::ScanForConfig() {
+    // Reconnect scans own the radio while disconnected. A connected station
+    // can scan all channels in the background without leaving its current AP.
+    if (!IsConnected()) return;
+    esp_err_t err = esp_wifi_scan_start(nullptr, false);
+    if (err != ESP_OK) ESP_LOGW(TAG, "Configuration scan deferred: %s", esp_err_to_name(err));
+}
+
 void WifiStation::HandleScanResult() {
     uint16_t ap_num = 0;
-    esp_wifi_scan_get_ap_num(&ap_num);
-    wifi_ap_record_t *ap_records = (wifi_ap_record_t *)malloc(ap_num * sizeof(wifi_ap_record_t));
-    esp_wifi_scan_get_ap_records(&ap_num, ap_records);
+    if (esp_wifi_scan_get_ap_num(&ap_num) != ESP_OK) return;
+    std::vector<wifi_ap_record_t> ap_records(ap_num);
+    // Fetch once: this call also releases the driver's scan-result storage.
+    if (ap_num && esp_wifi_scan_get_ap_records(&ap_num, ap_records.data()) != ESP_OK) return;
+    ap_records.resize(ap_num);
     // sort by rssi descending
-    std::sort(ap_records, ap_records + ap_num, [](const wifi_ap_record_t& a, const wifi_ap_record_t& b) {
+    std::sort(ap_records.begin(), ap_records.end(), [](const wifi_ap_record_t& a, const wifi_ap_record_t& b) {
         return a.rssi > b.rssi;
     });
+    if (on_scan_results_) on_scan_results_(ap_records);
+    // A portal scan must not populate the reconnect queue or call connect on
+    // an already connected station, even when a stronger saved AP is found.
+    if (IsConnected()) return;
 
     auto& ssid_manager = SsidManager::GetInstance();
     auto ssid_list = ssid_manager.GetSsidList();
@@ -259,7 +273,6 @@ void WifiStation::HandleScanResult() {
             connect_queue_.push_back(record);
         }
     }
-    free(ap_records);
 
     if (connect_queue_.empty()) {
         if (last_scan_used_saved_channels_) {

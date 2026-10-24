@@ -20,7 +20,7 @@ public:
         return instance;
     }
 
-    void AddSsid(const std::string& ssid, const std::string& password, uint8_t channel = 0);
+    bool AddSsid(const std::string& ssid, const std::string& password, uint8_t channel = 0);
     void UpdateSsidChannel(const std::string& ssid, uint8_t channel);
     void RemoveSsid(int index);
     void SetDefaultSsid(int index);
@@ -33,7 +33,7 @@ private:
     ~SsidManager();
 
     void LoadFromNvs();
-    void SaveToNvs();
+    bool SaveToNvs();
 
     std::vector<SsidItem> ssid_list_;
 };

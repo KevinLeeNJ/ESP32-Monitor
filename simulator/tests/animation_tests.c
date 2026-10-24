@@ -404,11 +404,54 @@ static void test_first_data(monitor_frame_variant_t variant, unsigned device_cou
     monitor_renderer_deinit(&r);
 }
 
+static lv_obj_t *configuring_factory(lv_obj_t *parent)
+{
+    return simulator_scene_find("configuring")->create(parent, MONITOR_FRAME_NORMAL);
+}
+
+static void test_configuring_to_offline(void)
+{
+    monitor_renderer_t r;
+    const simulator_scene_t *scene = simulator_scene_find("configuring");
+    CHECK(scene && monitor_renderer_init(&r, configuring_factory), "create configuring scene");
+    monitor_ui_snapshot_t ui = snapshot("19:56");
+    ui.date_text = "SAT 24 OCT";
+    ui.wifi_state = MONITOR_WIFI_PROVISIONING;
+    ui.aqi = -1;
+    monitor_ui_apply_snapshot(r.root, &ui);
+    CHECK(monitor_ui_animation_active(r.root), "local data first appears while configuring");
+    settle(&r);
+    lv_obj_t *date = lv_obj_get_child_by_name(r.root, "clock_date");
+    CHECK(date && !strcmp(lv_label_get_text(date), "Configuring"), "configuration status overrides date");
+    lv_obj_t *temp = lv_obj_get_child_by_name(r.root, "temperature_card");
+    lv_obj_t *clip = lv_obj_get_child_by_name(temp, "value_viewport");
+    lv_obj_t *visible = lv_obj_get_child(clip, lv_obj_has_flag(lv_obj_get_child(clip, 0), LV_OBJ_FLAG_HIDDEN) ? 1 : 0);
+    CHECK(!strcmp(lv_label_get_text(visible), "24.5°C"), "configuring displays local temperature");
+    ui.wifi_state = MONITOR_WIFI_OFFLINE;
+    monitor_ui_apply_snapshot(r.root, &ui);
+    CHECK(!strcmp(lv_label_get_text(date), "Offline"), "offline status overrides even valid RTC date");
+    CHECK(!monitor_ui_animation_active(r.root), "configuration exit does not replay local data animation");
+    CHECK(!lv_obj_has_flag(visible, LV_OBJ_FLAG_HIDDEN) &&
+          !strcmp(lv_label_get_text(visible), "24.5°C"), "configuration exit preserves the visible local value");
+    CHECK(!monitor_ui_advance(r.root, 1000), "configuration exit has no deferred animation");
+    monitor_ui_apply_snapshot(r.root, &ui);
+    CHECK(!monitor_ui_animation_active(r.root), "repeated offline snapshots stay settled");
+    ui.temperature_tenths_c = 251;
+    monitor_ui_apply_snapshot(r.root, &ui);
+    CHECK(monitor_ui_animation_active(r.root), "fresh sensor readings still animate normally offline");
+    settle(&r);
+    ui.wifi_state = MONITOR_WIFI_CONNECTED;
+    monitor_ui_apply_snapshot(r.root, &ui);
+    CHECK(!strcmp(lv_label_get_text(date), "SAT 24 OCT"), "connection restores date");
+    monitor_renderer_deinit(&r);
+}
+
 int main(void)
 {
     test_clock(MONITOR_FRAME_NORMAL);
     test_clock(MONITOR_FRAME_INVERTED);
     test_devices();
+    test_configuring_to_offline();
     test_serial_card_removal();
     for (unsigned count = 1; count <= 4; ++count) {
         unsigned before = failures;

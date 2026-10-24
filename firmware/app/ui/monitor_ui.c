@@ -454,6 +454,7 @@ static const char *wifi_state_symbol(monitor_wifi_state_t state)
     switch(state) {
         case MONITOR_WIFI_PROVISIONING: return LV_SYMBOL_REFRESH;
         case MONITOR_WIFI_CONNECTED: return LV_SYMBOL_WIFI;
+        case MONITOR_WIFI_OFFLINE:
         case MONITOR_WIFI_DISCONNECTED: return LV_SYMBOL_WIFI;
         default: return LV_SYMBOL_WARNING;
     }
@@ -475,12 +476,15 @@ void monitor_ui_apply_snapshot(lv_obj_t *root, const monitor_ui_snapshot_t *snap
     if (state == NULL) return;
     char text[24];
     update_clock(state, snapshot->time_text);
-    if (snapshot->date_text && strcmp(lv_label_get_text(state->date_label), snapshot->date_text) != 0)
-        lv_label_set_text(state->date_label, snapshot->date_text);
+    const char *date = snapshot->wifi_state == MONITOR_WIFI_PROVISIONING ? "Configuring" :
+                       snapshot->wifi_state == MONITOR_WIFI_OFFLINE ? "Offline" :
+                       snapshot->wifi_state == MONITOR_WIFI_DISCONNECTED ? "Connecting" : snapshot->date_text;
+    if (date && strcmp(lv_label_get_text(state->date_label), date) != 0)
+        lv_label_set_text(state->date_label, date);
     if (state->wifi_state != snapshot->wifi_state) {
         state->wifi_state = snapshot->wifi_state;
         lv_label_set_text(state->wifi_label, wifi_state_symbol(snapshot->wifi_state));
-        if (snapshot->wifi_state == MONITOR_WIFI_DISCONNECTED) lv_obj_clear_flag(state->wifi_slash, LV_OBJ_FLAG_HIDDEN);
+        if (snapshot->wifi_state == MONITOR_WIFI_DISCONNECTED || snapshot->wifi_state == MONITOR_WIFI_OFFLINE) lv_obj_clear_flag(state->wifi_slash, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(state->wifi_slash, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_text_color(state->wifi_label,
             lv_color_hex(snapshot->wifi_state == MONITOR_WIFI_PROVISIONING ? COLOR_MUTED : COLOR_BLACK), 0);
@@ -524,7 +528,7 @@ static lv_obj_t *make_wifi_status(lv_obj_t *parent, monitor_wifi_state_t state)
     lv_obj_set_style_line_color(slash, lv_color_hex(COLOR_BLACK), 0);
     lv_obj_set_style_line_rounded(slash, true, 0);
     set_name(slash, "wifi_slash");
-    if(state != MONITOR_WIFI_DISCONNECTED) lv_obj_add_flag(slash, LV_OBJ_FLAG_HIDDEN);
+    if(state != MONITOR_WIFI_DISCONNECTED && state != MONITOR_WIFI_OFFLINE) lv_obj_add_flag(slash, LV_OBJ_FLAG_HIDDEN);
     return icon;
 }
 
@@ -1070,6 +1074,7 @@ lv_obj_t *monitor_ui_create_with_devices_battery_wifi_variant(lv_obj_t *parent,
      * label; temperature and humidity are identified by sourced icons. */
     make_clock(state);
     state->date_label = make_label(root, clock_date_text, 19, 43, &monitor_misans_12, COLOR_MUTED);
+    set_name(state->date_label, "clock_date");
     state->wifi_label = make_wifi_status(root, wifi_state);
     state->wifi_slash = lv_obj_get_child_by_name(root, "wifi_slash");
     make_board_battery(root, 38, 65, demo_data.board_battery_percent);

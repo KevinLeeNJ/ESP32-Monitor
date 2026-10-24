@@ -79,6 +79,12 @@ if(BUILD_TESTING)
     target_link_libraries(monitor_animation_tests PRIVATE monitor_sim_core)
     add_test(NAME monitor_animation_tests COMMAND monitor_animation_tests)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME monitor_station_scan_tests
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/station_scan_test.py")
+    add_test(NAME monitor_wifi_buttons_tests
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/wifi_buttons_test.py")
+    add_test(NAME monitor_wifi_session_tests
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/wifi_session_test.py")
     add_test(NAME monitor_firmware_animation_tests
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/firmware_animation_test.py"
                 "${CMAKE_C_COMPILER}")

@@ -39,6 +39,8 @@ enum class WifiEvent {
     Connected,         // Successfully connected
     Disconnected,      // Disconnected from network
     ConfigModeEnter,   // Entered config AP mode
+    ConfigActivity,    // User edited a configuration field
+    ConfigExitRequested, // Save/exit acknowledged; close from application task
     ConfigModeExit,    // Exited config AP mode
     AdvancedConfigSaved, // Advanced settings saved with QWeather configured
 };

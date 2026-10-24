@@ -46,8 +46,10 @@ public:
     void StartSmartConfig();
 #endif
     bool ConnectToWifi(const std::string &ssid, const std::string &password);
-    void Save(const std::string &ssid, const std::string &password);
+    bool Save(const std::string &ssid, const std::string &password);
     std::vector<wifi_ap_record_t> GetAccessPoints();
+    void SetAccessPoints(const std::vector<wifi_ap_record_t>& records);
+    void OnStationScanRequested(std::function<void()> callback) { on_station_scan_requested_ = callback; }
     std::string GetSsid();
     std::string GetWebServerUrl();
 
@@ -56,6 +58,7 @@ public:
      * This is called when user requests to exit config mode (e.g., via /exit endpoint)
      */
     void OnExitRequested(std::function<void()> callback);
+    void OnActivity(std::function<void()> callback) { on_activity_ = callback; }
 
     /**
      * Set callback for successfully saved advanced settings that include a
@@ -74,6 +77,7 @@ private:
     esp_event_handler_instance_t instance_got_ip_;
     esp_timer_handle_t scan_timer_ = nullptr;
     bool is_connecting_ = false;
+    bool station_web_mode_ = false;
     esp_netif_t* ap_netif_ = nullptr;
     std::vector<wifi_ap_record_t> ap_records_;
     uint8_t last_connected_channel_ = 0;
@@ -88,10 +92,13 @@ private:
 
     // Callbacks
     std::function<void()> on_exit_requested_;
+    std::function<void()> on_activity_;
+    std::function<void()> on_station_scan_requested_;
     std::function<void()> on_advanced_settings_saved_;
 
     void StartAccessPoint();
     void StartWebServer();
+    void StartScanTimer();
 
     // Event handlers
     static void WifiEventHandler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);

@@ -95,6 +95,10 @@ bool WifiManager::Initialize(const WifiManagerConfig& config) {
 
     station_ = std::make_unique<WifiStation>();
     config_ap_ = std::make_unique<WifiConfigurationAp>();
+    station_->OnScanResults([this](const std::vector<wifi_ap_record_t>& records) {
+        config_ap_->SetAccessPoints(records);
+    });
+    config_ap_->OnStationScanRequested([this]() { station_->ScanForConfig(); });
 
     initialized_ = true;
     ESP_LOGI(TAG, "Initialized");
@@ -267,8 +271,9 @@ void WifiManager::StartConfigAp() {
     // Web handler calls this when user submits config.
     config_ap_->OnExitRequested([this]() {
         ESP_LOGI(TAG, "Config exit requested from web");
-        StopConfigAp();
+        NotifyEvent(WifiEvent::ConfigExitRequested);
     });
+    config_ap_->OnActivity([this]() { NotifyEvent(WifiEvent::ConfigActivity); });
     config_ap_->OnAdvancedSettingsSaved([this]() {
         NotifyEvent(WifiEvent::AdvancedConfigSaved);
     });
@@ -296,20 +301,21 @@ void WifiManager::StopConfigAp() {
         return;
     }
 
-    ESP_LOGI(TAG, "%s", station_config_mode_ ?
-             "Stopping station configuration web server" :
-             "Stopping configuration AP");
-    if (station_config_mode_) {
+    const bool station_session = station_config_mode_;
+    config_mode_active_ = false;
+    station_config_mode_ = false;
+    // HTTP callbacks can notify application events while httpd_stop waits for
+    // an in-flight request. Do not hold the manager mutex across that join.
+    lock.unlock();
+    ESP_LOGI(TAG, "%s", station_session ?
+             "Stopping station configuration web server" : "Stopping configuration AP");
+    if (station_session) {
         config_ap_->StopWebServer();
     } else {
         config_ap_->Stop();
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     }
-    config_mode_active_ = false;
-    station_config_mode_ = false;
-
-    lock.unlock();
     NotifyEvent(WifiEvent::ConfigModeExit);
-    lock.lock();
 }
 
 bool WifiManager::IsConfigMode() const {
