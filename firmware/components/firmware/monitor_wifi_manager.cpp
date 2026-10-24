@@ -116,7 +116,7 @@ static void set_event(WifiEvent event, const std::string &data)
             // Restore normal station power saving after a LAN configuration
             // session. Captive-AP sessions have no connected station here.
             if (WifiManager::GetInstance().IsConnected()) {
-                WifiManager::GetInstance().SetPowerSaveLevel(WifiPowerSaveLevel::BALANCED);
+                WifiManager::GetInstance().SetPowerSaveLevel(WifiPowerSaveLevel::LOW_POWER);
             }
             /* StopConfigAp() has already stopped the AP, DNS server and web
                server. Retry station mode only when credentials are available;
@@ -234,9 +234,12 @@ static void process_manager_events(uint32_t pending)
     if (pending & BTN_STATION_TIMEOUT) {
         if (!s_provisioning && !WifiManager::GetInstance().IsConnected() &&
             esp_timer_get_time() >= s_station_deadline.load()) {
-            WifiManager::GetInstance().StopStation();
-            update_wifi_state(MONITOR_WIFI_OFFLINE);
-            ESP_LOGI(TAG, "Offline: saved Wi-Fi connection timed out");
+            // Authentication retries and DHCP can exceed this initial window.
+            // Leave the station running: it owns retry limits and scan backoff,
+            // and must be able to recover when the access point becomes ready.
+            esp_timer_stop(s_station_timeout_timer);
+            update_wifi_state(MONITOR_WIFI_DISCONNECTED);
+            ESP_LOGI(TAG, "Wi-Fi connection pending; continuing station retries");
         }
     }
     if (pending & BTN_TIMEOUT) {

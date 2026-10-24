@@ -77,7 +77,7 @@ static int xTaskCreate(void (*)(void *),const char *,unsigned,void *,unsigned,vo
     ++task_creates; if(task_ok)*out=reinterpret_cast<void *>(1);return task_ok?pdPASS:0;
 }
 struct WifiManagerConfig { std::string ssid_prefix,language;bool show_ota_config,show_sleep_config; };
-enum class WifiPowerSaveLevel { PERFORMANCE, BALANCED };
+enum class WifiPowerSaveLevel { PERFORMANCE, BALANCED, LOW_POWER };
 class SsidManager {
 public:
     std::vector<int> saved;
@@ -92,13 +92,14 @@ class WifiManager {
 public:
     bool connected = false, config = false, station = false;
     unsigned starts = 0, exits = 0;
+    WifiPowerSaveLevel power = WifiPowerSaveLevel::LOW_POWER;
     static WifiManager& GetInstance() { static WifiManager m; return m; }
     unsigned ap_starts=0, initializations=0;
     bool Initialize(const WifiManagerConfig&) { ++initializations;return init_ok; }
     void SetEventCallback(void (*)(WifiEvent,const std::string&)) {}
     void StartConfigAp() { config=true;++ap_starts;set_event(WifiEvent::ConfigModeEnter, ""); }
     bool IsConnected() { return connected; }
-    void SetPowerSaveLevel(WifiPowerSaveLevel) {}
+    void SetPowerSaveLevel(WifiPowerSaveLevel level) { power = level; }
     void StartStation() { station = true; ++starts; }
     void StopStation() {
         assert(now >= response_ready_at);
@@ -124,6 +125,8 @@ static void enter() {
     WifiManager::GetInstance().config = true;
     set_event(WifiEvent::ConfigModeEnter, "");
     assert(s_state == MONITOR_WIFI_PROVISIONING);
+    if (WifiManager::GetInstance().connected)
+        assert(WifiManager::GetInstance().power == WifiPowerSaveLevel::PERFORMANCE);
 }
 static void reset_boot(bool credentials=false) {
     WifiManager::GetInstance()=WifiManager{};
@@ -180,8 +183,13 @@ int main() {
     assert(!config_timer.active && station_timer.due == now + 30000000);
     now += 29999999; dispatch(BTN_STATION_TIMEOUT); assert(m.station);
     ++now; dispatch(BTN_STATION_TIMEOUT);
-    assert(s_state == MONITOR_WIFI_OFFLINE && !m.station);
-    dispatch(); assert(!m.station); // Stop event must not restart the radio.
+    assert(s_state == MONITOR_WIFI_DISCONNECTED && m.station && !station_timer.active);
+    const auto attempts = m.starts;
+    now += 300000000; dispatch();
+    assert(m.station && m.starts == attempts); // Driver backoff retains ownership.
+    m.connected = true; set_event(WifiEvent::Connected, "");
+    assert(s_state == MONITOR_WIFI_CONNECTED); // A late IP can recover without reboot.
+    m.connected = false;
     enter(); set_event(WifiEvent::ConfigExitRequested, ""); dispatch();
     m.connected = true;
     set_event(WifiEvent::Connected, "");
@@ -194,11 +202,12 @@ int main() {
     assert(s_provisioning && s_state == MONITOR_WIFI_PROVISIONING);
     now += 120000000; dispatch(BTN_TIMEOUT);
     assert(m.connected && !m.config && s_state == MONITOR_WIFI_CONNECTED);
+    assert(m.power == WifiPowerSaveLevel::LOW_POWER);
     // LAN save reconnects so changed credentials actually take effect.
     enter(); auto starts = m.starts;
     set_event(WifiEvent::ConfigExitRequested, ""); dispatch(); dispatch();
     assert(m.station && !m.connected && m.starts == starts + 1);
-    // Losing an established connection also has a finite reconnect window.
+    // Losing an established connection also keeps retrying past the first window.
     m.connected = true; set_event(WifiEvent::Connected, "");
     m.connected = false; set_event(WifiEvent::Disconnected, ""); dispatch();
     assert(station_timer.active);
@@ -210,9 +219,11 @@ int main() {
     }
     now=reconnect_deadline-1;dispatch(BTN_STATION_TIMEOUT);assert(m.station);
     now=reconnect_deadline; dispatch(BTN_STATION_TIMEOUT);
-    assert(s_state == MONITOR_WIFI_OFFLINE && !m.station);
+    assert(s_state == MONITOR_WIFI_DISCONNECTED && m.station && !station_timer.active);
     set_event(WifiEvent::Disconnected, "");dispatch(BTN_RECONNECT);
-    assert(s_state==MONITOR_WIFI_OFFLINE && !m.station);
+    assert(s_state==MONITOR_WIFI_DISCONNECTED && m.station);
+    m.connected = true; set_event(WifiEvent::Connected, "");
+    assert(s_state==MONITOR_WIFI_CONNECTED && !station_timer.active);
     // Stale station deadlines cannot close a newly opened AP session.
     enter();dispatch(BTN_STATION_TIMEOUT);assert(m.config && s_provisioning);
     // Simultaneous save/idle-timeout closes exactly once and preserves the new attempt.
@@ -229,4 +240,4 @@ with tempfile.TemporaryDirectory() as directory:
         ['update_wifi_state', 'start_config_timeout', 'start_station_attempt', 'set_event', 'enter_config_mode', 'config_timeout_callback', 'process_manager_events']) + production_function(source, 'monitor_wifi_start') + tests)
     subprocess.run(['c++', '-std=c++17', '-Wall', '-Wextra', '-Werror', str(unit), '-o', str(path / 'test')], check=True)
     subprocess.run([str(path / 'test')], check=True, timeout=5)
-print('Wi-Fi session transitions passed: idle edits, immediate save, AP/LAN exit, saved credentials, connection timeout, offline')
+print('Wi-Fi session transitions passed: idle edits, immediate save, AP/LAN exit, late connection recovery, offline without credentials')

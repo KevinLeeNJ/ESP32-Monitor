@@ -116,8 +116,10 @@ int main() {
     // Connection loss leaves radio ownership with the station reconnect flow.
     station.connected = false;
     timer.callback(timer.arg); assert(scans == 2);
+    station.connect_queue_.push_back({"Saved", "obsolete password", 11, 3, {}});
     driver_results = {{{'S','a','v','e','d',0}, -50, 1, 3, {}}};
     station.HandleScanResult(); assert(station.reconnects == 1);
+    assert(station.connect_queue_.size() == 1 && station.connect_queue_[0].password == "password");
     assert(portal.GetAccessPoints().size() == 1);
     portal.StopWebServer();
     assert(!timer_active && !timer.callback && !portal.server_ && closes == 1);

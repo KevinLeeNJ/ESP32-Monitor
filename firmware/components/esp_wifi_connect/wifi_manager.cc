@@ -159,7 +159,8 @@ void WifiManager::StartStation() {
 
     station_->Start();
     station_active_ = true;
-    // Keep the connected station in balanced modem-sleep mode by default.
+    // Use minimum modem sleep while scanning, authenticating, and associating.
+    // WifiStation switches to MAX_MODEM after it obtains an IP address.
     station_->SetPowerSaveLevel(WifiPowerSaveLevel::BALANCED);
 }
 

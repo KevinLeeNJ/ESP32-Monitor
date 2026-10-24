@@ -622,7 +622,11 @@ void WifiConfigurationAp::StartWebServer()
             }
             cJSON_AddStringToObject(json, "devices_api_url", devices_url);
             cJSON_AddBoolToObject(json, "devices_api_token_configured", devices_token_configured);
-            cJSON_AddNumberToObject(json, "max_tx_power", this_->max_tx_power_);
+            // LAN sessions do not call Start(), so the cached AP value may
+            // still be zero. Report the running driver's power in both modes.
+            int8_t current_tx_power = 80;
+            esp_wifi_get_max_tx_power(&current_tx_power);
+            cJSON_AddNumberToObject(json, "max_tx_power", current_tx_power);
             cJSON_AddBoolToObject(json, "remember_bssid", this_->remember_bssid_);
             cJSON_AddBoolToObject(json, "sleep_mode", this_->sleep_mode_);
             cJSON_AddBoolToObject(json, "show_ota_config", this_->show_ota_config_);

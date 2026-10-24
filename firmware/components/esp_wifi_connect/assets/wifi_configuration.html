@@ -609,7 +609,7 @@
                         <option value="60">15 dBm</option>
                         <option value="66">16 dBm</option>
                         <option value="72">18 dBm</option>
-                        <option value="80">20 dBm</option>
+                        <option value="80" selected>20 dBm</option>
                     </select>
                 </p>
 
@@ -1836,9 +1836,11 @@
                 document.getElementById('devices_api_url').value = data.devices_api_url || '';
                 document.getElementById('devices_api_token').dataset.configured = String(!!data.devices_api_token_configured);
                 updateCredentialPlaceholders();
-                if (data.max_tx_power) {
-                    document.getElementById('max_tx_power').value = data.max_tx_power;
-                }
+                const txPower = document.getElementById('max_tx_power');
+                const power = Number(data.max_tx_power);
+                const powerLevels = Array.from(txPower.options, option => Number(option.value));
+                txPower.value = String(Number.isFinite(power) && power >= 8 && power <= 84
+                    ? (powerLevels.find(level => level >= power) ?? 80) : 80);
                 if (data.remember_bssid !== undefined) {
                     document.getElementById('remember_bssid').checked = data.remember_bssid;
                 }
