@@ -65,7 +65,6 @@ typedef struct { int32_t x, y, w, h; } card_rect_t;
 typedef struct {
     lv_obj_t *obj;
     card_rect_t from, to;
-    bool pop;
 } card_motion_t;
 typedef enum { MOTION_IDLE, MOTION_REMOVE, MOTION_REFLOW, MOTION_POP } motion_phase_t;
 
@@ -693,8 +692,10 @@ static void set_rect(lv_obj_t *obj, card_rect_t rect)
 static card_rect_t device_rect(unsigned count, unsigned index)
 {
     int32_t width = (CONTENT_WIDTH - DEVICE_GAP * (count - 1)) / count;
-    return (card_rect_t){CONTENT_X + index * (width + DEVICE_GAP), DEVICE_TOP,
-                         width, DEVICE_HEIGHT};
+    int32_t x = CONTENT_X + index * (width + DEVICE_GAP);
+    /* Keep the outer right edge fixed despite integer division remainders. */
+    if (index + 1 == count) width = CONTENT_X + CONTENT_WIDTH - x;
+    return (card_rect_t){x, DEVICE_TOP, width, DEVICE_HEIGHT};
 }
 
 static card_rect_t collapsed(card_rect_t rect)
@@ -729,9 +730,9 @@ static void begin_phase(monitor_ui_state_t *state, motion_phase_t phase, uint32_
 }
 
 static void add_motion(monitor_ui_state_t *state, lv_obj_t *obj, card_rect_t from,
-                        card_rect_t to, bool pop)
+                        card_rect_t to)
 {
-    state->motions[state->motion_count++] = (card_motion_t){obj, from, to, pop};
+    state->motions[state->motion_count++] = (card_motion_t){obj, from, to};
     set_rect(obj, from);
 }
 
@@ -802,7 +803,7 @@ static void begin_reflow(monitor_ui_state_t *state, bool animate)
                 memcmp(&state->devices.devices[old], &state->target_devices.devices[i], sizeof(monitor_device_t)))
                 fill_device_card(next[i], &state->target_devices.devices[i], state->target_devices.count, to.w);
             if (animate && (from.x != to.x || from.w != to.w))
-                add_motion(state, next[i], from, to, false);
+                add_motion(state, next[i], from, to);
             else set_rect(next[i], to);
         } else {
             next[i] = make_device_card(state->root, &state->target_devices.devices[i],
@@ -830,7 +831,7 @@ static void begin_pop(monitor_ui_state_t *state)
         if (!state->entering[i]) continue;
         lv_obj_t *card = state->device_cards[i];
         card_rect_t to = device_rect(state->devices.count, i);
-        add_motion(state, card, collapsed(to), to, true);
+        add_motion(state, card, collapsed(to), to);
         lv_obj_clear_flag(card, LV_OBJ_FLAG_HIDDEN);
         state->entering[i] = false;
         break; /* Reuse the add animation, revealing one new card at a time. */
@@ -865,7 +866,7 @@ void monitor_ui_apply_devices_snapshot(lv_obj_t *root, const monitor_devices_sna
         if (device_match(&state->devices, i, snapshot) >= 0) continue;
         lv_obj_t *card = state->device_cards[i];
         card_rect_t from = card_rect(card);
-        add_motion(state, card, from, collapsed(from), false);
+        add_motion(state, card, from, collapsed(from));
     }
     if (!state->motion_count) {
         begin_reflow(state, true);
@@ -882,16 +883,11 @@ bool monitor_ui_animation_active(lv_obj_t *root)
     return false;
 }
 
-/* Fixed-point cubic ease-out. A short, single overshoot gives new cards a pop
- * without repeating/bouncing continuously. No opacity effects on a 1bpp panel. */
-static int32_t motion_progress(uint32_t elapsed, uint32_t duration, bool pop)
+/* Fixed-point cubic ease-out; grow monotonically inside the reserved slot. */
+static int32_t motion_progress(uint32_t elapsed, uint32_t duration)
 {
     if (elapsed >= duration) return 1024;
     int32_t t = (int32_t)(elapsed * 1024 / duration);
-    if (pop) {
-        if (t < 768) return t * 1080 / 768;
-        return 1080 - (t - 768) * 56 / 256;
-    }
     int32_t remain = 1024 - t;
     return 1024 - (int32_t)((int64_t)remain * remain * remain / (1024 * 1024));
 }
@@ -909,13 +905,17 @@ static void advance_cards(monitor_ui_state_t *state, uint32_t elapsed)
         uint32_t step = elapsed < remaining ? elapsed : remaining;
         state->motion_elapsed += step;
         elapsed -= step;
-        /* Collapse departing cards one at a time, then reflow survivors one
-         * at a time. A full-width dirty region must not combine several cards. */
-        if (state->motion_index < state->motion_count) {
-            card_motion_t *motion = &state->motions[state->motion_index];
-            int32_t p = motion_progress(state->motion_elapsed, state->motion_duration, motion->pop);
-            card_rect_t r = {lerp(motion->from.x, motion->to.x, p), lerp(motion->from.y, motion->to.y, p),
-                              lerp(motion->from.w, motion->to.w, p), lerp(motion->from.h, motion->to.h, p)};
+        /* Reflow every survivor on the same timeline. Interpolate edges so
+         * fixed outer edges and gaps remain exact, including pixel rounding. */
+        unsigned end = state->phase == MOTION_REFLOW ? state->motion_count : state->motion_index + 1;
+        for (unsigned i = state->motion_index; i < end && i < state->motion_count; ++i) {
+            card_motion_t *motion = &state->motions[i];
+            int32_t p = motion_progress(state->motion_elapsed, state->motion_duration);
+            int32_t left = lerp(motion->from.x, motion->to.x, p);
+            int32_t top = lerp(motion->from.y, motion->to.y, p);
+            int32_t right = lerp(motion->from.x + motion->from.w, motion->to.x + motion->to.w, p);
+            int32_t bottom = lerp(motion->from.y + motion->from.h, motion->to.y + motion->to.h, p);
+            card_rect_t r = {left, top, right - left, bottom - top};
             bool width_changed = lv_obj_get_style_width(motion->obj, 0) != r.w;
             set_rect(motion->obj, r);
             if (width_changed) {
@@ -925,7 +925,9 @@ static void advance_cards(monitor_ui_state_t *state, uint32_t elapsed)
             }
         }
         if (state->motion_elapsed < total) break;
-        if (++state->motion_index < state->motion_count) {
+        if (state->phase == MOTION_REFLOW) state->motion_index = state->motion_count;
+        else ++state->motion_index;
+        if (state->motion_index < state->motion_count) {
             state->motion_elapsed = 0;
             if (!elapsed) break;
             continue;
@@ -952,7 +954,7 @@ bool monitor_ui_advance(lv_obj_t *root, uint32_t elapsed_ms)
     if (state->clock_mask) {
         uint32_t remaining = ROLL_DURATION_MS - state->clock_elapsed;
         state->clock_elapsed += elapsed_ms < remaining ? elapsed_ms : remaining;
-        int32_t offset = motion_progress(state->clock_elapsed, ROLL_DURATION_MS, false) * monitor_ndot57_30.line_height / 1024;
+        int32_t offset = motion_progress(state->clock_elapsed, ROLL_DURATION_MS) * monitor_ndot57_30.line_height / 1024;
         for (unsigned i = 0; i < 4; ++i) {
             if (!(state->clock_mask & (1U << i))) continue;
             lv_obj_set_y(state->clock_current[i], -offset);
@@ -966,7 +968,7 @@ bool monitor_ui_advance(lv_obj_t *root, uint32_t elapsed_ms)
         uint32_t remaining = ROLL_DURATION_MS - roll->elapsed;
         roll->elapsed += elapsed_ms < remaining ? elapsed_ms : remaining;
         int32_t height = lv_obj_get_style_height(roll->viewport, 0);
-        int32_t offset = motion_progress(roll->elapsed, ROLL_DURATION_MS, false) * height / 1024;
+        int32_t offset = motion_progress(roll->elapsed, ROLL_DURATION_MS) * height / 1024;
         lv_obj_set_style_translate_y(roll->current, -offset, 0);
         lv_obj_set_style_translate_y(roll->next, height - offset, 0);
         if (roll->current_icon) {

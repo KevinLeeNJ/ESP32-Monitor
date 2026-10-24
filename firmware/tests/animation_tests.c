@@ -150,13 +150,11 @@ static void test_devices(void)
     lv_obj_t *pi = card(r.root, 1);
     CHECK(lv_obj_has_flag(pi, LV_OBJ_FLAG_HIDDEN), "new device stays hidden while survivors make room");
     monitor_ui_advance(r.root, 120); monitor_renderer_render(&r);
-    CHECK(lv_obj_get_width(pc) == 182 && lv_obj_get_x(pc) == 202,
-          "second survivor stays still while the first survivor reflows");
+    CHECK(lv_obj_get_width(pc) < 183 && lv_obj_get_x(pc) > 202,
+          "both survivors resize and move together");
     CHECK(lv_obj_get_width(nas) < 182 && lv_obj_get_width(nas) > 120, "survivor resizes gradually");
     CHECK(lv_obj_has_flag(pi, LV_OBJ_FLAG_HIDDEN), "new device has not popped before reflow finishes");
     monitor_ui_advance(r.root, 120); monitor_renderer_render(&r);
-    CHECK(lv_obj_has_flag(pi, LV_OBJ_FLAG_HIDDEN), "new card waits for all survivors to reflow sequentially");
-    monitor_ui_advance(r.root, 240); monitor_renderer_render(&r);
     CHECK(!lv_obj_has_flag(pi, LV_OBJ_FLAG_HIDDEN) && lv_obj_get_width(pi) == 2,
           "new device starts its pop after reflow");
     settle(&r);
@@ -197,6 +195,67 @@ static void test_devices(void)
 }
 
 
+/* Exercise the requested 1,2,3 -> 1,4,2,3 sequence frame by frame. */
+static void test_middle_insert_edges(monitor_frame_variant_t variant)
+{
+    monitor_renderer_t r;
+    CHECK(monitor_renderer_init(&r, monitor_ui_create), "create edge constraint UI");
+    monitor_devices_snapshot_t three = {.count = 3, .status = MONITOR_DEVICES_READY};
+    memcpy(three.devices, DEVICES, 3 * sizeof(DEVICES[0]));
+    monitor_ui_apply_devices_snapshot(r.root, &three);
+    monitor_ui_set_variant(r.root, variant);
+    monitor_renderer_render(&r);
+    monitor_ui_set_animations_enabled(r.root, true);
+    lv_obj_t *one = card(r.root, 0), *two = card(r.root, 1), *three_card = card(r.root, 2);
+    monitor_devices_snapshot_t four = {.count = 4, .status = MONITOR_DEVICES_READY};
+    four.devices[0] = DEVICES[0]; four.devices[1] = DEVICES[3];
+    four.devices[2] = DEVICES[1]; four.devices[3] = DEVICES[2];
+    monitor_ui_apply_devices_snapshot(r.root, &four);
+    lv_obj_t *added = card(r.root, 1);
+    int32_t previous_width = 120, previous_x = 140;
+    for (unsigned t = 15; t <= 240; t += 15) {
+        monitor_ui_advance(r.root, 15); monitor_renderer_render(&r);
+        CHECK(lv_obj_get_x(one) == 15, "first card left edge remains anchored during insertion");
+        CHECK(lv_obj_get_x(three_card) + lv_obj_get_width(three_card) == 385,
+              "last card right edge remains anchored during insertion");
+        CHECK(lv_obj_get_x(three_card) - lv_obj_get_x(two) - lv_obj_get_width(two) == 5,
+              "adjacent survivors preserve their gap at every insertion frame");
+        CHECK(lv_obj_get_width(two) <= previous_width && lv_obj_get_x(two) >= previous_x,
+              "middle survivor moves right while shrinking");
+        CHECK(lv_obj_has_flag(added, LV_OBJ_FLAG_HIDDEN) == (t < 240),
+              "new card starts growing only after all survivors settle");
+        previous_width = lv_obj_get_width(two); previous_x = lv_obj_get_x(two);
+    }
+    previous_width = 2;
+    for (unsigned t = 15; t <= 240; t += 15) {
+        monitor_ui_advance(r.root, 15); monitor_renderer_render(&r);
+        CHECK(lv_obj_get_width(added) >= previous_width && lv_obj_get_width(added) <= 88,
+              "new card grows monotonically within its reserved slot");
+        CHECK(lv_obj_get_x(one) == 15 && lv_obj_get_width(one) == 88 && lv_obj_get_x(two) == 201,
+              "survivors stay still throughout the new card reveal");
+        previous_width = lv_obj_get_width(added);
+    }
+    CHECK(!monitor_ui_animation_active(r.root), "insertion completes in two shared phases");
+    monitor_ui_apply_devices_snapshot(r.root, &three);
+    for (unsigned t = 10; t <= 160; t += 10) {
+        monitor_ui_advance(r.root, 10); monitor_renderer_render(&r);
+        CHECK(lv_obj_get_width(one) == 88 && lv_obj_get_x(two) == 201,
+              "survivors wait while the removed card collapses");
+    }
+    for (unsigned t = 15; t <= 240; t += 15) {
+        monitor_ui_advance(r.root, 15); monitor_renderer_render(&r);
+        CHECK(lv_obj_get_x(one) == 15 &&
+              lv_obj_get_x(three_card) + lv_obj_get_width(three_card) == 385,
+              "outer survivor edges remain anchored during deletion");
+        CHECK(lv_obj_get_x(three_card) - lv_obj_get_x(two) - lv_obj_get_width(two) == 5,
+              "adjacent survivors preserve their gap at every deletion frame");
+    }
+    CHECK(!monitor_ui_animation_active(r.root) && lv_obj_get_width(one) == 120 &&
+          card(r.root, 1) == two && card(r.root, 2) == three_card,
+          "deletion restores the original layout and card identities");
+    monitor_renderer_deinit(&r);
+}
+
 static void test_serial_card_removal(void)
 {
     monitor_ui_set_clock_text("12:34", "FRI 23 OCT");
@@ -213,20 +272,20 @@ static void test_serial_card_removal(void)
     monitor_ui_apply_devices_snapshot(r.root, &next);
     monitor_ui_advance(r.root, 160); monitor_renderer_render(&r);
     CHECK(lv_obj_get_width(nas)==88 && lv_obj_get_width(pi)==88 &&
-          lv_obj_get_width(pc)==88 && lv_obj_get_width(router)==88,
+          lv_obj_get_width(pc)==88 && lv_obj_get_width(router)==91,
           "card topology waits while clock and information roll");
     monitor_ui_advance(r.root, 160); monitor_renderer_render(&r);
     CHECK(lv_obj_get_width(pi)==88 && lv_obj_get_width(pc)==88,
           "finishing values starts removal without advancing its fresh timeline");
     monitor_ui_advance(r.root, 80); monitor_renderer_render(&r);
     CHECK(lv_obj_get_width(pi)<88 && lv_obj_get_width(pc)==88 &&
-          lv_obj_get_width(router)==88 && lv_obj_get_width(nas)==88,
+          lv_obj_get_width(router)==91 && lv_obj_get_width(nas)==88,
           "only the first departing card collapses");
     monitor_ui_advance(r.root, 80); monitor_renderer_render(&r);
     CHECK(lv_obj_get_width(pi)==2 && lv_obj_get_width(pc)==88,
           "the next removal starts only after the first is collapsed");
     monitor_ui_advance(r.root, 80); monitor_renderer_render(&r);
-    CHECK(lv_obj_get_width(pc)<88 && lv_obj_get_width(router)==88 && lv_obj_get_width(nas)==88,
+    CHECK(lv_obj_get_width(pc)<88 && lv_obj_get_width(router)==91 && lv_obj_get_width(nas)==88,
           "second removal leaves last departing card and survivor still");
     monitor_ui_advance(r.root, 240); monitor_renderer_render(&r);
     CHECK(card(r.root,0)==nas && !card(r.root,1) && lv_obj_get_width(nas)==88,
@@ -374,7 +433,8 @@ static void test_first_data(monitor_frame_variant_t variant, unsigned device_cou
     monitor_renderer_render(&r);
     const int32_t widths[] = {0, 370, 182, 120, 88};
     for (unsigned i = 0; i < device_count; ++i) {
-        CHECK(lv_obj_get_width(card(r.root, i)) == widths[device_count], "settled card width matches the number of Devices");
+        CHECK(lv_obj_get_width(card(r.root, i)) ==
+              (i + 1 == device_count ? 385 - lv_obj_get_x(card(r.root, i)) : widths[device_count]), "settled card width matches the number of Devices");
         CHECK(lv_obj_get_x(card(r.root, i)) == 15 + i * (widths[device_count] + 5) &&
               lv_obj_get_y(card(r.root, i)) == 112 && lv_obj_get_height(card(r.root, i)) == 180,
               "settled device cards have correct positions and do not overlap");
@@ -451,6 +511,8 @@ int main(void)
     test_clock(MONITOR_FRAME_NORMAL);
     test_clock(MONITOR_FRAME_INVERTED);
     test_devices();
+    test_middle_insert_edges(MONITOR_FRAME_NORMAL);
+    test_middle_insert_edges(MONITOR_FRAME_INVERTED);
     test_configuring_to_offline();
     test_serial_card_removal();
     for (unsigned count = 1; count <= 4; ++count) {
