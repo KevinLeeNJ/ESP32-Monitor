@@ -277,6 +277,9 @@ static bool boot_data_complete(const display_snapshot_t *snapshot)
 {
     /* A successful empty Devices response is complete too. Failed/unconfigured
      * sources retain -- until the fixed deadline; battery is not a roller. */
+    if (snapshot->wifi_state == MONITOR_WIFI_OFFLINE)
+        return snapshot->temperature_tenths_c != MONITOR_TEMPERATURE_UNAVAILABLE &&
+               snapshot->humidity_percent >= 0;
     return snapshot->time_text[0] != '-' && snapshot->time_text[0] != '\0' &&
            snapshot->temperature_tenths_c != MONITOR_TEMPERATURE_UNAVAILABLE &&
            snapshot->humidity_percent >= 0 &&

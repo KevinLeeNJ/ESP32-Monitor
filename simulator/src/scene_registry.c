@@ -123,7 +123,34 @@ FIRST_DATA_FACTORY(first_data_3, 3)
 FIRST_DATA_FACTORY(first_data_2, 2)
 FIRST_DATA_FACTORY(first_data_1, 1)
 
+static lv_obj_t *create_configuring(lv_obj_t *parent, monitor_frame_variant_t variant)
+{
+    lv_obj_t *root = monitor_ui_create_waiting(parent, variant);
+    monitor_ui_snapshot_t ui = {.time_text = "19:56", .date_text = "SAT 24 OCT",
+        .wifi_state = MONITOR_WIFI_PROVISIONING, .battery_percent = 78,
+        .weather_condition = MONITOR_WEATHER_UNKNOWN,
+        .temperature_tenths_c = 245, .humidity_percent = 58, .aqi = -1};
+    monitor_ui_apply_snapshot(root, &ui);
+    return root;
+}
+
+static lv_obj_t *create_local_offline(lv_obj_t *parent, monitor_frame_variant_t variant)
+{
+    lv_obj_t *root = create_configuring(parent, variant);
+    /* Local readings have already appeared during configuration. */
+    monitor_ui_set_animations_enabled(root, false);
+    monitor_ui_set_animations_enabled(root, true);
+    monitor_ui_snapshot_t ui = {.time_text = "19:56", .date_text = "SAT 24 OCT",
+        .wifi_state = MONITOR_WIFI_OFFLINE, .battery_percent = 78,
+        .weather_condition = MONITOR_WEATHER_UNKNOWN,
+        .temperature_tenths_c = 245, .humidity_percent = 58, .aqi = -1};
+    monitor_ui_apply_snapshot(root, &ui);
+    return root;
+}
+
 static const simulator_scene_t SCENES[] = {
+    { .name = "configuring", .description = "Configuration session status", .create = create_configuring },
+    { .name = "offline", .description = "Offline retains local data after configuration", .create = create_local_offline },
     { .name = "monitor-waiting", .description = "Live boot placeholders before first data", .create = create_waiting },
     { .name = "animation-load-3", .description = "First snapshot with three Devices", .create = create_first_data_3 },
     { .name = "animation-load-2", .description = "First snapshot with two Devices", .create = create_first_data_2 },

@@ -50,6 +50,11 @@ public:
     std::string GetIpAddress() const { return ip_address_; }
     uint8_t GetChannel();
     void SetPowerSaveLevel(WifiPowerSaveLevel level);
+    // Full-channel background scan for the temporary LAN configuration page.
+    void ScanForConfig();
+    void OnScanResults(std::function<void(const std::vector<wifi_ap_record_t>&)> callback) {
+        on_scan_results_ = callback;
+    }
 
     void OnConnect(std::function<void(const std::string& ssid)> on_connect);
     void OnConnected(std::function<void(const std::string& ssid)> on_connected);
@@ -87,6 +92,7 @@ private:
     std::function<void(const std::string& ssid)> on_connected_;
     std::function<void(int reason)> on_disconnected_;
     std::function<void()> on_scan_begin_;
+    std::function<void(const std::vector<wifi_ap_record_t>&)> on_scan_results_;
     std::vector<WifiApRecord> connect_queue_;
     bool was_connected_ = false;  // Track if we were connected before disconnection
     bool use_saved_channels_scan_ = true;       // First scan uses saved channels when known

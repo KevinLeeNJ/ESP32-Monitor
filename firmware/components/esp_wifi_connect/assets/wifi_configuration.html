@@ -530,14 +530,14 @@
             <form action="/submit" method="post" onsubmit="submitForm(event)">
                 <p>
                     <label for="ssid">SSID:</label>
-                    <input type="text" id="ssid" name="ssid" required readonly>
+                    <input type="text" id="ssid" name="ssid">
                 </p>
                 <p>
                     <label for="password" data-lang="password">Password:</label>
                     <input type="password" id="password" name="password">
                 </p>
                 <p>
-                    <input type="submit" value="Connect" id="button" data-lang-value="connect">
+                    <input type="submit" value="Save and exit" id="button" data-lang-value="save_exit" disabled>
                 </p>
             </form>
             <div id="ap_list"></div>
@@ -630,7 +630,7 @@
                 </div>
 
                 <p>
-                    <input type="submit" value="Save" id="advanced_button" data-lang-value="save" disabled>
+                    <input type="submit" value="Save and exit" id="advanced_button" data-lang-value="save_exit" disabled>
                 </p>
             </div>
         </form>
@@ -1462,6 +1462,7 @@
             weather_longitude: 'Weather longitude (blank for automatic location):',
             weather_latitude_hint: 'e.g. 31.2304', weather_longitude_hint: 'e.g. 121.4737',
             weather_host: 'QWeather API Host:', weather_host_hint: 'Enter your QWeather API Host',
+            save_exit: 'Save and exit',
             weather_key: 'QWeather API Key:', token_keep: 'Leave blank to keep the saved credential',
             token_configured: 'Configured (leave blank to keep unchanged)',
             devices_url: 'Devices API Base URL:',
@@ -1485,7 +1486,7 @@
             invalid_devices_api_url: '请输入 HTTP(S) 基地址，端口可为 1–65535，不允许包含账号密码、路径、查询参数或片段。',
             invalid_devices_api_token: '请输入服务端生成的 64 位十六进制只读 Token。',
             devices_token_required: '启用 Devices 地址前请先设置只读 Token。',
-            save_failed: '保存配置失败。', configuration_saved: '配置已保存',
+            save_exit: '保存并退出', save_failed: '保存配置失败。', configuration_saved: '配置已保存',
             load_failed: '读取配置失败，请刷新页面后再保存。'
         });
         Object.assign(translations['zh-TW'], {
@@ -1499,7 +1500,7 @@
             invalid_devices_api_url: '請輸入 HTTP(S) 基底網址，連接埠可為 1–65535，不含帳號密碼、路徑、查詢參數或片段。',
             invalid_devices_api_token: '請輸入伺服器產生的 64 位十六進位唯讀 Token。',
             devices_token_required: '啟用 Devices 網址前請先設定唯讀 Token。',
-            save_failed: '儲存設定失敗。', configuration_saved: '設定已儲存',
+            save_exit: '儲存並退出', save_failed: '儲存設定失敗。', configuration_saved: '設定已儲存',
             load_failed: '讀取設定失敗，請重新載入後再儲存。'
         });
         function translate(key) {
@@ -1607,6 +1608,7 @@
          * Delete saved Wi-Fi network
          */
         function deleteItem(item, index) {
+            reportEdit();
             item.disabled = true;
             fetch('/saved/delete?index=' + index)
                 .then(response => response.json())
@@ -1619,6 +1621,7 @@
          * Set default Wi-Fi network (move to top)
          */
         function setDefaultItem(item, index) {
+            reportEdit();
             item.disabled = true;
             fetch('/saved/set_default?index=' + index)
                 .then(response => response.json())
@@ -1642,7 +1645,7 @@
          * Load available Wi-Fi networks
          */
         function loadAPList() {
-            if (button.disabled) {
+            if (saving) {
                 return;
             }
 
@@ -1657,7 +1660,7 @@
                 apList.innerHTML = '<p class="scanning">' + translations[lang].scanning + '</p>';
             }
 
-            fetch('/scan')
+            return fetch('/scan')
                 .then(response => response.json())
                 .then(data => {
                     // Update global 5G support status
@@ -1666,6 +1669,8 @@
                     // Use select_wifi_5g if 5G is supported, otherwise use select_wifi
                     const selectText = support5G ? translations[lang].select_wifi_5g : translations[lang].select_wifi;
                     apList.innerHTML = '<p>' + selectText + '</p>';
+                    if (!data.aps.length)
+                        apList.innerHTML += '<p class="scanning">' + translations[lang].scanning + '</p>';
                     
                     // Iterate through available APs
                     data.aps.forEach(ap => {
@@ -1682,8 +1687,8 @@
                         
                         link.addEventListener('click', event => {
                             event.preventDefault();
+                            reportEdit();
                             ssid.value = ap.ssid;
-                            ssid.setAttribute('readonly', '');
                             ssid.blur();
                         });
                         
@@ -1705,62 +1710,23 @@
         /**
          * Submit Wi-Fi connection form
          */
-        async function submitForm(event) {
-            event.preventDefault();
-            button.disabled = true;
-            error.textContent = '';
+        async function submitForm(event) { return submitAdvancedForm(event); }
 
-            // Show loading animation
-            const loadingOverlay = document.getElementById('loadingOverlay');
-            loadingOverlay.classList.add('show');
-
-            const payload = {
-                ssid: ssid.value,
-                password: document.getElementById('password').value
-            };
-
-            try {
-                const response = await fetch('/submit', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(payload)
-                });
-
-                const data = await response.json();
-                if (!response.ok || !data.success) {
-                    throw new Error(data.error || 'Connection failed');
-                }
-
-                // Connection successful, redirect to done page with localized copy.
-                button.disabled = false;
-                const lang = document.getElementById('language').value;
-                const successMessage = (translations[lang] && translations[lang].config_success) ||
-                    translations['en-US'].config_success;
-                const doneUrl = new URL('/done.html', window.location.href);
-                doneUrl.searchParams.set('lang', lang);
-                doneUrl.searchParams.set('message', successMessage);
-                window.location.href = doneUrl.pathname + doneUrl.search;
-            } catch (err) {
-                // Hide loading animation on error
-                loadingOverlay.classList.remove('show');
-                error.textContent = err.message;
-                button.disabled = false;
-            }
-        }
-
-        /**
-         * Submit advanced configuration form
-         */
+        let advancedLoaded = false;
+        let saving = false;
         async function submitAdvancedForm(event) {
             event.preventDefault();
+            if (!advancedLoaded || saving) return;
+            saving = true;
+            button.disabled = true;
             const advancedButton = document.getElementById('advanced_button');
             const advancedError = document.getElementById('advanced_error');
             advancedButton.disabled = true;
             advancedError.textContent = '';
-
+            error.textContent = '';
             const config = {
+                ssid: document.getElementById('ssid').value,
+                password: document.getElementById('password').value,
                 ota_url: document.getElementById('ota_url').value,
                 latitude: document.getElementById('latitude').value.trim(),
                 longitude: document.getElementById('longitude').value.trim(),
@@ -1776,28 +1742,41 @@
 
             try {
                 const response = await fetch('/advanced/submit', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify(config)
                 });
-
                 const data = await response.json();
-                if (!data.success) {
+                if (!response.ok || !data.success)
                     throw new Error(translate(data.error in translations['en-US'] ? data.error : 'save_failed'));
-                }
-
-                // Saving any advanced configuration ends the temporary
-                // configuration session, just like saving Wi-Fi credentials.
-                await fetch('/exit', { method: 'POST' });
-                advancedButton.disabled = false;
+                // The server exits immediately after acknowledging this one save.
                 showToast(translate('configuration_saved'));
             } catch (err) {
                 advancedError.textContent = err instanceof TypeError || err instanceof SyntaxError ? translate('save_failed') : err.message;
+                error.textContent = advancedError.textContent;
+                saving = false;
+                button.disabled = false;
                 advancedButton.disabled = false;
             }
         }
+
+        // Coalesce bursts of typing, while reporting the final edit as well.
+        let activityTimer;
+        let lastActivity = -Infinity;
+        function reportEdit() {
+            if (saving) return;
+            const now = Date.now();
+            if (now - lastActivity >= 1000) {
+                lastActivity = now;
+                fetch('/activity', {method: 'POST'}).catch(() => {});
+            }
+            clearTimeout(activityTimer);
+            activityTimer = setTimeout(() => {
+                lastActivity = Date.now();
+                fetch('/activity', {method: 'POST'}).catch(() => {});
+            }, 300);
+        }
+        document.addEventListener('input', reportEdit);
+        document.addEventListener('change', reportEdit);
 
         // ========== UI Functions ==========
         
@@ -1866,6 +1845,8 @@
                 if (data.sleep_mode !== undefined) {
                     document.getElementById('sleep_mode').checked = data.sleep_mode;
                 }
+                advancedLoaded = true;
+                button.disabled = false;
                 document.getElementById('advanced_button').disabled = false;
             } catch (error) {
                 console.error('Error loading advanced config:', error);
@@ -1879,6 +1860,7 @@
          */
         function clearOtaUrl() {
             document.getElementById('ota_url').value = '';
+            reportEdit();
         }
 
         // ========== Initialization ==========

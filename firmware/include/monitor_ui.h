@@ -28,6 +28,7 @@ typedef enum {
     MONITOR_WIFI_PROVISIONING = 0,
     MONITOR_WIFI_CONNECTED,
     MONITOR_WIFI_DISCONNECTED,
+    MONITOR_WIFI_OFFLINE,
 } monitor_wifi_state_t;
 
 typedef enum {
