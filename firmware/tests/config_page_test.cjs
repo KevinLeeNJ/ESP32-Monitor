@@ -22,6 +22,16 @@ function scanElement() {
         querySelector() { return this.children[0] || null; },
         addEventListener(name, callback) { this.events[name] = callback; }, blur() {}};
 }
+// Model native select defaults, including the selected option. This catches
+// accidentally submitting the first (lowest-power) option on a fresh page.
+for (const match of html.matchAll(/<select[^>]*id="([^"]+)"[^>]*>([\s\S]*?)<\/select>/g)) {
+    const el = elements.get(match[1]);
+    const options = [...match[2].matchAll(/<option\b([^>]*)>/g)].map(option => ({
+        value: option[1].match(/value="([^"]*)"/)?.[1] || '', selected: /\bselected\b/.test(option[1])
+    }));
+    el.options = options;
+    el.value = (options.find(option => option.selected) || options[0])?.value || '';
+}
 elements.set('ap_list', scanElement());
 elements.get('ssid').blur = () => {};
 const document = {
@@ -32,7 +42,7 @@ const document = {
         return key ? attributed.filter(el => el.getAttribute(key)) : [];
     },
 };
-let calls = [], mode = 'load';
+let calls = [], mode = 'load', savedPower;
 let timers = new Map(), timerId = 0, fakeNow = 0;
 const listeners = new Map();
 document.addEventListener = (name, fn) => listeners.set(name, fn);
@@ -41,13 +51,14 @@ const ctx = vm.createContext({document, console, window: {addEventListener() {}}
     fetch: async (url, options) => {
         calls.push({url, options});
         const result = mode === 'scan' ? {support_5g: false, aps: [{ssid: 'Lab "2.4G"\\AP', rssi: -42, authmode: 3}]} :
-            mode === 'empty_scan' ? {support_5g: false, aps: []} : mode === 'load' ? {devices_api_url: 'https://baseurl.com:8443', devices_api_token_configured: true, qweather_key_configured: true} :
+            mode === 'empty_scan' ? {support_5g: false, aps: []} : mode === 'load' ? {devices_api_url: 'https://baseurl.com:8443', devices_api_token_configured: true, qweather_key_configured: true, max_tx_power: savedPower} :
             mode === 'invalid' ? {success: false, error: 'invalid_devices_api_url'} : {success: true};
         return {ok: true, json: async () => result};
     }});
 ctx.Date = {now: () => fakeNow};
 vm.runInContext(script, ctx);
 (async () => {
+    assert.equal(elements.get('max_tx_power').value, '80', 'a fresh page defaults to normal TX power');
     const langs = vm.runInContext('Object.keys(translations)', ctx);
     for (const lang of langs) {
         elements.get('language').value = lang;
@@ -63,6 +74,12 @@ vm.runInContext(script, ctx);
     await vm.runInContext('submitForm({preventDefault() {}})', ctx);
     assert.equal(calls.length, 0, 'save waits for advanced config to load, preventing defaults from overwriting saved fields');
     await vm.runInContext('loadAdvancedConfig()', ctx);
+    assert.equal(elements.get('max_tx_power').value, '80', 'missing TX power cannot select the minimum');
+    for (const [actual, displayed] of [[0, '80'], [8, '8'], [52, '52'], [78, '80'], [80, '80']]) {
+        savedPower = actual;
+        await vm.runInContext('loadAdvancedConfig()', ctx);
+        assert.equal(elements.get('max_tx_power').value, displayed, 'reflect driver TX power, preserving explicit low-power choices');
+    }
     assert.equal(elements.get('devices_api_url').value, 'https://baseurl.com:8443');
     assert.equal(elements.get('devices_api_token').value, '');
     assert.match(elements.get('devices_api_token').placeholder, /已配置/);
@@ -75,6 +92,7 @@ vm.runInContext(script, ctx);
     await vm.runInContext('submitAdvancedForm({preventDefault() {}})', ctx);
     const config = JSON.parse(calls[0].options.body);
     assert.equal(config.devices_api_url, 'https://baseurl.com:8443');
+    assert.equal(config.max_tx_power, 80, 'saving unrelated fields retains normal TX power');
     assert.equal(config.ssid, 'test-network');
     assert.equal(config.password, 'test-password');
     assert.equal(config.devices_api_token, '');

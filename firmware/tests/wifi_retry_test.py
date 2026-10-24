@@ -25,6 +25,7 @@ using esp_event_base_t=int;
 struct wifi_event_sta_disconnected_t {int reason;};
 struct ip_event_got_ip_t {struct {int ip;} ip_info;};
 struct wifi_ap_record_t {uint8_t primary;};
+enum class WifiPowerSaveLevel { LOW_POWER };
 static unsigned connects,scans,closes,unregistered;
 static unsigned timer_starts,timer_stops,timer_deletes;
 static int64_t last_delay;
@@ -52,7 +53,9 @@ class WifiStation {
 public:
     int event_group_=1,reconnect_count_=0;
     void *timer_handle_=(void *)1,*instance_any_id_=(void *)2,*instance_got_ip_=(void *)3,*station_netif_=(void *)4;
-    bool was_connected_=false,use_saved_channels_scan_=false;
+    bool was_connected_=false,use_saved_channels_scan_=false,last_scan_used_saved_channels_=false;
+    WifiPowerSaveLevel power=WifiPowerSaveLevel::LOW_POWER;
+    void SetPowerSaveLevel(WifiPowerSaveLevel level){power=level;}
     int scan_min_interval_microseconds_=10000000,scan_max_interval_microseconds_=300000000,scan_current_interval_microseconds_=10000000;
     std::string ssid_="Saved",ip_address_;
     std::vector<int> connect_queue_;
@@ -97,14 +100,23 @@ int main() {
     s.connect_queue_.push_back(1);unsigned timers=timer_starts;
     WifiStation::WifiEventHandler(&s,0,WIFI_EVENT_STA_DISCONNECTED,&event);
     assert(s.queue_attempts==1 && timer_starts==timers);
+    // A visible but unusable AP on the cached channel must not hide other APs.
+    s.last_scan_used_saved_channels_=s.use_saved_channels_scan_=true;
+    unsigned scans_before=scans;
+    WifiStation::WifiEventHandler(&s,0,WIFI_EVENT_STA_DISCONNECTED,&event);
+    assert(scans==scans_before+1 && !s.use_saved_channels_scan_ && !s.last_scan_used_saved_channels_);
+    assert(timer_starts==timers);
     ip_event_got_ip_t ip{};WifiStation::IpEventHandler(&s,0,0,&ip);
     assert(successes==1 && s.was_connected_ && s.reconnect_count_==0 && s.connect_queue_.empty());
     assert(s.use_saved_channels_scan_ && s.scan_current_interval_microseconds_==7000000 && (bits&WIFI_EVENT_CONNECTED));
+    assert(s.power==WifiPowerSaveLevel::LOW_POWER);
     unsigned before=scans;
     WifiStation::WifiEventHandler(&s,0,WIFI_EVENT_STA_START,nullptr);assert(scans==before+1);
+    s.connect_queue_={1,2};s.reconnect_count_=5;
     s.Stop();
     assert(stopped && !s.timer_handle_ && !s.instance_any_id_ && !s.instance_got_ip_ && !s.station_netif_);
     assert(!s.was_connected_ && !(bits&WIFI_EVENT_CONNECTED) && (bits&WIFI_EVENT_STOPPED));
+    assert(s.connect_queue_.empty() && s.reconnect_count_==0 && s.ip_address_.empty());
     // Host never delivers callbacks after unregister; the stop order prevents new scans.
     assert(closes==1 && timer_deletes==1 && unregistered==2);
     puts("Station five-retry limit, disconnect notification coalescing, 10/20/40/80/160/300s capped backoff, custom cap, AP switching, success reset and stop cleanup: PASS");

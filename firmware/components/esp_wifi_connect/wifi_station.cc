@@ -87,6 +87,9 @@ void WifiStation::Stop() {
     
     // Reset was_connected_ flag to prevent stale state from affecting subsequent sessions
     was_connected_ = false;
+    connect_queue_.clear();
+    reconnect_count_ = 0;
+    ip_address_.clear();
 
     // Clear connected bit
     xEventGroupClearBits(event_group_, WIFI_EVENT_CONNECTED);
@@ -121,6 +124,8 @@ void WifiStation::Start() {
     xEventGroupClearBits(event_group_, WIFI_EVENT_STOPPED | WIFI_EVENT_SCAN_DONE_BIT);
     use_saved_channels_scan_ = true;
     last_scan_used_saved_channels_ = false;
+    connect_queue_.clear();
+    reconnect_count_ = 0;
     
     // Create the default WiFi station interface
     station_netif_ = esp_netif_create_default_wifi_sta();
@@ -249,6 +254,8 @@ void WifiStation::HandleScanResult() {
     // an already connected station, even when a stronger saved AP is found.
     if (IsConnected()) return;
 
+    // Rebuild candidates from the current scan and current credentials only.
+    connect_queue_.clear();
     auto& ssid_manager = SsidManager::GetInstance();
     auto ssid_list = ssid_manager.GetSsidList();
     for (int i = 0; i < ap_num; i++) {
@@ -342,6 +349,8 @@ void WifiStation::StartConnect() {
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
 
     reconnect_count_ = 0;
+    // Keep power saving at the minimum while authenticating and associating.
+    SetPowerSaveLevel(WifiPowerSaveLevel::BALANCED);
     ESP_ERROR_CHECK(esp_wifi_connect());
 }
 
@@ -452,6 +461,15 @@ void WifiStation::WifiEventHandler(void* arg, esp_event_base_t event_base, int32
             this_->StartConnect();
             return;
         }
+
+        if (this_->last_scan_used_saved_channels_) {
+            // Seeing a saved AP does not mean it can authenticate. Search other
+            // channels too after its retry budget is exhausted.
+            this_->use_saved_channels_scan_ = false;
+            this_->last_scan_used_saved_channels_ = false;
+            this_->StartScan();
+            return;
+        }
         
         ESP_LOGI(TAG, "No more AP to connect, next scan in %d seconds", 
                  this_->scan_current_interval_microseconds_ / 1000 / 1000);
@@ -469,6 +487,9 @@ void WifiStation::IpEventHandler(void* arg, esp_event_base_t event_base, int32_t
     esp_ip4addr_ntoa(&event->ip_info.ip, ip_address, sizeof(ip_address));
     this_->ip_address_ = ip_address;
     ESP_LOGI(TAG, "Got IP: %s", this_->ip_address_.c_str());
+
+    // Switch to maximum modem sleep only after the station has an IP address.
+    this_->SetPowerSaveLevel(WifiPowerSaveLevel::LOW_POWER);
     
     xEventGroupSetBits(this_->event_group_, WIFI_EVENT_CONNECTED);
     if (this_->timer_handle_ != nullptr) esp_timer_stop(this_->timer_handle_);
