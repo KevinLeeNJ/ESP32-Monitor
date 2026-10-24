@@ -14,8 +14,12 @@ enum {
 static inline uint32_t monitor_schedule_due(int64_t previous_s, int64_t now_s)
 {
     uint32_t due = 0;
+    if (previous_s >= 0 && now_s < previous_s)
+        return MONITOR_SCHEDULE_DEVICES | MONITOR_SCHEDULE_SENSORS | MONITOR_SCHEDULE_WEATHER;
     if (previous_s < 0 || previous_s / 30 != now_s / 30) due |= MONITOR_SCHEDULE_DEVICES;
-    if (previous_s < 0 || previous_s / 60 != now_s / 60) due |= MONITOR_SCHEDULE_SENSORS;
+    /* Sample at :30 to align with one of the API polls and precede the minute roll. */
+    if (previous_s < 0 || (previous_s + 30) / 60 != (now_s + 30) / 60)
+        due |= MONITOR_SCHEDULE_SENSORS;
     if (previous_s < 0 || previous_s / 900 != now_s / 900) due |= MONITOR_SCHEDULE_WEATHER;
     return due;
 }

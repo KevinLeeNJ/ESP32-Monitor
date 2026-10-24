@@ -19,6 +19,7 @@
 #define BATTERY_ADC_CHANNEL ADC_CHANNEL_3 /* GPIO4 on ESP32-S3 */
 #define BATTERY_DIVIDER_RATIO 3.0f       /* Waveshare board resistor divider */
 #define SHTC3_ADDRESS 0x70
+#define SENSOR_NOTIFY_DEFER_DISPLAY (1U << 0)
 
 static adc_oneshot_unit_handle_t s_adc;
 static adc_cali_handle_t s_adc_cali;
@@ -119,6 +120,7 @@ static void sensor_task(void *arg)
 {
     (void)arg;
     bool initial_sample = true;
+    uint32_t notified = 0;
     for (;;) {
         bool display_changed = false;
         bool value_changed = false;
@@ -127,11 +129,11 @@ static void sensor_task(void *arg)
         value_changed = false;
         if (!read_environment(&value_changed)) { portENTER_CRITICAL(&s_data_mux); s_data.environment_valid = false; portEXIT_CRITICAL(&s_data_mux); }
         display_changed |= value_changed;
-        if (display_changed) monitor_display_refresh_request_reason(
+        if (display_changed && (initial_sample || !(notified & SENSOR_NOTIFY_DEFER_DISPLAY))) monitor_display_refresh_request_reason(
             initial_sample ? MONITOR_REFRESH_RECOVER : MONITOR_REFRESH_SENSORS);
         initial_sample = false;
         const TickType_t wait = monitor_clock_is_valid() ? portMAX_DELAY : pdMS_TO_TICKS(60000);
-        (void)ulTaskNotifyTake(pdTRUE, wait);
+        if (xTaskNotifyWait(0, UINT32_MAX, &notified, wait) != pdTRUE) notified = 0;
     }
 }
 
@@ -172,5 +174,10 @@ void monitor_sensors_get(monitor_sensor_data_t *out)
 
 void monitor_sensors_request_sample(void)
 {
-    if (s_task != NULL) xTaskNotifyGive(s_task);
+    if (s_task != NULL) xTaskNotify(s_task, 0, eNoAction);
+}
+
+void monitor_sensors_request_sample_deferred(void)
+{
+    if (s_task != NULL) xTaskNotify(s_task, SENSOR_NOTIFY_DEFER_DISPLAY, eSetBits);
 }
