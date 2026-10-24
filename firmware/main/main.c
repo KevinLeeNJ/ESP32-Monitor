@@ -1,6 +1,7 @@
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_pm.h"
+#include "esp_task_wdt.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -25,6 +26,7 @@
 /* Above the data producers (3-4), for every animation and mode transition. */
 #define ANIMATION_TASK_PRIORITY 5U
 #define MINUTE_PREPARE_MS (RLCD_HPM_PREPARE_MS + 80U)
+#define TASK_WDT_WAIT_MS 1000U
 
 static const rlcd_pins_t PINS = {
     .mosi = 12,
@@ -37,6 +39,14 @@ static const rlcd_pins_t PINS = {
 
 static monitor_ui_demo_data_t g_demo;
 static esp_pm_lock_handle_t g_render_cpu_lock;
+
+static void feed_task_watchdog(void)
+{
+    esp_err_t err = esp_task_wdt_reset();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "display task watchdog reset failed: %s", esp_err_to_name(err));
+    }
+}
 
 typedef struct {
     int battery_percent;
@@ -170,6 +180,7 @@ static uint32_t wait_display_refresh(rlcd_port_t *port)
                 uint32_t more = 0;
                 TickType_t ticks = pdMS_TO_TICKS((uint32_t)((left + 999) / 1000));
                 xTaskNotifyWait(0, UINT32_MAX, &more, ticks ? ticks : 1);
+                feed_task_watchdog();
                 reasons |= more;
             }
             vTaskPrioritySet(NULL, original);
@@ -182,8 +193,10 @@ static uint32_t wait_display_refresh(rlcd_port_t *port)
             if (remaining <= MINUTE_PREPARE_MS) continue;
             until = remaining - MINUTE_PREPARE_MS;
         }
-        TickType_t ticks = until == UINT32_MAX ? portMAX_DELAY : pdMS_TO_TICKS(until);
+        TickType_t ticks = until == UINT32_MAX ? pdMS_TO_TICKS(TASK_WDT_WAIT_MS) :
+                           pdMS_TO_TICKS(until > TASK_WDT_WAIT_MS ? TASK_WDT_WAIT_MS : until);
         if (xTaskNotifyWait(0, UINT32_MAX, &reasons, ticks ? ticks : 1)) return reasons;
+        feed_task_watchdog();
     }
 }
 
@@ -219,6 +232,7 @@ static esp_err_t present_monitor(monitor_lvgl_t *renderer, rlcd_port_t *port,
     TickType_t frame_tick = xTaskGetTickCount();
     TickType_t previous = frame_tick;
     do {
+        feed_task_watchdog();
         if (animated && result == ESP_OK) update_animation_clock(renderer, displayed);
         esp_err_t draw = commit_monitor_frame(renderer);
         if (draw != ESP_OK) { result = draw; break; }
@@ -288,6 +302,7 @@ static esp_err_t present_boot_monitor(monitor_lvgl_t *renderer, rlcd_port_t *por
     ESP_LOGI(TAG, "boot animation started (timeout=%u ms, task priority=%u)",
              (unsigned)BOOT_ANIMATION_TIMEOUT_MS, (unsigned)uxTaskPriorityGet(NULL));
     while (result == ESP_OK) {
+        feed_task_watchdog();
         TickType_t now = xTaskGetTickCount();
         if (now - started >= timeout) break;
         const bool was_animating = monitor_ui_animation_active(root);
@@ -324,7 +339,9 @@ static esp_err_t present_boot_monitor(monitor_lvgl_t *renderer, rlcd_port_t *por
             /* Keep HPM between incoming sources, without redrawing unchanged
              * content. Every producer notification is admitted during boot. */
             uint32_t reasons = 0;
-            xTaskNotifyWait(0, UINT32_MAX, &reasons, remaining);
+            TickType_t wait = remaining > pdMS_TO_TICKS(TASK_WDT_WAIT_MS) ?
+                              pdMS_TO_TICKS(TASK_WDT_WAIT_MS) : remaining;
+            xTaskNotifyWait(0, UINT32_MAX, &reasons, wait ? wait : 1);
         }
     }
     if (!complete) {
@@ -357,6 +374,11 @@ static void reset_demo(void)
 
 void app_main(void)
 {
+    esp_err_t wdt_err = esp_task_wdt_add(NULL);
+    if (wdt_err != ESP_OK && wdt_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "display task watchdog registration failed: %s", esp_err_to_name(wdt_err));
+    }
+    feed_task_watchdog();
     esp_err_t nvs_err = nvs_flash_init();
     if(nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -410,10 +432,12 @@ void app_main(void)
      * vTaskDelay is not interrupted by their notifications: even a valid RTC
      * and ready sensors cannot replace -- before the full two seconds elapse. */
     vTaskDelay(pdMS_TO_TICKS(BOOT_UI_HOLD_MS));
+    feed_task_watchdog();
     /* Sample the latest caches after the hold, then reuse normal animations. */
     display_snapshot_t displayed;
     ESP_ERROR_CHECK(present_boot_monitor(renderer, port, &displayed));
     for(;;) {
+        feed_task_watchdog();
         uint32_t reasons = wait_display_refresh(port);
         if (!monitor_display_refresh_should_render(reasons, monitor_clock_is_valid())) continue;
         /* Commit clock boundaries immediately. Fresh sensor/network results

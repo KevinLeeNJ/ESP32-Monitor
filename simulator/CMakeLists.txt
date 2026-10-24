@@ -88,6 +88,8 @@ if(BUILD_TESTING)
     add_test(NAME monitor_devices_transport_tests
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/devices_transport_test.py"
                 "${CMAKE_C_COMPILER}")
+    add_test(NAME monitor_firmware_watchdog_tests
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/tests/firmware_watchdog_test.py")
     find_program(NODE_EXECUTABLE node)
     if(NODE_EXECUTABLE)
         add_test(NAME monitor_config_page_tests
