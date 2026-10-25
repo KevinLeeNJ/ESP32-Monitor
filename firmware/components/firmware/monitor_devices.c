@@ -21,6 +21,7 @@
 #define PERIOD_US (30LL * 1000000)
 #define RETAIN_US (90LL * 1000000)
 #define REQUEST_US (4LL * 1000000)
+#define INITIAL_RETRY_US (2LL * 1000000)
 static const char *TAG = "monitor_devices";
 static TaskHandle_t s_task;
 static esp_timer_handle_t s_expiry_timer;
@@ -121,9 +122,13 @@ static void expire_snapshot(void *arg)
 
 typedef struct {
     int64_t deadline;
+    int64_t hard_deadline;
+    esp_timer_handle_t timer;
     SemaphoreHandle_t lock;
     int socket;
     bool rejected;
+    bool timed_out;
+    const char *phase;
     bool json_type;
     unsigned connections;
 } response_guard_t;
@@ -149,6 +154,15 @@ static void request_deadline(void *arg)
 {
     response_guard_t *guard = arg;
     xSemaphoreTake(guard->lock, portMAX_DELAY);
+    int64_t left = guard->deadline - esp_timer_get_time();
+    /* ON_CONNECTED grants the response its own budget. Re-arm this one-shot
+     * only if that event moved the deadline; never poll an idle connection. */
+    if (left > 0 && !guard->rejected &&
+        esp_timer_start_once(guard->timer, left) == ESP_OK) {
+        xSemaphoreGive(guard->lock);
+        return;
+    }
+    guard->timed_out = true;
     guard->rejected = true;
     if (guard->socket >= 0) shutdown(guard->socket, SHUT_RDWR);
     xSemaphoreGive(guard->lock);
@@ -161,6 +175,15 @@ static esp_err_t guard_event(esp_http_client_event_t *event)
     if (event->event_id == HTTP_EVENT_ON_CONNECTED) {
         guard->socket = esp_http_client_get_socket(event->client);
         ++guard->connections;
+        int64_t now = esp_timer_get_time();
+        if (now >= guard->deadline) guard->rejected = guard->timed_out = true;
+        if (!guard->rejected) {
+            /* TLS setup must not consume the response budget. Both phases
+             * stay below the active task's five-second watchdog interval. */
+            int64_t end = now + REQUEST_US;
+            guard->deadline = end < guard->hard_deadline ? end : guard->hard_deadline;
+            esp_http_client_set_timeout_ms(event->client, (int)((guard->deadline - now + 999) / 1000));
+        }
     }
     if (event->event_id == HTTP_EVENT_DISCONNECTED) guard->socket = -1;
     if (event->event_id == HTTP_EVENT_ON_HEADER) {
@@ -174,7 +197,7 @@ static esp_err_t guard_event(esp_http_client_event_t *event)
             if (!guard->json_type) guard->rejected = true;
         }
     }
-    if (esp_timer_get_time() >= guard->deadline) guard->rejected = true;
+    if (esp_timer_get_time() >= guard->deadline) guard->rejected = guard->timed_out = true;
     if (guard->rejected && guard->socket >= 0) shutdown(guard->socket, SHUT_RDWR);
     xSemaphoreGive(guard->lock);
     return ESP_OK;
@@ -237,11 +260,13 @@ static bool fetch_attempt(devices_transport_t *transport, const devices_config_t
         esp_http_client_set_header(client, "Accept-Encoding", "identity") != ESP_OK ||
         esp_http_client_set_header(client, "Connection", "keep-alive") != ESP_OK ||
         !remaining(client, guard)) return false;
+    guard->phase = "connect/send";
     if (esp_http_client_open(client, 0) != ESP_OK) {
         *retryable = true;
         return false;
     }
     if (!remaining(client, guard)) return false;
+    guard->phase = "headers";
     int64_t header_length = esp_http_client_fetch_headers(client);
     if (header_length < 0) {
         *retryable = true;
@@ -250,6 +275,7 @@ static bool fetch_attempt(devices_transport_t *transport, const devices_config_t
     *status = esp_http_client_get_status_code(client);
     if (!remaining(client, guard) || *status != 200 || !guard->json_type) return false;
     size_t len = 0;
+    guard->phase = "body";
     for (;;) {
         if (!remaining(client, guard)) return false;
         /* Read through message completion (including chunk trailers) before
@@ -268,6 +294,7 @@ static bool fetch_attempt(devices_transport_t *transport, const devices_config_t
     }
     if (!remaining(client, guard)) return false;
     body[len] = 0;
+    guard->phase = "parse";
     return monitor_devices_parse(body, len, out);
 }
 
@@ -283,7 +310,10 @@ static bool fetch(devices_transport_t *transport, const devices_config_t *settin
     if (!guard->lock) return false;
     xSemaphoreTake(guard->lock, portMAX_DELAY);
     guard->deadline = esp_timer_get_time() + REQUEST_US;
+    guard->hard_deadline = guard->deadline + REQUEST_US;
     guard->rejected = false;
+    guard->timed_out = false;
+    guard->phase = "prepare";
     guard->json_type = false;
     unsigned connections_before = guard->connections;
     xSemaphoreGive(guard->lock);
@@ -293,6 +323,7 @@ static bool fetch(devices_transport_t *transport, const devices_config_t *settin
     char *body = malloc(MONITOR_DEVICES_BODY_MAX + 1);
     bool ok = false;
     if (!body || esp_timer_create(&args, &deadline_timer) != ESP_OK) goto done;
+    guard->timer = deadline_timer;
     if (esp_timer_start_once(deadline_timer, REQUEST_US) != ESP_OK) goto done;
     for (unsigned attempt = 0; attempt < 2; ++attempt) {
         feed_task_watchdog();
@@ -300,7 +331,7 @@ static bool fetch(devices_transport_t *transport, const devices_config_t *settin
         ok = fetch_attempt(transport, settings, body, out, status, &retryable);
         if (ok || !had_client || attempt || !retryable) break;
         /* A proxy may have silently expired the idle connection. Retry this
-         * idempotent GET once, sharing the original four-second deadline. */
+         * idempotent GET once within the existing transaction's bounds. */
         if (!remaining(transport->client, guard)) break;
         transport_close_client(transport);
         xSemaphoreTake(guard->lock, portMAX_DELAY);
@@ -312,6 +343,7 @@ done:
         esp_timer_stop_blocking(deadline_timer, portMAX_DELAY);
         esp_timer_delete(deadline_timer);
     }
+    guard->timer = NULL;
     if (guard->rejected || esp_timer_get_time() >= guard->deadline) ok = false;
     *reused = ok && had_client && guard->connections == connections_before;
     if (!ok || !esp_http_client_is_persistent_connection(transport->client)) transport_close_client(transport);
@@ -325,6 +357,7 @@ static void devices_task(void *arg)
     int64_t next_poll = 0;
     devices_transport_t transport = {.guard.socket = -1};
     uint32_t transport_generation = UINT32_MAX;
+    bool initial_retry_used = false;
     for (;;) {
         bool changed = false;
         devices_config_t config;
@@ -350,6 +383,7 @@ static void devices_task(void *arg)
         if (generation != transport_generation || !wifi || !configured) {
             transport_reset(&transport);
             transport_generation = generation;
+            initial_retry_used = false;
         }
         bool clock_ready = strncmp(config.url, "https://", 8) != 0 || monitor_clock_is_valid();
         if (configured && wifi && clock_ready && now >= next_poll) {
@@ -359,6 +393,7 @@ static void devices_task(void *arg)
              * Keep a relative fallback only for HTTP before time is known. */
             next_poll = monitor_clock_is_valid() ? INT64_MAX : now + PERIOD_US;
             bool reused = false;
+            int64_t request_started = esp_timer_get_time();
             bool ok = fetch(&transport, &config, &candidate, &status, &reused);
             feed_task_watchdog();
             now = esp_timer_get_time();
@@ -369,6 +404,13 @@ static void devices_task(void *arg)
             bool immediate = false;
             portENTER_CRITICAL(&s_mux);
             if (generation == s_generation && s_wifi) {
+                /* One delayed retry per configuration/connection generation,
+                 * only before first data and only for transport failures.
+                 * Normal :00/:30 polling and auth/server errors stay unchanged. */
+                if (!ok && status == 0 && !s_have_snapshot && !initial_retry_used) {
+                    initial_retry_used = true;
+                    next_poll = now + INITIAL_RETRY_US;
+                }
                 immediate = !s_have_snapshot;
                 if (ok) {
                     s_have_snapshot = true;
@@ -396,8 +438,11 @@ static void devices_task(void *arg)
             }
             notify_display(changed, immediate);
             /* No URL, token or response body in logs. */
-            ESP_LOGI(TAG, "summary %s, HTTP %d, connection %s", ok ? "received" : "failed", status,
-                     ok ? (reused ? "reused" : "new") : "discarded");
+            ESP_LOGI(TAG, "summary %s, HTTP %d, connection %s, elapsed=%u ms, phase=%s, deadline=%d",
+                     ok ? "received" : "failed", status,
+                     ok ? (reused ? "reused" : "new") : "discarded",
+                     (unsigned)((now - request_started) / 1000), transport.guard.phase,
+                     transport.guard.timed_out);
             continue;
         }
         int64_t wake = expiry;
