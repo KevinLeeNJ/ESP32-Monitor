@@ -46,6 +46,7 @@ func Project(c config.Config, snapshot storage.Snapshot, now int64) Summary {
 }
 func selectValue(samples []metrics.Sample, measurement, field string, tags map[string]string, now, ttl int64) (float64, bool) {
 	found := false
+	ambiguous := false
 	var selected metrics.Sample
 	for _, s := range samples {
 		if s.Measurement != measurement || s.Field != field {
@@ -62,16 +63,19 @@ func selectValue(samples []metrics.Sample, measurement, field string, tags map[s
 				break
 			}
 		}
-		if !match {
+		if !match || s.SampledAt < now-ttl || s.SampledAt > now+30 {
 			continue
 		}
-		if found {
-			return 0, false
+		if !found || s.SampledAt > selected.SampledAt {
+			found = true
+			selected = s
+			ambiguous = false
+		} else if s.SampledAt == selected.SampledAt {
+			// Equal newest timestamps cannot identify a preferred source.
+			ambiguous = true
 		}
-		found = true
-		selected = s
 	}
-	return selected.Value, found && selected.SampledAt >= now-ttl && selected.SampledAt <= now+30
+	return selected.Value, found && !ambiguous
 }
 func FormatPercent(name string, v float64, valid bool) Metric {
 	m := Metric{Name: name, Value: "--"}

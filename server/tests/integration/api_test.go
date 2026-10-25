@@ -290,10 +290,22 @@ func TestProjectionMissingAmbiguousAndOverflow(t *testing.T) {
 	h.advance(1)
 	body = batch(t, wireMetric("disk", map[string]string{"path": "/data", "device": "a"}, map[string]any{"used_percent": 1}, initialTime), wireMetric("disk", map[string]string{"path": "/data", "device": "b"}, map[string]any{"used_percent": 2}, h.clock.Load()))
 	requireStatus(t, h.post(t, "a", body), 204)
-	requireMetric(t, h.summary(t).Devices[0], 2, "--", nil)
+	requireMetric(t, h.summary(t).Devices[0], 2, "2%", integer(2))
 	h.advance(45)
 	requireStatus(t, h.post(t, "a", mem(t, h.clock.Load(), 7)), 204)
-	requireMetric(t, h.summary(t).Devices[0], 2, "--", nil) // Only one candidate is fresh; selection is still ambiguous.
+	requireMetric(t, h.summary(t).Devices[0], 2, "2%", integer(2)) // The old device series has expired.
+	h.advance(1)
+	requireStatus(t, h.post(t, "a", mem(t, h.clock.Load(), 7)), 204)
+	requireMetric(t, h.summary(t).Devices[0], 2, "--", nil) // All disk series have expired.
+	body = batch(t,
+		wireMetric("disk", map[string]string{"path": "/data", "device": "a"}, map[string]any{"used_percent": 3}, h.clock.Load()),
+		wireMetric("disk", map[string]string{"path": "/data", "device": "b"}, map[string]any{"used_percent": 4}, h.clock.Load()))
+	requireStatus(t, h.post(t, "a", body), 204)
+	requireMetric(t, h.summary(t).Devices[0], 2, "--", nil) // Equal newest timestamps remain ambiguous.
+	h.advance(1)
+	body = batch(t, wireMetric("disk", map[string]string{"path": "/data", "device": "b"}, map[string]any{"used_percent": 5}, h.clock.Load()))
+	requireStatus(t, h.post(t, "a", body), 204)
+	requireMetric(t, h.summary(t).Devices[0], 2, "5%", integer(5))
 }
 
 func TestFourCardsSizeAndConfigReload(t *testing.T) {

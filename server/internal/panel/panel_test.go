@@ -115,13 +115,42 @@ func TestMaximumSummarySize(t *testing.T) {
 	}
 }
 
-func TestAmbiguityIsNotResolvedByExpiringOneCandidate(t *testing.T) {
+func TestDiskRecoversAfterDeviceRenumbering(t *testing.T) {
 	seen := now
 	state := storage.Snapshot{"a": {LastSeen: &seen, Samples: []metrics.Sample{
 		value("disk", "used_percent", `{"path":"/data","device":"old"}`, now-46, 1),
 		value("disk", "used_percent", `{"path":"/data","device":"new"}`, now, 2),
 	}}}
-	if got := Project(cfg(), state, now).Devices[0].Metrics[2]; got.Value != "--" || got.Percent != nil {
-		t.Fatal("ambiguous source selected", got)
+	if got := Project(cfg(), state, now).Devices[0].Metrics[2]; got.Value != "2%" || got.Percent == nil || *got.Percent != 2 {
+		t.Fatal("latest disk source not selected", got)
+	}
+}
+
+func TestSelectLatestValidSeries(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		times []int64
+		want  float64
+		valid bool
+	}{
+		{"both fresh", []int64{now - 10, now}, 2, true},
+		{"newest first", []int64{now, now - 10}, 1, true},
+		{"expired first", []int64{now - 46, now}, 2, true},
+		{"future ignored", []int64{now, now + 31}, 1, true},
+		{"all expired", []int64{now - 47, now - 46}, 0, false},
+		{"newest tied", []int64{now, now}, 0, false},
+		{"older tie before newest", []int64{now - 10, now - 10, now}, 3, true},
+		{"older tie after newest", []int64{now, now - 10, now - 10}, 1, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var samples []metrics.Sample
+			for i, ts := range tt.times {
+				samples = append(samples, value("disk", "used_percent", `{"path":"/data"}`, ts, float64(i+1)))
+			}
+			got, valid := selectValue(samples, "disk", "used_percent", map[string]string{"path": "/data"}, now, 45)
+			if valid != tt.valid || valid && got != tt.want {
+				t.Fatalf("got %v, %v; want %v, %v", got, valid, tt.want, tt.valid)
+			}
+		})
 	}
 }
