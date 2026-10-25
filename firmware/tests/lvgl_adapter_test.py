@@ -10,6 +10,7 @@ import tempfile
 
 repo = Path(__file__).resolve().parents[2]
 backend = (repo / "firmware/components/firmware/monitor_lvgl.c").read_text()
+main = (repo / "firmware/main/main.c").read_text()
 
 
 def function(source, name):
@@ -29,6 +30,8 @@ code = r'''
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
+#include "monitor_damage.h"
 #define MONITOR_FRAME_BYTES 15000
 #define ESP_OK 0
 #define ESP_FAIL -1
@@ -36,8 +39,10 @@ code = r'''
 typedef int esp_err_t;
 typedef struct { int unused; } lv_display_t;
 typedef struct { int unused; } rlcd_port_t;
-typedef struct { lv_display_t *display; uint8_t *packed; } monitor_renderer_t;
+typedef struct { lv_display_t *display; uint8_t *packed; monitor_damage_t dirty; bool force_full; } monitor_renderer_t;
 typedef struct { rlcd_port_t *port; monitor_renderer_t renderer; } monitor_lvgl_t;
+#define TAG "test"
+#define ESP_RETURN_ON_ERROR(c,...) do { int e=(c); if(e) return e; } while(0)
 static unsigned renders, transfers;
 static bool render_ok = true;
 static int transfer_error;
@@ -49,31 +54,40 @@ static bool monitor_renderer_render(monitor_renderer_t *renderer) {
 static const uint8_t *monitor_renderer_packed(const monitor_renderer_t *renderer) {
     assert(renderer == &current->renderer && renders == 1); return renderer->packed;
 }
-static esp_err_t rlcd_port_draw_diff(rlcd_port_t *port, const uint8_t *packed, uint32_t size) {
+static esp_err_t rlcd_port_draw_dirty(rlcd_port_t *port, const uint8_t *packed, uint32_t size, const monitor_damage_t *dirty, bool full) {
     assert(port == current->port && packed == current->renderer.packed && size == MONITOR_FRAME_BYTES);
+    assert(dirty == &current->renderer.dirty); (void)full;
     assert(renders == 1); ++transfers; return transfer_error;
 }
 '''
 code += function(backend, "monitor_lvgl_render") + "\n"
+code += function(backend, "monitor_lvgl_present") + "\n"
+code += function(main, "commit_monitor_frame") + "\n"
 code += r'''
 int main(void) {
     uint8_t packed[MONITOR_FRAME_BYTES] = {0};
     lv_display_t display = {0}; rlcd_port_t port = {0};
     monitor_lvgl_t renderer = {.port=&port, .renderer={.display=&display, .packed=packed}};
     current = &renderer;
-    assert(monitor_lvgl_render(&renderer) == ESP_OK && renders == 1 && transfers == 1);
+    renderer.renderer.dirty.bits[0]=1;renderer.renderer.force_full=true;
+    assert(commit_monitor_frame(&renderer) == ESP_OK && renders == 1 && transfers == 1);
+    assert(!renderer.renderer.dirty.bits[0] && !renderer.renderer.force_full);
     renders = transfers = 0;
     /* Even an unchanged frame reaches draw_diff, which owns TE pacing. */
-    assert(monitor_lvgl_render(&renderer) == ESP_OK && renders == 1 && transfers == 1);
+    assert(commit_monitor_frame(&renderer) == ESP_OK && renders == 1 && transfers == 1);
     renders = transfers = 0; render_ok = false;
-    assert(monitor_lvgl_render(&renderer) == ESP_FAIL && renders == 1 && transfers == 0);
+    assert(commit_monitor_frame(&renderer) == ESP_FAIL && renders == 1 && transfers == 0);
     renders = 0; render_ok = true; transfer_error = -30;
-    assert(monitor_lvgl_render(&renderer) == -30 && renders == 1 && transfers == 1);
+    renderer.renderer.dirty.bits[0]=2;renderer.renderer.force_full=true;
+    assert(commit_monitor_frame(&renderer) == -30 && renders == 1 && transfers == 1);
+    assert(renderer.renderer.dirty.bits[0]==2 && renderer.renderer.force_full);
     renders = transfers = 0;
     assert(monitor_lvgl_render(NULL) == ESP_ERR_INVALID_ARG);
     renderer.renderer.display = NULL;
-    assert(monitor_lvgl_render(&renderer) == ESP_ERR_INVALID_ARG && !renders && !transfers);
-    puts("Native shared renderer precedes exactly one frame commit; unchanged frames, invalid inputs and both failure paths: PASS");
+    assert(commit_monitor_frame(&renderer) == ESP_ERR_INVALID_ARG && !renders && !transfers);
+    renderer.renderer.display = &display;
+    assert(monitor_lvgl_present(NULL)==ESP_ERR_INVALID_ARG);
+    puts("No application CPU boost; FreeRTOS PM owns CPU frequency during rendering and TE/SPI waits. Native shared renderer precedes exactly one frame commit; unchanged frames, invalid inputs and both failure paths: PASS");
 }
 '''
 with tempfile.TemporaryDirectory(prefix="monitor-lvgl-adapter-") as directory:
@@ -81,5 +95,5 @@ with tempfile.TemporaryDirectory(prefix="monitor-lvgl-adapter-") as directory:
     binary = Path(directory) / "test"
     source.write_text(code)
     compiler = sys.argv[1] if len(sys.argv) > 1 else "cc"
-    subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", str(source), "-o", str(binary)], check=True)
+    subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-I"+str(repo/"firmware/include"), str(source), "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)

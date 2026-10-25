@@ -475,7 +475,8 @@ void monitor_ui_apply_snapshot(lv_obj_t *root, const monitor_ui_snapshot_t *snap
     if (state == NULL) return;
     char text[24];
     update_clock(state, snapshot->time_text);
-    const char *date = snapshot->wifi_state == MONITOR_WIFI_PROVISIONING ? "Configuring" :
+    const char *date = snapshot->profiling ? "Profiling" :
+                       snapshot->wifi_state == MONITOR_WIFI_PROVISIONING ? "Configuring" :
                        snapshot->wifi_state == MONITOR_WIFI_OFFLINE ? "Offline" :
                        snapshot->wifi_state == MONITOR_WIFI_DISCONNECTED ? "Connecting" : snapshot->date_text;
     if (date && strcmp(lv_label_get_text(state->date_label), date) != 0)
@@ -741,7 +742,7 @@ static void devices_chrome(monitor_ui_state_t *state)
     const monitor_devices_snapshot_t *snapshot = &state->devices;
     lv_obj_t *root = state->root;
     lv_obj_t *old = lv_obj_get_child_by_name(root, "empty_devices");
-    if (old) lv_obj_delete(old);
+    if (old && snapshot->count) lv_obj_delete(old);
     const char *status = "";
     switch (snapshot->status) {
         case MONITOR_DEVICES_NOT_CONFIGURED: status = "NOT CONFIGURED"; break;
@@ -758,14 +759,28 @@ static void devices_chrome(monitor_ui_state_t *state)
     lv_obj_set_width(count, 254);
     if (strcmp(lv_label_get_text(count), title)) lv_label_set_text(count, title);
     if (!snapshot->count) {
-        lv_obj_t *empty = make_label(root, snapshot->status == MONITOR_DEVICES_AUTH_ERROR ? "DATA UNAVAILABLE" :
-                                     (*status ? status : "NO ONLINE DEVICES"), 0, 177,
-                                     &monitor_misans_14, COLOR_MUTED);
-        lv_obj_set_width(empty, MONITOR_DISPLAY_WIDTH);
-        lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
-        set_name(empty, "empty_devices");
+        const char *text = snapshot->status == MONITOR_DEVICES_AUTH_ERROR ? "DATA UNAVAILABLE" :
+                           (*status ? status : "NO ONLINE DEVICES");
+        /* A queued empty snapshot often lands as the value rolls finish.
+         * Recreating this unchanged label causes transient large content-size
+         * invalidations during layout, merging into an expensive full redraw. */
+        if (old) {
+            if (strcmp(lv_label_get_text(old), text)) lv_label_set_text(old, text);
+        } else {
+            lv_obj_t *empty = make_label(root, text, 0, 177, &monitor_misans_14, COLOR_MUTED);
+            lv_obj_set_width(empty, MONITOR_DISPLAY_WIDTH);
+            lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
+            set_name(empty, "empty_devices");
+        }
     }
-    if (state->variant != MONITOR_FRAME_NORMAL) apply_variant_recursive(root, true);
+    if (state->variant != MONITOR_FRAME_NORMAL) {
+        /* Only Devices may have new children. Reapplying styles to the root
+         * also invalidates the clock and information cards unnecessarily. */
+        for (unsigned i = 0; i < snapshot->count; ++i)
+            apply_variant_recursive(state->device_cards[i], true);
+        if (!snapshot->count)
+            apply_variant_recursive(lv_obj_get_child_by_name(root, "empty_devices"), true);
+    }
 }
 
 static void finish_motion(monitor_ui_state_t *state)

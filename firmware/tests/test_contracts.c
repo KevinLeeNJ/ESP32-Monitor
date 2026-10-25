@@ -24,9 +24,10 @@ CONTRACT(schedule_boundaries, "schedule coalesces boundaries and time correction
     TEST_ASSERT_EQUAL_UINT32(all, monitor_schedule_due(-1, 0));
     TEST_ASSERT_EQUAL_UINT32(0, monitor_schedule_due(0, 0));
     TEST_ASSERT_EQUAL_UINT32(0, monitor_schedule_due(900, 929));
-    TEST_ASSERT_EQUAL_UINT32(MONITOR_SCHEDULE_DEVICES, monitor_schedule_due(929, 930));
-    TEST_ASSERT_EQUAL_UINT32(MONITOR_SCHEDULE_DEVICES | MONITOR_SCHEDULE_SENSORS, monitor_schedule_due(959, 960));
-    TEST_ASSERT_EQUAL_UINT32(all, monitor_schedule_due(1799, 1800));
+    /* Sensors run at :30; minute/quarter-hour boundaries keep the API cadence. */
+    TEST_ASSERT_EQUAL_UINT32(MONITOR_SCHEDULE_DEVICES | MONITOR_SCHEDULE_SENSORS, monitor_schedule_due(929, 930));
+    TEST_ASSERT_EQUAL_UINT32(MONITOR_SCHEDULE_DEVICES, monitor_schedule_due(959, 960));
+    TEST_ASSERT_EQUAL_UINT32(MONITOR_SCHEDULE_DEVICES | MONITOR_SCHEDULE_WEATHER, monitor_schedule_due(1799, 1800));
     TEST_ASSERT_EQUAL_UINT32(all, monitor_schedule_due(86400, 86399));
     TEST_ASSERT_EQUAL_UINT32(all, monitor_schedule_due(0, 4102444800LL));
     /* Every microsecond remainder, including just before a tick and a slot. */

@@ -6,6 +6,8 @@ add_executable(monitor_animation_tests "${CMAKE_CURRENT_LIST_DIR}/animation_test
 target_link_libraries(monitor_animation_tests PRIVATE monitor_sim_core)
 add_test(NAME monitor_animation_tests COMMAND monitor_animation_tests)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_test(NAME monitor_pm_profile_tests
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/pm_profile_test.py")
 add_test(NAME monitor_station_scan_tests
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/station_scan_test.py")
 add_test(NAME monitor_wifi_buttons_tests
@@ -14,6 +16,9 @@ add_test(NAME monitor_wifi_session_tests
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/wifi_session_test.py")
 add_test(NAME monitor_firmware_animation_tests
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/firmware_animation_test.py"
+            "${CMAKE_C_COMPILER}")
+add_test(NAME monitor_boot_power_tests
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/boot_power_test.py"
             "${CMAKE_C_COMPILER}")
 add_test(NAME monitor_lvgl_adapter_tests
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/lvgl_adapter_test.py"
@@ -86,3 +91,9 @@ add_test(NAME monitor_weather_transport_tests
 set_tests_properties(monitor_wifi_retry_tests monitor_devices_lifecycle_tests
     monitor_weather_behavior_tests monitor_weather_transport_tests
     PROPERTIES TIMEOUT 90 LABELS "behavior;network")
+
+add_executable(monitor_damage_tests "${CMAKE_CURRENT_LIST_DIR}/damage_tests.c")
+target_link_libraries(monitor_damage_tests PRIVATE monitor_sim_core)
+target_compile_options(monitor_damage_tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+add_test(NAME monitor_damage_tests COMMAND monitor_damage_tests)
+set_tests_properties(monitor_damage_tests PROPERTIES TIMEOUT 30 LABELS "behavior;display")

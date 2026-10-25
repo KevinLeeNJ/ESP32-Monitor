@@ -31,20 +31,24 @@ static int s_data_mux;
 #define BIT1 2
 #define pdMS_TO_TICKS(ms) (ms)
 #define pdPASS 1
+#define portMAX_DELAY UINT32_MAX
+#define ESP_ERROR_CHECK(c) assert((c)==ESP_OK)
 #define eSetBits 0
 static void *s_task;
 static bool s_wifi_available,clock_ready=true,task_ok=true;
 static unsigned worker_step,task_creates,queued;
 static jmp_buf worker_done;
 static bool monitor_clock_is_valid(void){return clock_ready;}
-static int esp_task_wdt_add(void *p){(void)p;return ESP_OK;}
+static bool watchdog_active;
+static int esp_task_wdt_add(void *p){(void)p;assert(!watchdog_active);watchdog_active=true;return ESP_OK;}
+static int esp_task_wdt_delete(void *p){(void)p;assert(watchdog_active);watchdog_active=false;return ESP_OK;}
 static int xTaskCreate(void (*fn)(void *),const char *name,unsigned stack,void *arg,unsigned priority,void **out){
     (void)fn;(void)name;(void)arg;(void)priority;assert(stack==8192);
     ++task_creates;if(task_ok)*out=(void *)1;return task_ok?pdPASS:0;
 }
 static void xTaskNotify(void *task,unsigned bits,int action){assert(task && action==0);queued|=bits;}
 static void xTaskNotifyWait(unsigned a,unsigned b,uint32_t *bits,unsigned timeout){
-    (void)a;(void)b;assert(timeout==1000);
+    (void)a;(void)b;assert(timeout==portMAX_DELAY && !watchdog_active);
     if(worker_step==0){s_wifi_available=false;clock_ready=true;*bits=1;}
     if(worker_step==1){s_wifi_available=true;clock_ready=false;*bits=1;}
     if(worker_step==2){s_wifi_available=true;clock_ready=true;*bits=2;}
@@ -62,7 +66,6 @@ static const char *aqi_body="{\"indexes\":[{\"aqiDisplay\":\"42\"}]}";
 static void *test_malloc(size_t size){return alloc_ok?malloc(size):NULL;}
 #define malloc test_malloc
 static unsigned esp_get_free_heap_size(void){return 100000;}
-static const char *esp_err_to_name(int err){(void)err;return "fake";}
 static void feed_task_watchdog(void) {}
 static int nvs_open(const char *ns,int mode,nvs_handle_t *out){assert(!strcmp(ns,"monitor_loc") && mode==0);if(!nvs_ok)return ESP_FAIL;*out=1;++opened;return ESP_OK;}
 static int nvs_get_str(int handle,const char *name,char *out,size_t *size){
@@ -74,6 +77,7 @@ static int nvs_get_str(int handle,const char *name,char *out,size_t *size){
 static void nvs_close(int handle){assert(handle==1);++closed;}
 void monitor_display_refresh_request_reason(uint32_t bits){++notifications;reason=bits;}
 static bool http_get(const char *url,char *out,size_t size,const char *api_key){
+    if(worker_step)assert(watchdog_active);
     const char *body;
     if(strstr(url,"ipwho.is")){++http_calls[0];assert(!api_key);body=ip_body;}
     else {assert(api_key && !strcmp(api_key,"fixture-key"));

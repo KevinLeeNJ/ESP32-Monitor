@@ -33,6 +33,11 @@ prefix = r'''
 #include <stdio.h>
 #include <string.h>
 #include <sys/time.h>
+typedef int BaseType_t;
+#define ESP_ERROR_CHECK(c) assert((c)==ESP_OK)
+static bool watchdog_active=true;
+static int esp_task_wdt_delete(void *task) { (void)task; assert(watchdog_active); watchdog_active=false; return 0; }
+static int esp_task_wdt_add(void *task) { (void)task; assert(!watchdog_active); watchdog_active=true; return 0; }
 typedef unsigned UBaseType_t;
 typedef uint32_t TickType_t;
 typedef int esp_err_t;
@@ -69,7 +74,7 @@ typedef struct { unsigned remaining; } lv_obj_t;
 typedef struct { lv_obj_t root; } monitor_lvgl_t;
 typedef struct { char time_text[8], date_text[16]; } display_snapshot_t;
 static uint32_t tick, priority=1, first_clock_roll, first_draw;
-static unsigned command_count, fail_command, failed_draw, draws, notifications;
+static unsigned command_count, fail_command, failed_draw, draws, notifications, idle_notifications;
 static bool clock_valid=true, storm;
 static bool te_signal, te_token;
 static unsigned te_waits, irq_enabled;
@@ -85,7 +90,10 @@ static void wait_panel_frame(rlcd_port_t *port);
 static uint8_t commands[256];
 static uint32_t command_at[256];
 static uint32_t xTaskGetTickCount(void) { return tick; }
-static void vTaskDelay(uint32_t duration) { tick += duration; }
+static void vTaskDelay(uint32_t duration) {
+    if (duration==300 || duration==100) assert(!pm_active && !irq_enabled);
+    tick += duration;
+}
 static void vTaskDelayUntil(uint32_t *scheduled, uint32_t period) {
     *scheduled += period; assert((uint32_t)(*scheduled - tick) <= MONITOR_UI_ANIMATION_FRAME_MS); tick=*scheduled;
 }
@@ -97,6 +105,7 @@ static int fake_gettimeofday(struct timeval *tv, void *tz) {
 #define gettimeofday fake_gettimeofday
 static int xTaskNotifyWait(uint32_t in, uint32_t out, uint32_t *reasons, uint32_t timeout) {
     (void)in; (void)out; notifications++;
+    if (!watchdog_active) ++idle_notifications;
     tick += storm && timeout > 1 ? 1 : timeout;
     *reasons=storm?2:0; return storm;
 }
@@ -104,6 +113,7 @@ static void feed_task_watchdog(void) {}
 static bool monitor_clock_is_valid(void) { return clock_valid; }
 static int send_cmd(rlcd_port_t *p, uint8_t cmd) {
     (void)p; assert(command_count<256);
+    if(cmd==0x38 || cmd==0x39) assert(pm_active);
     commands[command_count]=cmd; command_at[command_count++]=tick;
     return command_count==fail_command ? ESP_FAIL : ESP_OK;
 }
@@ -139,7 +149,7 @@ static void apply_display_snapshot(monitor_lvgl_t *r,const display_snapshot_t *s
     if(r->root.remaining<10) r->root.remaining=10;
 }
 '''
-constants = '\n'.join(re.findall(r'^#define (?:ANIMATION_TASK_PRIORITY|MINUTE_PREPARE_MS|TASK_WDT_WAIT_MS) .*$', main, re.M))
+constants = '\n'.join(re.findall(r'^#define (?:ANIMATION_TASK_PRIORITY|MINUTE_PREPARE_MS) .*$', main, re.M))
 constants += '\n' + re.search(r'^#define RLCD_HPM_PREPARE_MS .*$', header, re.M).group()
 code = prefix + constants + '\n'
 for source, names in [(driver, ['retain_panel_pins', 'set_panel_awake', 'set_frame_sync', 'rlcd_port_frame_sync_active', 'wait_panel_frame',
@@ -150,7 +160,7 @@ for source, names in [(driver, ['retain_panel_pins', 'set_panel_awake', 'set_fra
     code += '\n'.join(function(source, name) for name in names) + '\n'
 code += r'''
 static void reset(void) {
-    tick=0; priority=1; command_count=fail_command=failed_draw=draws=notifications=0;
+    watchdog_active=true; idle_notifications=0; tick=0; priority=1; command_count=fail_command=failed_draw=draws=notifications=0;
     first_clock_roll=first_draw=0; clock_valid=true;storm=false;
     pm_acquires=pm_releases=pm_active=0;
     te_signal=te_token=false;te_waits=irq_enabled=0;
@@ -172,16 +182,16 @@ int main(void) {
     assert(rlcd_port_set_animation_mode(&p,true)==ESP_OK);
     const uint8_t high[]={0x38};
     assert(tick==300 && command_count==1 && !memcmp(commands,high,1));
-    assert(pm_acquires==1 && pm_active==1 && p.awake_lock_held);
+    assert(pm_acquires==2 && pm_releases==1 && pm_active==1 && p.awake_lock_held);
     assert(command_at[0]==0);
     assert(rlcd_port_set_animation_mode(&p,true)==ESP_OK && tick==300 && command_count==1);
-    assert(pm_acquires==1);
+    assert(pm_acquires==2);
     assert(rlcd_port_set_animation_mode(&p,false)==ESP_OK);
     const uint8_t low[]={0x39};
     assert(tick==400 && command_count==2 && !memcmp(commands+1,low,1));
     assert(command_at[1]==300);
-    assert(pm_releases==1 && !pm_active && !p.awake_lock_held);
-    puts("Datasheet HPM/LPM command order, settling and idempotence: PASS");
+    assert(pm_releases==2 && !pm_active && !p.awake_lock_held);
+    puts("Full HPM/LPM settling delays allow sleep with TE disabled; commands and resumed HPM stay protected: PASS");
     for(unsigned fault=1;fault<=1;fault++) {
         reset();p=(rlcd_port_t){.mode_known=true};fail_command=fault;
         assert(rlcd_port_set_animation_mode(&p,true)==ESP_FAIL && !p.mode_known);
@@ -189,7 +199,7 @@ int main(void) {
         unsigned next=command_count;
         assert(rlcd_port_set_animation_mode(&p,false)==ESP_OK);
         assert(commands[next]==0x38 && p.mode_known && !p.animation_mode);
-        assert(pm_acquires==1 && pm_releases==1 && !pm_active);
+        assert(pm_acquires==2 && pm_releases==2 && !pm_active);
     }
     for(unsigned fault=1;fault<=1;fault++) {
         reset();p=(rlcd_port_t){.mode_known=true,.animation_mode=true};fail_command=fault;
@@ -202,10 +212,15 @@ int main(void) {
         reset();priority=base;tick=1000;p=(rlcd_port_t){.mode_known=true};
         assert(wait_display_refresh(&p)&MONITOR_REFRESH_CLOCK);
         assert(tick==60000 && command_at[0]==59620 && p.animation_mode && priority==base);
+        assert(notifications==2 && idle_notifications==1 && watchdog_active);
         assert(command_at[0]+RLCD_HPM_PREPARE_MS==59920);
         reset();priority=base;tick=59620;storm=true;p=(rlcd_port_t){.mode_known=true};
         assert(wait_display_refresh(&p)==3 && tick==60000 && notifications==80 && priority==base);
     }
+    assert(watchdog_active);
+    reset();clock_valid=false;storm=true;p=(rlcd_port_t){.mode_known=true};
+    assert(wait_display_refresh(&p)==2 && tick==1 && idle_notifications==1 && watchdog_active);
+    puts("Idle display waits directly for minute preparation or notifications, restoring TWDT before active work: PASS");
     puts("Minute preparation at :59.620, ready at :59.920, dispatch at :00.000; notification storm does not delay it: PASS");
     for(unsigned base=1;base<=7;base+=6) for(unsigned fault=0;fault<=1;fault++) {
         reset();priority=base;tick=1000;failed_draw=fault?3:0;
@@ -214,6 +229,11 @@ int main(void) {
         assert(first_draw==1300 && priority==base && !p.animation_mode && !r.root.remaining);
     }
     puts("All animation frames run at high priority after HPM settling; success and draw failure restore priority and LPM: PASS");
+    reset();tick=1000;p=(rlcd_port_t){.mode_known=true};
+    monitor_lvgl_t static_frame={0};
+    assert(present_monitor(&static_frame,&p,NULL)==ESP_OK);
+    assert(draws==1 && command_count==0 && !pm_acquires && !p.animation_mode && tick==1007);
+    puts("Static update commits directly in known LPM without HPM switching, settling or final-scan waits: PASS");
     reset();tick=1000;te_signal=true;
     p=(rlcd_port_t){.mode_known=true,.frame_ready=1};
     monitor_lvgl_t synced={.root.remaining=12};

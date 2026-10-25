@@ -35,6 +35,7 @@ static void flush_cb(lv_display_t *display, const lv_area_t *area, uint8_t *px_m
     monitor_pack_i1_region(px_map + MONITOR_I1_PALETTE_BYTES, stride,
                            MONITOR_DISPLAY_WIDTH, MONITOR_DISPLAY_HEIGHT,
                            area->x1, area->y1, area->x2, area->y2, renderer->packed);
+    monitor_damage_mark(&renderer->dirty, area->x1, area->y1, area->x2, area->y2);
     lv_display_flush_ready(display);
 }
 
@@ -44,6 +45,7 @@ bool monitor_renderer_init(monitor_renderer_t *renderer,
     if(renderer == NULL || create_screen == NULL) return false;
     memset(renderer, 0, sizeof(*renderer));
 
+    renderer->force_full = true;
     lv_init();
     renderer->draw_buffer = (uint8_t *)renderer_buffer_alloc(MONITOR_I1_DRAW_BUFFER_BYTES);
     renderer->packed = (uint8_t *)renderer_buffer_alloc(MONITOR_FRAME_BYTES);
@@ -99,7 +101,10 @@ bool monitor_renderer_render(monitor_renderer_t *renderer)
 
 void monitor_renderer_invalidate_all(monitor_renderer_t *renderer)
 {
-    if (renderer != NULL && renderer->root != NULL) lv_obj_invalidate(renderer->root);
+    if (renderer != NULL && renderer->root != NULL) {
+        renderer->force_full = true;
+        lv_obj_invalidate(renderer->root);
+    }
 }
 
 bool monitor_renderer_rebuild(monitor_renderer_t *renderer,
@@ -108,6 +113,7 @@ bool monitor_renderer_rebuild(monitor_renderer_t *renderer,
     if(renderer == NULL || renderer->display == NULL || create_screen == NULL) return false;
     if(renderer->root != NULL) lv_obj_delete(renderer->root);
     renderer->root = create_screen(lv_screen_active());
+    renderer->force_full = true;
     return renderer->root != NULL;
 }
 

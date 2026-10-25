@@ -1,6 +1,7 @@
 #include "monitor_lvgl.h"
 
 #include <stdlib.h>
+#include <string.h>
 #include "esp_check.h"
 #include "esp_timer.h"
 
@@ -47,10 +48,23 @@ esp_err_t monitor_lvgl_render(monitor_lvgl_t *renderer)
 {
     if (!renderer || !renderer->renderer.display) return ESP_ERR_INVALID_ARG;
     if (!monitor_renderer_render(&renderer->renderer)) return ESP_FAIL;
+    return ESP_OK;
+}
+
+esp_err_t monitor_lvgl_present(monitor_lvgl_t *renderer)
+{
+    if (!renderer || !renderer->renderer.display) return ESP_ERR_INVALID_ARG;
     /* Pack every dirty LVGL region before the single physical frame commit.
-     * display_port retains TE pacing even when the packed frame is unchanged. */
-    return rlcd_port_draw_diff(renderer->port,
-                               monitor_renderer_packed(&renderer->renderer), MONITOR_FRAME_BYTES);
+     * Dirty tiles survive render calls until a successful commit. display_port
+     * retains TE pacing even when the packed frame is unchanged. */
+    esp_err_t err = rlcd_port_draw_dirty(renderer->port,
+        monitor_renderer_packed(&renderer->renderer), MONITOR_FRAME_BYTES,
+        &renderer->renderer.dirty, renderer->renderer.force_full);
+    if (err == ESP_OK) {
+        memset(&renderer->renderer.dirty, 0, sizeof(renderer->renderer.dirty));
+        renderer->renderer.force_full = false;
+    }
+    return err;
 }
 
 lv_obj_t *monitor_lvgl_root(const monitor_lvgl_t *renderer)

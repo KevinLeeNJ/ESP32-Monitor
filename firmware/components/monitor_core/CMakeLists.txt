@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "../../src/display/monitor_pack.c"
+        "../../src/display/monitor_damage.c"
         "../../src/display/monitor_devices_data.c"
         "../../src/display/monitor_render.c"
         "../../app/ui/monitor_ui.c"

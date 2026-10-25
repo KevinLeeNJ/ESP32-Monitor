@@ -31,6 +31,8 @@ struct rlcd_port {
     bool mode_known;
     esp_pm_lock_handle_t awake_lock;
     bool awake_lock_held;
+    bool tx_pending;
+    bool recover_full;
 };
 
 static esp_err_t retain_panel_pins(const rlcd_pins_t *pins)
@@ -201,8 +203,8 @@ esp_err_t rlcd_port_set_animation_mode(rlcd_port_t *port, bool active)
 {
     ESP_RETURN_ON_FALSE(port != NULL, ESP_ERR_INVALID_ARG, "rlcd", "invalid port");
     if (port->mode_known && port->animation_mode == active) return ESP_OK;
-    /* TE is an edge interrupt, not a Light Sleep wake source. Keep the chip
-     * awake throughout HPM settling and presentation, including frame waits. */
+    /* Protect commands and animation/TE waits. The panel settles independently
+     * with TE disabled, so its full settling delays may use automatic sleep. */
     ESP_RETURN_ON_ERROR(set_panel_awake(port, true), "rlcd", "panel wake lock");
     set_frame_sync(port, false);
     const bool unknown = !port->mode_known;
@@ -210,13 +212,16 @@ esp_err_t rlcd_port_set_animation_mode(rlcd_port_t *port, bool active)
     /* ST7305 v0.2 section 7.11, p53. Recover an unknown state via HPM first. */
     if (active || unknown) {
         ESP_RETURN_ON_ERROR(send_cmd(port, 0x38), "rlcd", "HPM switch");
+        ESP_RETURN_ON_ERROR(set_panel_awake(port, false), "rlcd", "HPM settle unlock");
         vTaskDelay(pdMS_TO_TICKS(300));
+        /* Reacquire before enabling TE, or issuing the recovery LPM command. */
+        ESP_RETURN_ON_ERROR(set_panel_awake(port, true), "rlcd", "HPM settle relock");
     }
     if (!active) {
         ESP_RETURN_ON_ERROR(send_cmd(port, 0x39), "rlcd", "LPM switch");
+        ESP_RETURN_ON_ERROR(set_panel_awake(port, false), "rlcd", "LPM settle unlock");
         vTaskDelay(pdMS_TO_TICKS(100));
     }
-    if (!active) ESP_RETURN_ON_ERROR(set_panel_awake(port, false), "rlcd", "panel wake unlock");
     port->animation_mode = active;
     port->mode_known = true;
     set_frame_sync(port, active);
@@ -310,68 +315,64 @@ esp_err_t rlcd_port_init(rlcd_port_t **out_port, const rlcd_pins_t *pins)
     return ESP_OK;
 }
 
-esp_err_t rlcd_port_draw(rlcd_port_t *port, const uint8_t *packed, uint32_t len)
+/* A timed-out DMA still owns staging. Drain it before touching the buffer or
+ * issuing another window; a late callback can never acknowledge a newer DMA. */
+static esp_err_t submit_windows(rlcd_port_t *port, const uint8_t *packed,
+                                const monitor_damage_plan_t *plan)
 {
-    ESP_RETURN_ON_FALSE(port != NULL && packed != NULL, ESP_ERR_INVALID_ARG, "rlcd", "invalid frame");
-    ESP_RETURN_ON_FALSE(len == RLCD_PACKED_BYTES, ESP_ERR_INVALID_SIZE, "rlcd", "wrong frame size");
-    memcpy(port->staging, packed, len);
-    wait_panel_frame(port);
-    ESP_RETURN_ON_ERROR(set_window(port, 0x12, 0x2a, 0x00, 0xc7), "rlcd", "set full window");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_color(port->io, 0x2c, port->staging, len), "rlcd", "full frame");
-    ESP_RETURN_ON_ERROR(wait_color_done(port), "rlcd", "full frame timeout");
-    memcpy(port->packed, packed, len);
+    if (port->tx_pending) {
+        esp_err_t err = wait_color_done(port);
+        if (err != ESP_OK) return err;
+        port->tx_pending = false;
+    }
+    wait_panel_frame(port); /* Exactly once, including unchanged animation frames. */
+    for (unsigned n = 0; n < plan->count; ++n) {
+        monitor_window_t w = plan->windows[n];
+        unsigned row_bytes = (w.t2 - w.t1 + 1U) * 3U, out = 0;
+        for (unsigned p = w.p1; p <= w.p2; ++p) {
+            memcpy(port->staging + out, packed + p * 75U + w.t1 * 3U, row_bytes);
+            out += row_bytes;
+        }
+        esp_err_t err = set_window(port, (uint8_t)(0x2a - w.t2), (uint8_t)(0x2a - w.t1), w.p1, w.p2);
+        if (err != ESP_OK) return err;
+        err = esp_lcd_panel_io_tx_color(port->io, 0x2c, port->staging, out);
+        if (err != ESP_OK) return err;
+        port->tx_pending = true;
+        err = wait_color_done(port);
+        if (err != ESP_OK) return err;
+        port->tx_pending = false;
+        out = 0;
+        for (unsigned p = w.p1; p <= w.p2; ++p) {
+            memcpy(port->packed + p * 75U + w.t1 * 3U, port->staging + out, row_bytes);
+            out += row_bytes;
+        }
+    }
     return ESP_OK;
 }
 
-esp_err_t rlcd_port_draw_diff(rlcd_port_t *port, const uint8_t *packed, uint32_t len)
+esp_err_t rlcd_port_draw_dirty(rlcd_port_t *port, const uint8_t *packed, uint32_t len,
+                               const monitor_damage_t *dirty, bool force_full)
 {
-    ESP_RETURN_ON_FALSE(port != NULL && packed != NULL, ESP_ERR_INVALID_ARG, "rlcd", "invalid frame");
+    ESP_RETURN_ON_FALSE(port && packed && dirty, ESP_ERR_INVALID_ARG, "rlcd", "invalid frame");
     ESP_RETURN_ON_FALSE(len == RLCD_PACKED_BYTES, ESP_ERR_INVALID_SIZE, "rlcd", "wrong frame size");
-    uint32_t first_page = 200, last_page = 0, first_tile = 25, last_tile = 0;
-    bool changed = false;
-    for (uint32_t i = 0; i < RLCD_PACKED_BYTES; ++i) {
-        if (packed[i] == port->packed[i]) continue;
-        changed = true;
-        uint32_t page = i / 75U;
-        uint32_t tile = (i % 75U) / 3U;
-        if (page < first_page) first_page = page;
-        if (page > last_page) last_page = page;
-        if (tile < first_tile) first_tile = tile;
-        if (tile > last_tile) last_tile = tile;
+    monitor_damage_plan_t plan;
+    if (force_full || port->recover_full) {
+        memset(&plan, 0, sizeof(plan));
+        plan.count = 1;
+        plan.bytes = RLCD_PACKED_BYTES;
+        plan.windows[0] = (monitor_window_t){0,199,0,24};
+    } else {
+        monitor_damage_plan(dirty, packed, port->packed, &plan);
     }
-    if (!changed) { wait_panel_frame(port); return ESP_OK; }
-    const uint32_t pages = last_page - first_page + 1U;
-    const uint32_t tiles = last_tile - first_tile + 1U;
-    const uint32_t bytes = pages * tiles * 3U;
-    /* Devices occupy more than half of the panel. Preserve their local window
-     * throughout a reflow instead of transmitting a full frame on every step. */
-    if (bytes == RLCD_PACKED_BYTES) return rlcd_port_draw(port, packed, len);
+    esp_err_t err = submit_windows(port, packed, &plan);
+    port->recover_full = err != ESP_OK;
+    return err;
+}
 
-    uint32_t out = 0;
-    for (uint32_t page = first_page; page <= last_page; ++page) {
-        for (uint32_t tile = first_tile; tile <= last_tile; ++tile) {
-            const uint32_t offset = page * 75U + tile * 3U;
-            memcpy(port->staging + out, packed + offset, 3U);
-            out += 3U;
-        }
-    }
-    /* MADCTL=0x48 scans columns downward; packed tile 0 starts at the
-       panel's highest column address. X is the logical 12-pixel axis. */
-    const uint8_t xs = (uint8_t)(0x2aU - last_tile);
-    const uint8_t xe = (uint8_t)(0x2aU - first_tile);
-    wait_panel_frame(port);
-    ESP_RETURN_ON_ERROR(set_window(port, xs, xe, (uint8_t)first_page, (uint8_t)last_page),
-                        "rlcd", "set partial window");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_color(port->io, 0x2c, port->staging, bytes),
-                        "rlcd", "partial transfer");
-    ESP_RETURN_ON_ERROR(wait_color_done(port), "rlcd", "partial transfer timeout");
-    for (uint32_t page = first_page; page <= last_page; ++page) {
-        for (uint32_t tile = first_tile; tile <= last_tile; ++tile) {
-            const uint32_t offset = page * 75U + tile * 3U;
-            memcpy(port->packed + offset, packed + offset, 3U);
-        }
-    }
-    return ESP_OK;
+esp_err_t rlcd_port_draw(rlcd_port_t *port, const uint8_t *packed, uint32_t len)
+{
+    const monitor_damage_t dirty = {0};
+    return rlcd_port_draw_dirty(port, packed, len, &dirty, true);
 }
 
 esp_err_t rlcd_port_deinit(rlcd_port_t *port)

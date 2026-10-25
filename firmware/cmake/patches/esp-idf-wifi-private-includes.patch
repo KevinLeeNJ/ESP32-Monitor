@@ -1,0 +1,43 @@
+--- a/components/esp_wifi/CMakeLists.txt
++++ b/components/esp_wifi/CMakeLists.txt
+@@ -81,9 +81,15 @@
+                     REQUIRES esp_event esp_phy esp_netif
+                     PRIV_REQUIRES esp_pm esp_timer nvs_flash efuse
+                                   wpa_supplicant hal lwip esp_coex
+-                    PRIV_INCLUDE_DIRS ../wpa_supplicant/src/ ../wpa_supplicant/esp_supplicant/src/
+-                                  wifi_apps/roaming_app/include wifi_apps/roaming_app/src
++                    PRIV_INCLUDE_DIRS wifi_apps/roaming_app/include wifi_apps/roaming_app/src
+                     LDFRAGMENTS "${ldfragments}")
++
++# Import internal headers from the declared private dependency without
++# registering its directories as owned by this component.
++idf_component_get_property(wpa_supplicant_dir wpa_supplicant COMPONENT_DIR)
++target_include_directories(${COMPONENT_LIB} PRIVATE
++    "${wpa_supplicant_dir}/src"
++    "${wpa_supplicant_dir}/esp_supplicant/src")
+
+ if(CONFIG_ESP_WIFI_ENABLED OR CONFIG_ESP_HOST_WIFI_ENABLED)
+     idf_build_get_property(build_dir BUILD_DIR)
+--- a/components/wpa_supplicant/CMakeLists.txt
++++ b/components/wpa_supplicant/CMakeLists.txt
+@@ -272,12 +272,17 @@
+                             "${usd_src}" "${pasn_src}" "${nan_pair_src}"
+                     INCLUDE_DIRS include port/include esp_supplicant/include
+                     PRIV_INCLUDE_DIRS src src/utils src/common esp_supplicant/src src/crypto
+-                                      ../esp_wifi/wifi_apps/roaming_app/include
+-                                      ../esp_wifi/wifi_apps/roaming_app/src
+-                                      ../esp_wifi/wifi_apps/include/apps_private
+                                       esp_supplicant/include/esp_private
+                     LDFRAGMENTS   ${linker_fragments}
+                     PRIV_REQUIRES mbedtls esp_timer esp_wifi)
++
++# Import internal headers from the declared private dependency without
++# registering its directories as owned by this component.
++idf_component_get_property(esp_wifi_dir esp_wifi COMPONENT_DIR)
++target_include_directories(${COMPONENT_LIB} PRIVATE
++    "${esp_wifi_dir}/wifi_apps/roaming_app/include"
++    "${esp_wifi_dir}/wifi_apps/roaming_app/src"
++    "${esp_wifi_dir}/wifi_apps/include/apps_private")
+
+ target_compile_definitions(${COMPONENT_LIB} PRIVATE
+     __ets__
