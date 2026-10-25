@@ -503,6 +503,16 @@ static void test_configuring_to_offline(void)
     ui.wifi_state = MONITOR_WIFI_CONNECTED;
     monitor_ui_apply_snapshot(r.root, &ui);
     CHECK(!strcmp(lv_label_get_text(date), "SAT 24 OCT"), "connection restores date");
+    for (int state = MONITOR_WIFI_PROVISIONING; state <= MONITOR_WIFI_OFFLINE; ++state) {
+        ui.wifi_state = (monitor_wifi_state_t)state;
+        ui.profiling = true;
+        monitor_ui_apply_snapshot(r.root, &ui);
+        CHECK(!strcmp(lv_label_get_text(date), "Profiling"), "profiling overrides date and every network status");
+    }
+    ui.profiling = false;
+    ui.wifi_state = MONITOR_WIFI_CONNECTED;
+    monitor_ui_apply_snapshot(r.root, &ui);
+    CHECK(!strcmp(lv_label_get_text(date), "SAT 24 OCT"), "profiling completion restores current date");
     monitor_renderer_deinit(&r);
 }
 

@@ -69,6 +69,7 @@ typedef struct {
     int temperature_tenths_c;
     int humidity_percent;
     int aqi;
+    bool profiling;
 } monitor_ui_snapshot_t;
 
 typedef struct {

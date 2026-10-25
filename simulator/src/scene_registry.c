@@ -159,7 +159,19 @@ static lv_obj_t *create_local_offline(lv_obj_t *parent, monitor_frame_variant_t 
     return root;
 }
 
+static lv_obj_t *create_profiling(lv_obj_t *parent, monitor_frame_variant_t variant)
+{
+    lv_obj_t *root = create_monitor_scene(parent, variant);
+    monitor_ui_snapshot_t ui = {.time_text = "12:34", .date_text = "SUN 25 OCT",
+        .wifi_state = MONITOR_WIFI_CONNECTED, .battery_percent = 78,
+        .weather_condition = MONITOR_WEATHER_CLEAR,
+        .temperature_tenths_c = 245, .humidity_percent = 58, .aqi = 42, .profiling = true};
+    monitor_ui_apply_snapshot(root, &ui);
+    return root;
+}
+
 static const simulator_scene_t SCENES[] = {
+    { .name = "profiling", .description = "PM profiling replaces the date for five minutes", .create = create_profiling },
     { .name = "configuring", .description = "Configuration session status", .create = create_configuring },
     { .name = "offline", .description = "Offline retains local data after configuration", .create = create_local_offline },
     { .name = "monitor-waiting", .description = "Live boot placeholders before first data", .create = create_waiting },

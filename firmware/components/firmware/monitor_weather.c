@@ -38,7 +38,7 @@ static monitor_weather_data_t s_data = {
 
 static void feed_task_watchdog(void)
 {
-    (void)esp_task_wdt_reset();
+    ESP_ERROR_CHECK(esp_task_wdt_reset());
 }
 
 typedef struct {
@@ -360,13 +360,14 @@ static void update_weather(void)
 static void weather_task(void *arg)
 {
     (void)arg;
-    esp_err_t wdt_err = esp_task_wdt_add(NULL);
-    if (wdt_err != ESP_OK && wdt_err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(TAG, "task watchdog registration failed: %s", esp_err_to_name(wdt_err));
-    }
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
     for (;;) {
         uint32_t notified = 0;
-        xTaskNotifyWait(0, UINT32_MAX, &notified, pdMS_TO_TICKS(1000));
+        /* Wi-Fi, time validity and the clock scheduler all notify this task.
+         * Do not wake once a second solely to service an idle watchdog. */
+        ESP_ERROR_CHECK(esp_task_wdt_delete(NULL));
+        xTaskNotifyWait(0, UINT32_MAX, &notified, portMAX_DELAY);
+        ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
         feed_task_watchdog();
         if (s_wifi_available && monitor_clock_is_valid() && (notified & WEATHER_EVT_UPDATE)) update_weather();
     }

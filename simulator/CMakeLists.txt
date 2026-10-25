@@ -38,6 +38,7 @@ endif()
 
 add_library(monitor_sim_core STATIC
     "${FIRMWARE_ROOT}/src/display/monitor_pack.c"
+    "${FIRMWARE_ROOT}/src/display/monitor_damage.c"
     "${FIRMWARE_ROOT}/src/display/monitor_devices_data.c"
     "${CJSON_SOURCE_DIR}/cJSON.c"
     "${FIRMWARE_ROOT}/src/display/monitor_render.c"

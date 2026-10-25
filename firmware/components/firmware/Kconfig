@@ -1,0 +1,13 @@
+menu "ESP32 Monitor"
+
+config MONITOR_PM_PROFILE
+    bool "Enable KEY-triggered PM profiling"
+    default n
+    depends on PM_ENABLE
+    select PM_PROFILING
+    help
+        Build the five-minute PM capture task and persisted report support.
+        Hold KEY alone for three seconds to capture or print a saved report.
+        Leave disabled for production firmware.
+
+endmenu

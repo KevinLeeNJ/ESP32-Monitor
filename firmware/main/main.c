@@ -16,6 +16,7 @@
 #include "monitor_weather.h"
 #include "monitor_devices.h"
 #include "monitor_display_refresh.h"
+#include "monitor_pm_profile.h"
 
 #include <string.h>
 #include <sys/time.h>
@@ -26,7 +27,6 @@
 /* Above the data producers (3-4), for every animation and mode transition. */
 #define ANIMATION_TASK_PRIORITY 5U
 #define MINUTE_PREPARE_MS (RLCD_HPM_PREPARE_MS + 80U)
-#define TASK_WDT_WAIT_MS 1000U
 
 static const rlcd_pins_t PINS = {
     .mosi = 12,
@@ -38,14 +38,10 @@ static const rlcd_pins_t PINS = {
 };
 
 static monitor_ui_demo_data_t g_demo;
-static esp_pm_lock_handle_t g_render_cpu_lock;
 
 static void feed_task_watchdog(void)
 {
-    esp_err_t err = esp_task_wdt_reset();
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(TAG, "display task watchdog reset failed: %s", esp_err_to_name(err));
-    }
+    ESP_ERROR_CHECK(esp_task_wdt_reset());
 }
 
 typedef struct {
@@ -58,6 +54,7 @@ typedef struct {
     monitor_devices_snapshot_t devices;
     char time_text[8];
     char date_text[16];
+    bool profiling;
 } display_snapshot_t;
 
 
@@ -89,6 +86,7 @@ static void capture_display_snapshot(display_snapshot_t *snapshot)
     snapshot->aqi = g_demo.aqi;
     snapshot->weather_condition = g_demo.weather_condition;
     snapshot->wifi_state = monitor_wifi_get_state();
+    snapshot->profiling = monitor_pm_profile_active();
     g_demo.wifi_state = snapshot->wifi_state;
 }
 
@@ -102,6 +100,7 @@ static bool display_snapshot_equal(const display_snapshot_t *a,
            a->aqi == b->aqi &&
            a->weather_condition == b->weather_condition &&
            a->wifi_state == b->wifi_state &&
+           a->profiling == b->profiling &&
            strcmp(a->time_text, b->time_text) == 0 &&
            strcmp(a->date_text, b->date_text) == 0;
 }
@@ -115,10 +114,10 @@ static lv_obj_t *monitor_screen_factory(lv_obj_t *parent)
 
 static esp_err_t commit_monitor_frame(monitor_lvgl_t *renderer)
 {
-    ESP_RETURN_ON_ERROR(esp_pm_lock_acquire(g_render_cpu_lock), TAG, "render CPU lock");
-    esp_err_t result = monitor_lvgl_render(renderer);
-    esp_err_t release = esp_pm_lock_release(g_render_cpu_lock);
-    return result != ESP_OK ? result : release;
+    /* FreeRTOS owns the CPU_MAX lock while runnable. Blocking TE/SPI waits
+     * must be free to lower the CPU frequency through the normal PM hooks. */
+    ESP_RETURN_ON_ERROR(monitor_lvgl_render(renderer), TAG, "render frame");
+    return monitor_lvgl_present(renderer);
 }
 
 static esp_err_t restore_panel_lpm(rlcd_port_t *port)
@@ -193,10 +192,13 @@ static uint32_t wait_display_refresh(rlcd_port_t *port)
             if (remaining <= MINUTE_PREPARE_MS) continue;
             until = remaining - MINUTE_PREPARE_MS;
         }
-        TickType_t ticks = until == UINT32_MAX ? pdMS_TO_TICKS(TASK_WDT_WAIT_MS) :
-                           pdMS_TO_TICKS(until > TASK_WDT_WAIT_MS ? TASK_WDT_WAIT_MS : until);
-        if (xTaskNotifyWait(0, UINT32_MAX, &reasons, ticks ? ticks : 1)) return reasons;
-        feed_task_watchdog();
+        TickType_t ticks = until == UINT32_MAX ? portMAX_DELAY : pdMS_TO_TICKS(until);
+        /* Only active display work needs a deadline. Idle tasks remain watched
+         * on both cores; a quiet screen can block until the next real event. */
+        ESP_ERROR_CHECK(esp_task_wdt_delete(NULL));
+        BaseType_t notified = xTaskNotifyWait(0, UINT32_MAX, &reasons, ticks ? ticks : 1);
+        ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
+        if (notified) return reasons;
     }
 }
 
@@ -250,10 +252,10 @@ static esp_err_t present_monitor(monitor_lvgl_t *renderer, rlcd_port_t *port,
         if (retry != ESP_OK) ESP_LOGE(TAG, "settled frame retry failed: %s", esp_err_to_name(retry));
     }
     if (animated) vTaskDelay(pdMS_TO_TICKS(MONITOR_UI_ANIMATION_FRAME_MS)); /* Let the final HPM scan finish. */
-    /* Include the 20+100ms LPM transition itself in the look-ahead, otherwise
+    /* Include the 100ms LPM transition itself in the look-ahead, otherwise
      * returning to LPM can consume the remaining HPM preparation window. */
     const bool keep_hpm = result == ESP_OK && monitor_clock_is_valid() &&
-                          milliseconds_to_minute() <= MINUTE_PREPARE_MS + 120U;
+                          milliseconds_to_minute() <= MINUTE_PREPARE_MS + 100U;
     esp_err_t low_power = keep_hpm ? ESP_OK : restore_panel_lpm(port);
     vTaskPrioritySet(NULL, original_priority);
     return low_power != ESP_OK ? low_power : result;
@@ -268,6 +270,7 @@ static void apply_display_snapshot(monitor_lvgl_t *renderer, const display_snaps
         .weather_condition = snapshot->weather_condition,
         .temperature_tenths_c = snapshot->temperature_tenths_c,
         .humidity_percent = snapshot->humidity_percent, .aqi = snapshot->aqi,
+        .profiling = snapshot->profiling,
     };
     monitor_ui_apply_snapshot(monitor_lvgl_root(renderer), &ui);
     if (devices_changed) monitor_ui_apply_devices_snapshot(monitor_lvgl_root(renderer), &snapshot->devices);
@@ -300,6 +303,7 @@ static esp_err_t present_boot_monitor(monitor_lvgl_t *renderer, rlcd_port_t *por
     const bool raised_priority = original_priority < ANIMATION_TASK_PRIORITY;
     if (raised_priority) vTaskPrioritySet(NULL, ANIMATION_TASK_PRIORITY);
     bool have_snapshot = false, complete = false;
+    bool hpm = true;
     memset(displayed, 0, sizeof(*displayed));
     esp_err_t result = rlcd_port_set_animation_mode(port, true);
     ESP_LOGI(TAG, "boot animation started (timeout=%u ms, task priority=%u)",
@@ -326,6 +330,14 @@ static esp_err_t present_boot_monitor(monitor_lvgl_t *renderer, rlcd_port_t *por
          * its first frame must not inherit an old, long-expired deadline. */
         if (!was_animating && monitor_ui_animation_active(root)) frame_tick = now;
         if (changed) {
+            if (!hpm && monitor_ui_animation_active(root)) {
+                result = rlcd_port_set_animation_mode(port, true);
+                if (result != ESP_OK) break;
+                hpm = true;
+                /* Settling is not animation time: show every fresh timeline
+                 * from its first frame after the panel becomes ready. */
+                frame_tick = previous = xTaskGetTickCount();
+            }
             result = commit_monitor_frame(renderer);
             if (result != ESP_OK) break;
         }
@@ -339,12 +351,21 @@ static esp_err_t present_boot_monitor(monitor_lvgl_t *renderer, rlcd_port_t *por
         if (monitor_ui_animation_active(root)) {
             if (!rlcd_port_frame_sync_active(port)) wait_animation_frame(&frame_tick, remaining);
         } else {
-            /* Keep HPM between incoming sources, without redrawing unchanged
-             * content. Every producer notification is admitted during boot. */
+            /* No animation is running. Let the final scan finish, then wait
+             * in LPM for producer data or the absolute startup deadline. */
+            if (hpm) {
+                vTaskDelay(pdMS_TO_TICKS(MONITOR_UI_ANIMATION_FRAME_MS));
+                result = restore_panel_lpm(port);
+                if (result != ESP_OK) break;
+                hpm = false;
+            }
+            elapsed = xTaskGetTickCount() - started;
+            if (elapsed >= timeout) break;
+            remaining = timeout - elapsed;
             uint32_t reasons = 0;
-            TickType_t wait = remaining > pdMS_TO_TICKS(TASK_WDT_WAIT_MS) ?
-                              pdMS_TO_TICKS(TASK_WDT_WAIT_MS) : remaining;
-            xTaskNotifyWait(0, UINT32_MAX, &reasons, wait ? wait : 1);
+            ESP_ERROR_CHECK(esp_task_wdt_delete(NULL));
+            xTaskNotifyWait(0, UINT32_MAX, &reasons, remaining);
+            ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
         }
     }
     if (!complete) {
@@ -355,7 +376,7 @@ static esp_err_t present_boot_monitor(monitor_lvgl_t *renderer, rlcd_port_t *por
         esp_err_t commit = commit_monitor_frame(renderer);
         if (result == ESP_OK) result = commit;
     }
-    vTaskDelay(pdMS_TO_TICKS(MONITOR_UI_ANIMATION_FRAME_MS)); /* Finish the final HPM scan before LPM. */
+    if (hpm) vTaskDelay(pdMS_TO_TICKS(MONITOR_UI_ANIMATION_FRAME_MS)); /* Finish the final HPM scan. */
     esp_err_t low_power = restore_panel_lpm(port);
     if (raised_priority) vTaskPrioritySet(NULL, original_priority);
     ESP_LOGI(TAG, "boot animation %s after %u ms", result != ESP_OK || low_power != ESP_OK ? "failed" :
@@ -377,10 +398,7 @@ static void reset_demo(void)
 
 void app_main(void)
 {
-    esp_err_t wdt_err = esp_task_wdt_add(NULL);
-    if (wdt_err != ESP_OK && wdt_err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(TAG, "display task watchdog registration failed: %s", esp_err_to_name(wdt_err));
-    }
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
     feed_task_watchdog();
     esp_err_t nvs_err = nvs_flash_init();
     if(nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -400,10 +418,10 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "lcd_startup", &startup_lock));
     ESP_ERROR_CHECK(esp_pm_lock_acquire(startup_lock));
     ESP_ERROR_CHECK(esp_pm_configure(&pm_config));
-    ESP_ERROR_CHECK(esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "render", &g_render_cpu_lock));
     /* One shared, IRAM-safe GPIO ISR service for panel TE and both buttons. */
     ESP_ERROR_CHECK(gpio_install_isr_service(ESP_INTR_FLAG_IRAM));
     monitor_display_refresh_register();
+    ESP_ERROR_CHECK(monitor_pm_profile_init());
 
     rlcd_port_t *port = NULL;
     ESP_ERROR_CHECK(rlcd_port_init(&port, &PINS));
@@ -423,6 +441,7 @@ void app_main(void)
         ESP_LOGE(TAG, "LVGL renderer initialization failed");
         ESP_ERROR_CHECK(esp_pm_lock_release(startup_lock));
         ESP_ERROR_CHECK(esp_pm_lock_delete(startup_lock));
+        ESP_ERROR_CHECK(esp_task_wdt_delete(NULL));
         return;
     }
 
@@ -434,7 +453,9 @@ void app_main(void)
      * Data tasks may fill their caches, but only this task applies UI snapshots.
      * vTaskDelay is not interrupted by their notifications: even a valid RTC
      * and ready sensors cannot replace -- before the full two seconds elapse. */
+    ESP_ERROR_CHECK(esp_task_wdt_delete(NULL));
     vTaskDelay(pdMS_TO_TICKS(BOOT_UI_HOLD_MS));
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
     feed_task_watchdog();
     /* Sample the latest caches after the hold, then reuse normal animations. */
     display_snapshot_t displayed;
@@ -452,6 +473,10 @@ void app_main(void)
             esp_err_t draw_err = present_monitor(renderer, port, &current);
             if (draw_err != ESP_OK) ESP_LOGE(TAG, "display commit failed: %s", esp_err_to_name(draw_err));
             else displayed = current;
+        } else {
+            /* Minute preparation may have entered HPM even if a time
+             * correction leaves the visible snapshot unchanged. */
+            ESP_ERROR_CHECK(restore_panel_lpm(port));
         }
     }
 }

@@ -19,6 +19,8 @@ code=r'''
 #define portEXIT_CRITICAL(p) ((void)(p))
 #define pdMS_TO_TICKS(ms) (ms)
 #define pdTRUE 1
+#define portMAX_DELAY UINT32_MAX
+#define ESP_ERROR_CHECK(c) assert((c)==ESP_OK)
 #define NVS_READONLY 0
 typedef int TaskHandle_t,portMUX_TYPE,nvs_handle_t;
 typedef uint32_t TickType_t;
@@ -34,7 +36,10 @@ static jmp_buf ended;
 static void expire_snapshot(void *);
 static int64_t esp_timer_get_time(void){return now;}
 static bool monitor_clock_is_valid(void){return clock_valid;}
-static int esp_task_wdt_add(void *p){(void)p;return ESP_OK;}
+static bool watchdog_active;
+static unsigned idle_waits;
+static int esp_task_wdt_add(void *p){(void)p;assert(!watchdog_active);watchdog_active=true;return ESP_OK;}
+static int esp_task_wdt_delete(void *p){(void)p;assert(watchdog_active);watchdog_active=false;return ESP_OK;}
 static void feed_task_watchdog(void){++feeds;}
 static void xTaskNotifyGive(int task){assert(task);notified=true;}
 static int esp_timer_stop(esp_timer_handle_t timer){timer->active=false;return ESP_OK;}
@@ -57,7 +62,7 @@ code+=r'''
 typedef struct {struct {int socket;} guard;} devices_transport_t;
 static void transport_reset(devices_transport_t *t){(void)t;++resets;}
 static bool fetch(devices_transport_t *transport,const devices_config_t *cfg,monitor_devices_snapshot_t *out,int *status,bool *reused){
-    (void)transport;assert(cfg->url[0] && cfg->token[0]);*reused=false;++calls;
+    assert(watchdog_active); (void)transport;assert(cfg->url[0] && cfg->token[0]);*reused=false;++calls;
     // Each scenario uses the real worker decision logic with a bounded transport result.
     bool ok=scenario==0 || (scenario==1 && calls==1) || (scenario==2 && (calls==1 || calls>=3)) || ((scenario==7 || scenario==8) && calls==1);
     *status=ok?200:(scenario==3 || scenario==8)?401:scenario==4?403:503;
@@ -73,7 +78,7 @@ code+=r'''
 static unsigned ulTaskNotifyTake(int clear,unsigned wait){
     (void)clear;
     if(!wait){unsigned result=notified;notified=false;return result;}
-    assert(wait>=1 && wait<=1000); // never a tight loop, and service watchdog every second
+    assert(wait>=1 && !watchdog_active); ++idle_waits; // no watchdog-only periodic wake
     int64_t target=now+wait*1000LL;
     int64_t periodic=(now/PERIOD_US+1)*PERIOD_US;
     if(clock_valid && notify_clock && periodic<target)target=periodic;
@@ -91,7 +96,7 @@ static unsigned ulTaskNotifyTake(int clear,unsigned wait){
     unsigned result=notified;notified=false;return result;
 }
 static void reset(void){
-    now=0;finish=95000000;disconnect_at=reconnect_at=config_at=-1;
+    watchdog_active=false;idle_waits=0;now=0;finish=95000000;disconnect_at=reconnect_at=config_at=-1;
     calls=resets=notices=feeds=scenario=0;last_reason=0;notified=false;
     clock_valid=notify_clock=nvs_ok=true;
     memset(&s_config,0,sizeof(s_config));s_snapshot=(monitor_devices_snapshot_t){0};s_generation=0;s_wifi=false;s_have_snapshot=false;s_last_success=0;
@@ -99,7 +104,7 @@ static void reset(void){
     stored_url="http://fixture.test";stored_token="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     monitor_devices_config_changed();monitor_devices_set_wifi_available(true);
 }
-static void work(void){if(!setjmp(ended))devices_task(NULL);assert(feeds>0);}
+static void work(void){if(!setjmp(ended))devices_task(NULL);assert(idle_waits>0 && !watchdog_active);}
 int main(void){
     reset();work();assert(calls==4 && last_status==MONITOR_DEVICES_READY && s_have_snapshot);
     assert(s_snapshot.version==2); // WAITING then first READY; identical polls renew lease silently
@@ -113,7 +118,7 @@ int main(void){
         if(invalid==2)stored_token=NULL;
         if(invalid==3)stored_token="invalid";
         if(invalid==4)stored_url="https://user@fixture.test";
-        monitor_devices_config_changed();work();assert(calls==0 && last_status==MONITOR_DEVICES_NOT_CONFIGURED);
+        monitor_devices_config_changed();work();assert(calls==0 && last_status==MONITOR_DEVICES_NOT_CONFIGURED && idle_waits<=5);
     }
     reset();scenario=1;finish=89999999;work();assert(s_have_snapshot && last_status==MONITOR_DEVICES_STALE && s_snapshot.count==1);
     reset();scenario=1;finish=90000001;work();assert(!s_have_snapshot && last_status==MONITOR_DEVICES_UNAVAILABLE && !s_snapshot.count);

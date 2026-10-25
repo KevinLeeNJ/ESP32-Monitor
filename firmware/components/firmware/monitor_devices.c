@@ -138,7 +138,7 @@ typedef struct {
 static void feed_task_watchdog(void)
 {
 #ifdef ESP_PLATFORM
-    (void)esp_task_wdt_reset();
+    ESP_ERROR_CHECK(esp_task_wdt_reset());
 #endif
 }
 
@@ -321,10 +321,7 @@ done:
 static void devices_task(void *arg)
 {
     (void)arg;
-    esp_err_t wdt_err = esp_task_wdt_add(NULL);
-    if (wdt_err != ESP_OK && wdt_err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(TAG, "task watchdog registration failed: %s", esp_err_to_name(wdt_err));
-    }
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
     int64_t next_poll = 0;
     devices_transport_t transport = {.guard.socket = -1};
     uint32_t transport_generation = UINT32_MAX;
@@ -409,10 +406,14 @@ static void devices_task(void *arg)
             int64_t poll = clock_ready ? next_poll : INT64_MAX;
             if (poll < wake) wake = poll;
         }
-        TickType_t wait = wake == INT64_MAX ? pdMS_TO_TICKS(1000) :
+        TickType_t wait = wake == INT64_MAX ? portMAX_DELAY :
                           pdMS_TO_TICKS((wake > now ? wake - now : 1000) / 1000 + 1);
-        if (wait > pdMS_TO_TICKS(1000)) wait = pdMS_TO_TICKS(1000);
-        if (ulTaskNotifyTake(pdTRUE, wait)) next_poll = 0;
+        /* Poll/lease deadlines and producer notifications own the idle wait;
+         * keep the task watchdog subscribed throughout active HTTP work. */
+        ESP_ERROR_CHECK(esp_task_wdt_delete(NULL));
+        uint32_t notified = ulTaskNotifyTake(pdTRUE, wait);
+        ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
+        if (notified) next_poll = 0;
         feed_task_watchdog();
     }
 }

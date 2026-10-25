@@ -38,11 +38,17 @@ for source, task in ((weather, "weather_task"), (devices, "devices_task")):
     assert "esp_task_wdt_add(NULL)" in body, f"{task} must subscribe"
     assert "esp_task_wdt_reset()" in source, f"{task} must feed"
 
-assert "pdMS_TO_TICKS(TASK_WDT_WAIT_MS)" in main
-assert "#define TASK_WDT_WAIT_MS 1000U" in main
-assert "pdMS_TO_TICKS(1000)" in weather
+assert "TASK_WDT_WAIT_MS" not in main
+assert "ESP_PM_CPU_FREQ_MAX" not in main
+assert "&reasons, remaining" in main
+# Idle notification waits unsubscribe; active work keeps the five-second TWDT.
+for source in (main, weather, devices):
+    assert "ESP_ERROR_CHECK(esp_task_wdt_delete(NULL))" in source
+    assert "ESP_ERROR_CHECK(esp_task_wdt_add(NULL))" in source
+assert "&notified, portMAX_DELAY" in weather
+assert "if (wait > pdMS_TO_TICKS(1000))" not in devices
 assert "#define HTTP_TIMEOUT_MS 4000" in weather
 assert "#define REQUEST_US (4LL * 1000000)" in devices
 assert re.search(r".timeout_ms = 4000", devices)
 assert "esp_task_wdt_reset()" in weather and "esp_task_wdt_reset()" in devices
-print("TWDT enabled with panic reboot; display/weather/Devices subscribe and service within bounded waits: PASS")
+print("TWDT enabled with panic reboot; display/weather/Devices watch active work and unsubscribe for event/deadline idle waits: PASS")

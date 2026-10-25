@@ -3,6 +3,7 @@
 #include "monitor_weather.h"
 #include "monitor_devices.h"
 #include "monitor_display_refresh.h"
+#include "monitor_pm_profile.h"
 
 #include <string>
 #include <atomic>
@@ -268,8 +269,12 @@ static void button_task(void *arg)
         vTaskDelete(NULL); return;
     }
     bool stable[2] = {gpio_get_level(BOOT_BUTTON_GPIO) == 0, gpio_get_level(KEY_BUTTON_GPIO) == 0};
-    bool both_timing = false, triggered = false;
-    TickType_t both_since = 0;
+    bool both_timing = stable[0] && stable[1], triggered = false;
+    TickType_t both_since = xTaskGetTickCount();
+#if CONFIG_MONITOR_PM_PROFILE
+    bool key_timing = stable[1] && !stable[0], key_triggered = both_timing;
+    TickType_t key_since = both_since;
+#endif
     configure_wake_levels(stable[0], stable[1]);
     uint32_t pending = 0;
     for (;;) {
@@ -279,6 +284,14 @@ static void button_task(void *arg)
             TickType_t hold = pdMS_TO_TICKS(CONFIG_HOLD_MS);
             wait = elapsed >= hold ? 0 : hold - elapsed;
         }
+#if CONFIG_MONITOR_PM_PROFILE
+        if (key_timing && !key_triggered) {
+            TickType_t elapsed = xTaskGetTickCount() - key_since;
+            TickType_t hold = pdMS_TO_TICKS(CONFIG_HOLD_MS);
+            TickType_t remaining = elapsed >= hold ? 0 : hold - elapsed;
+            if (remaining < wait) wait = remaining;
+        }
+#endif
         uint32_t events = 0;
         xTaskNotifyWait(0, UINT32_MAX, &events, wait);
         pending |= events;
@@ -293,11 +306,23 @@ static void button_task(void *arg)
             const bool both = stable[0] && stable[1];
             if (!both) { both_timing = false; triggered = false; }
             else if (!both_timing) { both_timing = true; both_since = xTaskGetTickCount(); }
+#if CONFIG_MONITOR_PM_PROFILE
+            if (both) { key_timing = false; key_triggered = true; }
+            else if (!stable[1]) { key_timing = false; key_triggered = false; }
+            else if (!key_timing && !key_triggered) { key_timing = true; key_since = xTaskGetTickCount(); }
+#endif
         }
         if (both_timing && !triggered &&
             xTaskGetTickCount() - both_since >= pdMS_TO_TICKS(CONFIG_HOLD_MS)) {
             if (enter_config_mode() == ESP_OK) triggered = true;
         }
+#if CONFIG_MONITOR_PM_PROFILE
+        if (key_timing && !key_triggered &&
+            xTaskGetTickCount() - key_since >= pdMS_TO_TICKS(CONFIG_HOLD_MS)) {
+            key_triggered = true;
+            monitor_pm_profile_key_hold();
+        }
+#endif
     }
 }
 

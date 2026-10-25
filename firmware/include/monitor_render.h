@@ -5,6 +5,7 @@
 
 #include "lvgl.h"
 #include "monitor_ui.h"
+#include "monitor_damage.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,6 +24,8 @@ typedef struct {
     lv_obj_t *root;
     uint8_t *draw_buffer;
     uint8_t *packed;
+    monitor_damage_t dirty;
+    bool force_full;
 } monitor_renderer_t;
 
 /* The factory must build its UI under parent. This keeps the renderer reusable
