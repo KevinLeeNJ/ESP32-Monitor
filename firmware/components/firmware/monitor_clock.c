@@ -107,10 +107,13 @@ static void sync_worker(void *arg)
             time_t now;
             time(&now);
             esp_err_t rtc_err = monitor_rtc_write_utc((int64_t)now);
+            bool time_was_valid = monitor_clock_is_valid();
             publish_time_valid(true, rtc_err == ESP_OK);
             s_last_sync_us = esp_timer_get_time();
             s_sync_retry_index = 0;
-            if (monitor_clock_is_valid()) {
+            /* With valid RTC time, Wi-Fi already triggered both consumers.
+             * A routine SNTP correction must not duplicate their cold TLS work. */
+            if (!time_was_valid && monitor_clock_is_valid()) {
                 monitor_weather_on_time_valid();
                 monitor_devices_request_refresh();
             }

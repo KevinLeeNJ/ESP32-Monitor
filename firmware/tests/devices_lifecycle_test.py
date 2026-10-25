@@ -12,7 +12,9 @@ code=r'''
 #include "monitor_devices.h"
 #include "monitor_display_refresh.h"
 #define ESP_ERR_INVALID_STATE 0x103
-#define ESP_LOGI(...) ((void)0)
+#define TAG "devices"
+static void test_log(const char *tag,const char *fmt,...){(void)tag;(void)fmt;}
+#define ESP_LOGI(...) test_log(__VA_ARGS__)
 #define ESP_LOGW(...) ((void)0)
 #define portMUX_INITIALIZER_UNLOCKED 0
 #define portENTER_CRITICAL(p) ((void)(p))
@@ -54,18 +56,18 @@ static int nvs_get_str(int handle,const char *key,char *out,size_t *size){
 static void nvs_close(int handle){(void)handle;}
 static unsigned ulTaskNotifyTake(int clear,unsigned wait);
 '''
-code+=defines(source,['PERIOD_US','RETAIN_US'])+'\n'
+code+=defines(source,['PERIOD_US','RETAIN_US','INITIAL_RETRY_US'])+'\n'
 code+='#include \"'+str(REPO/'firmware/src/display/monitor_devices_data.c')+'\"\n'
 code+='static const char *TAG="test";\n' if False else ''
 code+= 'static TaskHandle_t s_task=1;\nstatic esp_timer_handle_t s_expiry_timer;\nstatic portMUX_TYPE s_mux;\n'+state+'\n'
 code+=r'''
-typedef struct {struct {int socket;} guard;} devices_transport_t;
+typedef struct {struct {int socket;const char *phase;bool timed_out;} guard;} devices_transport_t;
 static void transport_reset(devices_transport_t *t){(void)t;++resets;}
 static bool fetch(devices_transport_t *transport,const devices_config_t *cfg,monitor_devices_snapshot_t *out,int *status,bool *reused){
     assert(watchdog_active); (void)transport;assert(cfg->url[0] && cfg->token[0]);*reused=false;++calls;
     // Each scenario uses the real worker decision logic with a bounded transport result.
-    bool ok=scenario==0 || (scenario==1 && calls==1) || (scenario==2 && (calls==1 || calls>=3)) || ((scenario==7 || scenario==8) && calls==1);
-    *status=ok?200:(scenario==3 || scenario==8)?401:scenario==4?403:503;
+    bool ok=(scenario==9 && calls>=2) || scenario==0 || (scenario==1 && calls==1) || (scenario==2 && (calls==1 || calls>=3)) || ((scenario==7 || scenario==8) && calls==1);
+    *status=(scenario==10 || (scenario==9 && calls==1))?0:ok?200:(scenario==3 || scenario==8)?401:scenario==4?403:503;
     if(ok){memset(out,0,sizeof(*out));out->status=MONITOR_DEVICES_READY;out->count=1;strcpy(out->devices[0].name,"NAS");}
     if(scenario==5){monitor_devices_set_wifi_available(false);return true;} // response races disconnect
     if(scenario==6){stored_url="http://changed.test";monitor_devices_config_changed();scenario=0;return true;}
@@ -120,6 +122,8 @@ int main(void){
         if(invalid==4)stored_url="https://user@fixture.test";
         monitor_devices_config_changed();work();assert(calls==0 && last_status==MONITOR_DEVICES_NOT_CONFIGURED && idle_waits<=5);
     }
+    reset();scenario=9;finish=10000000;work();assert(calls==2 && s_have_snapshot && s_last_success>=INITIAL_RETRY_US && s_last_success<INITIAL_RETRY_US+2000);
+    reset();scenario=10;work();assert(calls==5 && !s_have_snapshot); // Only one extra startup retry, no retry loop.
     reset();scenario=1;finish=89999999;work();assert(s_have_snapshot && last_status==MONITOR_DEVICES_STALE && s_snapshot.count==1);
     reset();scenario=1;finish=90000001;work();assert(!s_have_snapshot && last_status==MONITOR_DEVICES_UNAVAILABLE && !s_snapshot.count);
     reset();scenario=2;work();assert(calls==4 && s_have_snapshot && last_status==MONITOR_DEVICES_READY);

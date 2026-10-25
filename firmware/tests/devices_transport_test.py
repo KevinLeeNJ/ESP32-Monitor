@@ -58,20 +58,21 @@ static int esp_timer_create(const esp_timer_create_args_t *args,esp_timer_handle
     if(fail_timer)return ESP_FAIL;
     *out=calloc(1,sizeof(**out));(*out)->callback=args->callback;(*out)->arg=args->arg;timers++;return ESP_OK;
 }
-static int esp_timer_start_once(esp_timer_handle_t t,int64_t delay) {if(fail_start)return ESP_FAIL;assert(!active_timer);t->due=now+delay;t->active=true;active_timer=t;return ESP_OK;}
+static int esp_timer_start_once(esp_timer_handle_t t,int64_t delay) {if(fail_start)return ESP_FAIL;assert(!active_timer || !active_timer->active);t->due=now+delay;t->active=true;active_timer=t;return ESP_OK;}
 static int esp_timer_stop_blocking(esp_timer_handle_t t,unsigned wait) {(void)wait;t->active=false;active_timer=NULL;return ESP_OK;}
 static int esp_timer_delete(esp_timer_handle_t t) {assert(!t->active);free(t);timers--;return ESP_OK;}
 static void advance(int64_t duration) {
-    now+=duration;
-    if(active_timer && active_timer->active && now>=active_timer->due) {
-        active_timer->active=false;active_timer->callback(active_timer->arg);
+    int64_t target=now+duration;
+    while(active_timer && active_timer->active && target>=active_timer->due) {
+        now=active_timer->due;active_timer->active=false;active_timer->callback(active_timer->arg);
     }
+    now=target;
 }
 static int shutdown(int socket,int how) {assert(socket>=0&&how==SHUT_RDWR);shutdowns++;return 0;}
 typedef struct {
     const char *content_type,*encoding;int payload_len;
     int status,fail_stage;bool close,missing_type,invalid_json,overflow,incomplete;
-    int64_t open_delay;
+    int64_t open_delay,connect_delay,header_delay;
 } reply_t;
 static reply_t replies[8];static unsigned reply_index;
 struct client {
@@ -95,12 +96,12 @@ static int esp_http_client_set_header(esp_http_client_handle_t c,const char *key
 }
 static int esp_http_client_open(esp_http_client_handle_t c,int length) {
     assert(length==0);assert(reply_index<8);opens++;c->reply=replies[reply_index++];c->pos=0;
-    if(!c->connected) {c->connected=true;handshakes++;event(c,HTTP_EVENT_ON_CONNECTED,NULL,NULL);}
+    if(!c->connected) {advance(c->reply.connect_delay);c->connected=true;handshakes++;event(c,HTTP_EVENT_ON_CONNECTED,NULL,NULL);}
     advance(c->reply.open_delay?c->reply.open_delay:10000);
     return c->reply.fail_stage==1?ESP_FAIL:ESP_OK;
 }
 static int64_t esp_http_client_fetch_headers(esp_http_client_handle_t c) {
-    advance(1000);
+    advance(c->reply.header_delay?c->reply.header_delay:1000);
     if(c->reply.fail_stage==2)return -1;
     if(!c->reply.missing_type)event(c,HTTP_EVENT_ON_HEADER,"Content-Type",(char *)(c->reply.content_type?c->reply.content_type:"application/json"));
     if(c->reply.encoding)event(c,HTTP_EVENT_ON_HEADER,"Content-Encoding",(char *)c->reply.encoding);
@@ -168,12 +169,24 @@ int main(void) {
     }
     puts("Auth/HTTP errors, missing content type, oversize and invalid JSON discard connection without retry: PASS");
     reset_replies();assert(fetch(&t,&cfg,&snapshot,&status,&reused));
-    replies[1].fail_stage=1;replies[1].open_delay=REQUEST_US*3/4;replies[2].open_delay=REQUEST_US/4;
+    replies[1].fail_stage=1;replies[1].open_delay=REQUEST_US*3/4;replies[2].open_delay=REQUEST_US;
     int64_t started=now;unsigned shutdowns_before=shutdowns;
     assert(!fetch(&t,&cfg,&snapshot,&status,&reused) && !t.client);
-    assert(now-started==REQUEST_US && shutdowns==shutdowns_before+1);
+    assert(now-started==REQUEST_US*7/4 && shutdowns==shutdowns_before+1);
     transport_reset(&t);check_clean();
-    puts("Reconnect shares original four-second deadline and cannot accept a late response: PASS");
+    puts("Reconnect has bounded setup/response phases and cannot accept a late response: PASS");
+    reset_replies();replies[0].connect_delay=3000000;replies[0].header_delay=2000000;
+    started=now;shutdowns_before=shutdowns;
+    assert(fetch(&t,&cfg,&snapshot,&status,&reused) && now-started>REQUEST_US);
+    assert(now-started<REQUEST_US*2 && shutdowns==shutdowns_before);
+    transport_reset(&t);check_clean();
+    reset_replies();replies[0].connect_delay=REQUEST_US+1;
+    assert(!fetch(&t,&cfg,&snapshot,&status,&reused) && t.guard.timed_out);
+    transport_reset(&t);check_clean();
+    reset_replies();replies[0].header_delay=REQUEST_US+1;
+    assert(!fetch(&t,&cfg,&snapshot,&status,&reused) && t.guard.timed_out);
+    transport_reset(&t);check_clean();
+    puts("Slow cold TLS gets a separate response budget; setup/response timeouts still reject late data: PASS");
     reset_replies();replies[0].fail_stage=1;
     assert(!fetch(&t,&cfg,&snapshot,&status,&reused) && reply_index==1);
     transport_reset(&t);check_clean();
