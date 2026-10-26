@@ -3,9 +3,10 @@
 package config
 
 type Config struct {
-	GitHub GitHub `json:"github"`
-	Codex  Codex  `json:"codex"`
-	Music  Music  `json:"music"`
+	GitHub    GitHub    `json:"github"`
+	Codex     Codex     `json:"codex"`
+	Music     Music     `json:"music"`
+	Companion Companion `json:"companion"`
 }
 type GitHub struct {
 	Enabled  bool   `json:"enabled"`
@@ -25,4 +26,11 @@ type Music struct {
 	Enabled       bool   `json:"enabled"`
 	Adapter       string `json:"adapter,omitempty"`
 	NativeLibrary string `json:"native_library,omitempty"`
+}
+
+// Companion settings contain no Monitor proxy secrets.
+type Companion struct {
+	Enabled        bool   `json:"enabled"`
+	BindIP         string `json:"bind_ip"`
+	StateDirectory string `json:"state_directory"`
 }

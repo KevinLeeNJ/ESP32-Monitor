@@ -34,6 +34,9 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	fs.BoolVar(&c.Music.Enabled, "music", false, "read system current playback in this user session")
 	fs.StringVar(&c.Music.Adapter, "music-adapter", "auto", "playback adapter: auto, mediaremote, gsmtc, mpris")
 	fs.StringVar(&c.Music.NativeLibrary, "music-native-library", "", "absolute path to macOS read-only MediaRemote bridge")
+	fs.BoolVar(&c.Companion.Enabled, "companion", false, "enable Monitor Companion backend on the selected LAN interface")
+	fs.StringVar(&c.Companion.BindIP, "companion-ip", "", "selected LAN IPv4 address; required with --companion")
+	fs.StringVar(&c.Companion.StateDirectory, "companion-state-dir", "", "private identity/pairing vault; proxy configuration is never persisted")
 	fs.BoolVar(&watch, "watch", false, "emit snapshots as JSONL until interrupted")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -46,6 +49,11 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if application != nil {
+			_ = application.Close()
+		}
+	}()
 	if login {
 		session, err := application.GitHubAuth.StartLogin(ctx)
 		if err != nil {
@@ -74,6 +82,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		}
 		c.GitHub.Login = session.Login
 		c.GitHub.Enabled = true
+		_ = application.Close()
 		application, err = app.New(c, cacheDir)
 		if err != nil {
 			return err
@@ -102,7 +111,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		}
 	}()
 	defer func() { cancel(); <-done; <-tasksDone; <-musicDone }()
-	if !watch {
+	if !watch && !c.Companion.Enabled {
 		// A one-shot must wait for its requested reads rather than return starting.
 		service.Refresh(ctx)
 		taskCtx, taskCancel := context.WithTimeout(ctx, 8*time.Second)
