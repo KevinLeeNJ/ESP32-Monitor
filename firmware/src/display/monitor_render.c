@@ -46,7 +46,7 @@ bool monitor_renderer_init(monitor_renderer_t *renderer,
     memset(renderer, 0, sizeof(*renderer));
 
     renderer->force_full = true;
-    lv_init();
+    if (!lv_is_initialized()) lv_init();
     renderer->draw_buffer = (uint8_t *)renderer_buffer_alloc(MONITOR_I1_DRAW_BUFFER_BYTES);
     renderer->packed = (uint8_t *)renderer_buffer_alloc(MONITOR_FRAME_BYTES);
     if(renderer->draw_buffer == NULL || renderer->packed == NULL) {
@@ -65,6 +65,9 @@ bool monitor_renderer_init(monitor_renderer_t *renderer,
     lv_display_set_buffers(renderer->display, renderer->draw_buffer, NULL,
                            MONITOR_I1_DRAW_BUFFER_BYTES, LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(renderer->display, flush_cb);
+    /* The owner schedules rendering after UI/timer updates, independently of
+     * LVGL timers. This avoids a periodic refresh wakeup on a static screen. */
+    lv_display_delete_refr_timer(renderer->display);
 
     renderer->root = create_screen(lv_screen_active());
     if(renderer->root == NULL) {
@@ -95,7 +98,8 @@ void monitor_renderer_deinit(monitor_renderer_t *renderer)
 bool monitor_renderer_render(monitor_renderer_t *renderer)
 {
     if(renderer == NULL || renderer->display == NULL) return false;
-    lv_refr_now(renderer->display);
+    lv_display_set_default(renderer->display);
+    lv_display_refr_timer(NULL);
     return true;
 }
 

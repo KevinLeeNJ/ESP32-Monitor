@@ -13,7 +13,7 @@ esp_err_t monitor_i2c_init(void)
         .scl_io_num = GPIO_NUM_14,
         .clk_source = I2C_CLK_SRC_DEFAULT,
         .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
+        .flags.enable_internal_pullup = false,
     };
     return i2c_new_master_bus(&config, &s_bus);
 }

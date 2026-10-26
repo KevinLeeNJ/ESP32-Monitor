@@ -19,6 +19,7 @@ typedef unsigned TickType_t, UBaseType_t;
 #define portTICK_PERIOD_MS 1
 #define UINT32_MAX 4294967295U
 #define MONITOR_UI_ANIMATION_FRAME_MS 32
+#define LV_NO_TIMER_READY UINT32_MAX
 static unsigned tick, priority, stage, mode_changes, idle_waits, draws, fresh_draws, scenario;
 static unsigned last_feed;
 static bool watched, low_power;
@@ -34,6 +35,8 @@ static void vTaskDelay(unsigned n) { tick+=n; }
 static int esp_task_wdt_delete(void *p) { (void)p; assert(watched); watched=false; return 0; }
 static int esp_task_wdt_add(void *p) { (void)p; assert(!watched); watched=true; last_feed=tick; return 0; }
 static void feed_task_watchdog(void) { assert(watched && tick-last_feed<5000); last_feed=tick; }
+static unsigned monitor_lvgl_process_timers(monitor_lvgl_t *r) { (void)r; return LV_NO_TIMER_READY; }
+static bool monitor_lvgl_frame_pending(const monitor_lvgl_t *r) { (void)r; return false; }
 static lv_obj_t *monitor_lvgl_root(monitor_lvgl_t *r) { return &r->root; }
 static bool monitor_ui_animation_active(lv_obj_t *r) { return r->remaining>0; }
 static bool monitor_ui_advance(lv_obj_t *r, unsigned ms) {

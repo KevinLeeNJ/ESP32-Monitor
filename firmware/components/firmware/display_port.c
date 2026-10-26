@@ -146,7 +146,9 @@ static esp_err_t set_frame_rates(rlcd_port_t *port)
 
 static esp_err_t panel_init_sequence(rlcd_port_t *port)
 {
-    /* Register sequence from Waveshare's Examples/09_LVGL_V9_Test. */
+    /* Panel voltages, NVM and waveforms follow the u8g2 reference supplied by
+     * the project owner for flicker-free HPM/LPM switching. Keep these values
+     * together; do not replace them with generic ST7305 datasheet defaults. */
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xd6), "rlcd", "nvm load");
     ESP_RETURN_ON_ERROR(send_data(port, (const uint8_t[]){0x13, 0x02}, 2), "rlcd", "nvm args");
     ESP_RETURN_ON_ERROR(send_cmd(port, 0xd1), "rlcd", "booster");
@@ -308,7 +310,8 @@ esp_err_t rlcd_port_init(rlcd_port_t **out_port, const rlcd_pins_t *pins)
     hardware_reset(port);
     ESP_RETURN_ON_ERROR(panel_init_sequence(port), "rlcd", "init sequence");
     ESP_RETURN_ON_ERROR(set_window(port, 0x12, 0x2a, 0x00, 0xc7), "rlcd", "window before first frame");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_color(port->io, 0x2c, port->packed, RLCD_PACKED_BYTES),
+    memcpy(port->staging, port->packed, RLCD_PACKED_BYTES);
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_io_tx_color(port->io, 0x2c, port->staging, RLCD_PACKED_BYTES),
                         "rlcd", "initial flush");
     ESP_RETURN_ON_ERROR(wait_color_done(port), "rlcd", "initial transfer timeout");
     *out_port = port;
@@ -389,7 +392,7 @@ esp_err_t rlcd_port_deinit(rlcd_port_t *port)
     if(port->awake_lock) esp_pm_lock_delete(port->awake_lock);
     if(port->staging) heap_caps_free(port->staging);
     spi_bus_free(RLCD_SPI_HOST);
-    free(port->packed);
+    heap_caps_free(port->packed);
     free(port);
     return ESP_OK;
 }

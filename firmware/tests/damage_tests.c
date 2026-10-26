@@ -47,6 +47,42 @@ static void frame(monitor_renderer_t *r) {
 }
 static lv_obj_t *waiting(lv_obj_t *parent) { return monitor_ui_create_waiting(parent, MONITOR_FRAME_NORMAL); }
 static void count_delete(lv_event_t *e) { ++*(unsigned *)lv_event_get_user_data(e); }
+static void timer_label(lv_timer_t *timer) {
+    lv_label_set_text(lv_timer_get_user_data(timer), "timer fired");
+    lv_timer_delete(timer);
+}
+static void test_timer_render(void) {
+    monitor_renderer_t r;
+    assert(monitor_renderer_init(&r, waiting));
+    assert(lv_display_get_refr_timer(r.display) == NULL);
+    lv_obj_t *label = lv_label_create(r.root);
+    lv_label_set_text(label, "waiting");
+    assert(monitor_renderer_render(&r));
+    memset(&r.dirty, 0, sizeof(r.dirty));
+    lv_timer_t *timer = lv_timer_create(timer_label, 25, label);
+    lv_timer_handler();
+    lv_tick_inc(24);
+    lv_timer_handler();
+    assert(!strcmp(lv_label_get_text(label), "waiting"));
+    lv_tick_inc(1);
+    lv_timer_handler();
+    assert(!strcmp(lv_label_get_text(label), "timer fired"));
+    assert(monitor_renderer_render(&r));
+    bool dirty = false;
+    for (unsigned i = 0; i < sizeof(r.dirty.bits); ++i) dirty |= r.dirty.bits[i] != 0;
+    assert(dirty);
+    (void)timer;
+    unsigned deletions = 0;
+    lv_obj_add_event_cb(label, count_delete, LV_EVENT_DELETE, &deletions);
+    lv_obj_delete_async(label);
+    lv_timer_handler();
+    assert(deletions == 1);
+    /* No periodic refresh timer may keep a quiet display awake. */
+    lv_timer_handler();
+    assert(lv_timer_handler() == LV_NO_TIMER_READY);
+    monitor_renderer_deinit(&r);
+    puts("Real LVGL timers: deadline, dirty frame, async deletion, idle indefinite sleep: PASS");
+}
 static void test_roll_damage(monitor_frame_variant_t variant) {
     monitor_renderer_t r;assert(monitor_renderer_init(&r,waiting));
     monitor_ui_set_variant(r.root,variant);
@@ -76,6 +112,7 @@ static void test_roll_damage(monitor_frame_variant_t variant) {
     monitor_renderer_deinit(&r);
 }
 int main(void) {
+    test_timer_render();
     test_roll_damage(MONITOR_FRAME_NORMAL);
     test_roll_damage(MONITOR_FRAME_INVERTED);
     monitor_renderer_t r;assert(monitor_renderer_init(&r,monitor_ui_create));

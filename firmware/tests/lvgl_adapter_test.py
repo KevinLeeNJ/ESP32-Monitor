@@ -43,7 +43,12 @@ typedef struct { lv_display_t *display; uint8_t *packed; monitor_damage_t dirty;
 typedef struct { rlcd_port_t *port; monitor_renderer_t renderer; } monitor_lvgl_t;
 #define TAG "test"
 #define ESP_RETURN_ON_ERROR(c,...) do { int e=(c); if(e) return e; } while(0)
-static unsigned renders, transfers;
+static unsigned renders, transfers, timer_calls;
+#define LV_NO_TIMER_READY UINT32_MAX
+static uint32_t timer_delay = LV_NO_TIMER_READY;
+static uint32_t lv_timer_handler(void) { ++timer_calls; return timer_delay; }
+static uint32_t lv_tick_get(void) { return 10; }
+static uint32_t lv_tick_elaps(uint32_t started) { assert(started==10); return 3; }
 static bool render_ok = true;
 static int transfer_error;
 static monitor_lvgl_t *current;
@@ -62,6 +67,8 @@ static esp_err_t rlcd_port_draw_dirty(rlcd_port_t *port, const uint8_t *packed, 
 '''
 code += function(backend, "monitor_lvgl_render") + "\n"
 code += function(backend, "monitor_lvgl_present") + "\n"
+code += function(backend, "monitor_lvgl_process_timers") + "\n"
+code += function(backend, "monitor_lvgl_frame_pending") + "\n"
 code += function(main, "commit_monitor_frame") + "\n"
 code += r'''
 int main(void) {
@@ -71,6 +78,7 @@ int main(void) {
     current = &renderer;
     renderer.renderer.dirty.bits[0]=1;renderer.renderer.force_full=true;
     assert(commit_monitor_frame(&renderer) == ESP_OK && renders == 1 && transfers == 1);
+    assert(timer_calls > 0);
     assert(!renderer.renderer.dirty.bits[0] && !renderer.renderer.force_full);
     renders = transfers = 0;
     /* Even an unchanged frame reaches draw_diff, which owns TE pacing. */
@@ -87,6 +95,20 @@ int main(void) {
     assert(commit_monitor_frame(&renderer) == ESP_ERR_INVALID_ARG && !renders && !transfers);
     renderer.renderer.display = &display;
     assert(monitor_lvgl_present(NULL)==ESP_ERR_INVALID_ARG);
+    renderer.renderer.display = &display;
+    renders = transfers = 0; timer_delay = 25;
+    assert(monitor_lvgl_process_timers(&renderer) == 22 && renders == 1 && transfers == 0);
+    assert(monitor_lvgl_frame_pending(&renderer));
+    renderer.renderer.force_full = false;
+    memset(&renderer.renderer.dirty, 0, sizeof(renderer.renderer.dirty));
+    assert(!monitor_lvgl_frame_pending(&renderer));
+    renderer.renderer.dirty.bits[sizeof(renderer.renderer.dirty.bits)-1] = 1;
+    assert(monitor_lvgl_frame_pending(&renderer));
+    timer_delay = LV_NO_TIMER_READY;
+    assert(monitor_lvgl_process_timers(&renderer) == LV_NO_TIMER_READY && transfers == 0);
+    timer_delay = 2;
+    assert(monitor_lvgl_process_timers(&renderer) == 0);
+    puts("Timer processing packs without SPI, accounts for render time and detects pending frames: PASS");
     puts("No application CPU boost; FreeRTOS PM owns CPU frequency during rendering and TE/SPI waits. Native shared renderer precedes exactly one frame commit; unchanged frames, invalid inputs and both failure paths: PASS");
 }
 '''

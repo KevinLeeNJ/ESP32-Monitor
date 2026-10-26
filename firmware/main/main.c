@@ -164,10 +164,12 @@ static bool minute_needs_hpm(void)
 
 /* The sole display owner prepares HPM before :00. Notifications received while
  * preparing are coalesced, but cannot move the absolute minute deadline. */
-static uint32_t wait_display_refresh(rlcd_port_t *port)
+static uint32_t wait_display_refresh(rlcd_port_t *port, monitor_lvgl_t *renderer)
 {
     uint32_t reasons = 0;
     for (;;) {
+        uint32_t timer_delay = monitor_lvgl_process_timers(renderer);
+        if (monitor_lvgl_frame_pending(renderer)) return MONITOR_REFRESH_LVGL;
         if (minute_needs_hpm()) {
             const int64_t now = wall_time_us();
             const int64_t boundary = (now / 60000000LL + 1) * 60000000LL;
@@ -192,6 +194,7 @@ static uint32_t wait_display_refresh(rlcd_port_t *port)
             if (remaining <= MINUTE_PREPARE_MS) continue;
             until = remaining - MINUTE_PREPARE_MS;
         }
+        if (timer_delay < until) until = timer_delay;
         TickType_t ticks = until == UINT32_MAX ? portMAX_DELAY : pdMS_TO_TICKS(until);
         /* Only active display work needs a deadline. Idle tasks remain watched
          * on both cores; a quiet screen can block until the next real event. */
@@ -310,12 +313,14 @@ static esp_err_t present_boot_monitor(monitor_lvgl_t *renderer, rlcd_port_t *por
              (unsigned)BOOT_ANIMATION_TIMEOUT_MS, (unsigned)uxTaskPriorityGet(NULL));
     while (result == ESP_OK) {
         feed_task_watchdog();
+        uint32_t timer_delay = monitor_lvgl_process_timers(renderer);
         TickType_t now = xTaskGetTickCount();
         if (now - started >= timeout) break;
         const bool was_animating = monitor_ui_animation_active(root);
         /* Advance existing timelines before applying newly arrived data, so a
          * long wait for a source cannot instantly finish its fresh animation. */
         bool changed = monitor_ui_advance(root, (uint32_t)((now - previous) * portTICK_PERIOD_MS));
+        changed |= monitor_lvgl_frame_pending(renderer);
         previous = now;
         display_snapshot_t current;
         capture_display_snapshot(&current);
@@ -362,6 +367,11 @@ static esp_err_t present_boot_monitor(monitor_lvgl_t *renderer, rlcd_port_t *por
             elapsed = xTaskGetTickCount() - started;
             if (elapsed >= timeout) break;
             remaining = timeout - elapsed;
+            if (timer_delay != LV_NO_TIMER_READY) {
+                TickType_t timer_ticks = pdMS_TO_TICKS(timer_delay);
+                if (!timer_ticks) timer_ticks = 1;
+                if (timer_ticks < remaining) remaining = timer_ticks;
+            }
             uint32_t reasons = 0;
             ESP_ERROR_CHECK(esp_task_wdt_delete(NULL));
             xTaskNotifyWait(0, UINT32_MAX, &reasons, remaining);
@@ -462,8 +472,18 @@ void app_main(void)
     ESP_ERROR_CHECK(present_boot_monitor(renderer, port, &displayed));
     for(;;) {
         feed_task_watchdog();
-        uint32_t reasons = wait_display_refresh(port);
+        uint32_t reasons = wait_display_refresh(port, renderer);
         if (!monitor_display_refresh_should_render(reasons, monitor_clock_is_valid())) continue;
+        if (reasons == MONITOR_REFRESH_LVGL) {
+            /* A timer wake must not publish cached sensor/network values ahead
+             * of their normal clock boundary. Producer notifications stay queued. */
+            esp_err_t draw_err = present_monitor(renderer, port, &displayed);
+            if (draw_err != ESP_OK) {
+                ESP_LOGE(TAG, "timer frame commit failed: %s", esp_err_to_name(draw_err));
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
+            continue;
+        }
         /* Commit clock boundaries immediately. Fresh sensor/network results
          * arriving later remain cached for the next scheduled update. */
         display_snapshot_t current;
@@ -471,8 +491,12 @@ void app_main(void)
         if (!display_snapshot_equal(&displayed, &current)) {
             apply_display_snapshot(renderer, &current, displayed.devices.version != current.devices.version);
             esp_err_t draw_err = present_monitor(renderer, port, &current);
-            if (draw_err != ESP_OK) ESP_LOGE(TAG, "display commit failed: %s", esp_err_to_name(draw_err));
-            else displayed = current;
+            if (draw_err != ESP_OK) {
+                ESP_LOGE(TAG, "display commit failed: %s", esp_err_to_name(draw_err));
+                /* Pending damage retries independently of producer events.
+                 * Back off in restored LPM if the hardware keeps failing. */
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            } else displayed = current;
         } else {
             /* Minute preparation may have entered HPM even if a time
              * correction leaves the visible snapshot unchanged. */
