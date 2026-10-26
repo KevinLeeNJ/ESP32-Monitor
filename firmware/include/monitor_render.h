@@ -33,6 +33,8 @@ typedef struct {
 bool monitor_renderer_init(monitor_renderer_t *renderer,
                            monitor_screen_factory_t create_screen);
 void monitor_renderer_deinit(monitor_renderer_t *renderer);
+/* Refresh timer is decoupled. The owner must service lv_timer_handler() on
+ * its returned deadlines, then render/commit changes on the same task. */
 bool monitor_renderer_render(monitor_renderer_t *renderer);
 void monitor_renderer_invalidate_all(monitor_renderer_t *renderer);
 bool monitor_renderer_rebuild(monitor_renderer_t *renderer,

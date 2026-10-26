@@ -43,9 +43,9 @@ CONTRACT(schedule_boundaries, "schedule coalesces boundaries and time correction
 
 CONTRACT(refresh_combinations, "display batches every combination of producer reasons", "[display]")
 {
-    /* All 64 combinations of the six public reason bits. */
-    for (uint32_t reasons = 0; reasons < 64; ++reasons) {
-        bool immediate = (reasons & (MONITOR_REFRESH_CLOCK | MONITOR_REFRESH_WIFI | MONITOR_REFRESH_RECOVER)) != 0;
+    /* All 128 combinations of producer and LVGL timer reason bits. */
+    for (uint32_t reasons = 0; reasons < 128; ++reasons) {
+        bool immediate = (reasons & (MONITOR_REFRESH_CLOCK | MONITOR_REFRESH_WIFI | MONITOR_REFRESH_RECOVER | MONITOR_REFRESH_LVGL)) != 0;
         TEST_ASSERT_EQUAL(immediate, monitor_display_refresh_should_render(reasons, true));
         TEST_ASSERT_TRUE(monitor_display_refresh_should_render(reasons, false));
     }

@@ -1,5 +1,7 @@
 #pragma once
 
+/* Uses LVGL 9.4 private descriptor layout via its supported custom blend hook.
+ * Recheck this layout and I1 rendering regressions before upgrading LVGL. */
 #include "lvgl/src/draw/sw/blend/lv_draw_sw_blend_private.h"
 
 /* LVGL 9.4 mixes 0/1 values with integer division in its I1 fill fallback.

@@ -38,11 +38,11 @@ idf.py -C firmware/tests -B "$PWD/firmware/tests/build/esp32s3" -p /dev/cu.usbmo
 
 | 测试 | 场景 |
 | --- | --- |
-| `test_contracts.c`（10 个 Unity 用例） | 调度首次同步、同槽去重、30 秒/分钟/15 分钟/跨天/前后校时；微秒取整；全部 64 种刷新原因组合；不同 tick 频率、动画超期跳帧和大整数；I1 非法区域、stride、空指针、写边界、逐像素和反色；URL/token 长度和端口边界；JSON 逐字节截断、4096 字节上限、嵌套深度、转义、0～4 台设备、百分比 0/100/null、重复字段和类型错误、失败保留旧快照 |
+| `test_contracts.c`（10 个 Unity 用例） | 调度首次同步、同槽去重、30 秒/分钟/15 分钟/跨天/前后校时；微秒取整；全部 128 种刷新原因组合；不同 tick 频率、动画超期跳帧和大整数；I1 非法区域、stride、空指针、写边界、逐像素和反色；URL/token 长度和端口边界；JSON 逐字节截断、4096 字节上限、嵌套深度、转义、0～4 台设备、百分比 0/100/null、重复字段和类型错误、失败保留旧快照 |
 | `test_rtc.c`（8 个 Unity 用例，主机） | 编译完整生产 RTC 模块，SDK 边界替身；无总线、内存/加设备/锁/I²C 故障；初始化失败重试、控制位保留；闰年、月末、非法 BCD、24 小时制、OS/STOP；2024～2099 UTC 往返；写失败恢复和释放锁 |
 | `sensors_test.py` | 电池曲线端点、单调性、ADC/校准失败；SHTC3 CRC 已知向量、负温/中值/满量程、湿度边界、重复值；唤醒/测量/读取/CRC 失败、休眠清理和旧值保留 |
 | `display_diff_test.py` | 无变化时的 TE 等待、所有 X tile、首尾 page、局部矩形 staging、全帧回退、窗口/SPI/完成等待失败；失败不更新缓存、下次重试、缓冲区哨兵 |
-| `unit_tests.c`、`animation_tests.c` | 原模拟器测试：打包布局及区域组合、LVGL I1 混合/局部重绘、场景与 PNG/SHA、设备数据/UI 替换、动画完整时间线与局部变化等 |
+| `unit_tests.c`、`animation_tests.c`、`damage_tests.c` | 打包布局及区域组合、LVGL I1 混合/局部重绘、场景与 PNG/SHA、设备数据/UI 替换、动画完整时间线与局部变化；真实 LVGL 普通 timer 到期、异步删除、timer 更新后的脏区，以及无 timer 时返回无限等待 |
 | `wifi_session_test.py`、`wifi_buttons_test.py`、`station_scan_test.py` | 首次启动无凭据开 AP/有凭据连 STA、重复启动、初始化/两处定时器/任务创建失败清理与重试；AP/LAN 会话、旧超时/保存与超时同时到达、重复断线不延长截止期限、保存响应排空、30 秒停止后不自动重启；100 次按压/抖动/保持/松开、每引脚屏蔽；共享扫描结果、空结果/扫描 SDK 错误保留旧列表、已存频道回退、断线所有权、退出清理 |
 | `devices_transport_test.py` | 连接复用、服务端关闭、301/400/401/403/404/429/500/503、内容类型/编码、实际 body 越界、未完成流、JSON/读取失败；直接读取生产 `REQUEST_US` 验证共享 4 秒期限；锁/内存/客户端/定时器/请求头失败及恢复 |
 | `devices_lifecycle_test.py` | 执行真实 `devices_task`：无配置/坏配置、离线、HTTPS 等待有效时间、HTTP 无时钟回退、固定周期轮询无忙等、首次/重复数据、旧值保留、90 秒精确过期、鉴权失败、API 恢复、请求期间断线/换配置、移除配置、过期定时器与请求竞态 |

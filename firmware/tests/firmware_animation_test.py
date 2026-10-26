@@ -55,6 +55,7 @@ typedef int esp_err_t;
 #include "monitor_animation.h"
 #define configTICK_RATE_HZ 1000U
 #define MONITOR_REFRESH_CLOCK 1U
+#define MONITOR_REFRESH_LVGL 64U
 #define TAG "test"
 typedef struct { int mosi, sclk, dc, cs, rst, te; } rlcd_pins_t;
 typedef struct { bool mode_known, animation_mode, te_enabled; int frame_ready;
@@ -76,6 +77,14 @@ typedef struct { char time_text[8], date_text[16]; } display_snapshot_t;
 static uint32_t tick, priority=1, first_clock_roll, first_draw;
 static unsigned command_count, fail_command, failed_draw, draws, notifications, idle_notifications;
 static bool clock_valid=true, storm;
+static uint32_t timer_due = UINT32_MAX;
+static bool timer_dirty;
+static uint32_t monitor_lvgl_process_timers(monitor_lvgl_t *r) {
+    (void)r;
+    if (tick >= timer_due && timer_due != UINT32_MAX) { timer_dirty=true; timer_due=UINT32_MAX; }
+    return timer_due == UINT32_MAX ? UINT32_MAX : timer_due-tick;
+}
+static bool monitor_lvgl_frame_pending(const monitor_lvgl_t *r) { (void)r; return timer_dirty; }
 static bool te_signal, te_token;
 static unsigned te_waits, irq_enabled;
 static int gpio_intr_disable(int pin) { (void)pin; irq_enabled=0; return 0; }
@@ -166,6 +175,14 @@ static void reset(void) {
     te_signal=te_token=false;te_waits=irq_enabled=0;
 }
 int main(void) {
+    {
+        rlcd_port_t p={0};
+        tick=1000; timer_due=1025; timer_dirty=false; clock_valid=false;
+        assert(wait_display_refresh(&p, NULL)==MONITOR_REFRESH_LVGL);
+        assert(tick==1025 && timer_dirty);
+        timer_dirty=false; clock_valid=true;
+        puts("LVGL timer deadline wakes idle owner without producer notification: PASS");
+    }
     rlcd_port_t p={.mode_known=true};
     test_port=&p;
     rlcd_pins_t pins={.mosi=12,.sclk=11,.dc=5,.cs=40,.rst=41,.te=6};
@@ -210,16 +227,16 @@ int main(void) {
     puts("Failures at HPM/LPM command recover through HPM to LPM: PASS");
     for(unsigned base=1;base<=7;base+=6) {
         reset();priority=base;tick=1000;p=(rlcd_port_t){.mode_known=true};
-        assert(wait_display_refresh(&p)&MONITOR_REFRESH_CLOCK);
+        assert(wait_display_refresh(&p, NULL)&MONITOR_REFRESH_CLOCK);
         assert(tick==60000 && command_at[0]==59620 && p.animation_mode && priority==base);
         assert(notifications==2 && idle_notifications==1 && watchdog_active);
         assert(command_at[0]+RLCD_HPM_PREPARE_MS==59920);
         reset();priority=base;tick=59620;storm=true;p=(rlcd_port_t){.mode_known=true};
-        assert(wait_display_refresh(&p)==3 && tick==60000 && notifications==80 && priority==base);
+        assert(wait_display_refresh(&p, NULL)==3 && tick==60000 && notifications==80 && priority==base);
     }
     assert(watchdog_active);
     reset();clock_valid=false;storm=true;p=(rlcd_port_t){.mode_known=true};
-    assert(wait_display_refresh(&p)==2 && tick==1 && idle_notifications==1 && watchdog_active);
+    assert(wait_display_refresh(&p, NULL)==2 && tick==1 && idle_notifications==1 && watchdog_active);
     puts("Idle display waits directly for minute preparation or notifications, restoring TWDT before active work: PASS");
     puts("Minute preparation at :59.620, ready at :59.920, dispatch at :00.000; notification storm does not delay it: PASS");
     for(unsigned base=1;base<=7;base+=6) for(unsigned fault=0;fault<=1;fault++) {
@@ -259,7 +276,7 @@ int main(void) {
     reset();tick=59470;p=(rlcd_port_t){.mode_known=true,.animation_mode=true};
     monitor_lvgl_t imminent={.root.remaining=1};
     assert(present_monitor(&imminent,&p,NULL)==ESP_OK && p.animation_mode);
-    assert(wait_display_refresh(&p)&MONITOR_REFRESH_CLOCK);
+    assert(wait_display_refresh(&p, NULL)&MONITOR_REFRESH_CLOCK);
     assert(tick==60000 && command_count==0 && priority==1);
     puts("Device animation ending near minute retains HPM, avoiding a late LPM/HPM round trip: PASS");
     reset();tick=59000;p=(rlcd_port_t){.mode_known=true,.animation_mode=true};

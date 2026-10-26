@@ -1,5 +1,7 @@
 #include "monitor_ui.h"
 #include "monitor_fonts.h"
+/* LVGL 9.4 exposes UTF-8 glyph iteration only in this private header.
+ * Recheck the decoder contract when upgrading the pinned LVGL version. */
 #include "src/misc/lv_text_private.h"
 
 #include <stdio.h>
