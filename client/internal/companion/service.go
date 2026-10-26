@@ -32,5 +32,15 @@ func (s *Service) Refresh(ctx context.Context) Snapshot {
 	return s.Snapshot()
 }
 func (s *Service) Snapshot() Snapshot {
-	return Snapshot{SchemaVersion: 1, ObservedAt: time.Now().UTC(), GitHub: s.GitHub.Snapshot(), Codex: s.Codex.Snapshot(), Music: s.Music.Snapshot()}
+	result := Snapshot{SchemaVersion: 1, ObservedAt: time.Now().UTC()}
+	if s.GitHub != nil {
+		result.GitHub = s.GitHub.Snapshot()
+	}
+	if s.Codex != nil {
+		result.Codex = s.Codex.Snapshot()
+	}
+	if s.Music != nil {
+		result.Music = s.Music.Snapshot()
+	}
+	return result
 }
