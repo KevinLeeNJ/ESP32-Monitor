@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	githubauth "esp32-monitor/client/internal/auth/github"
+	"esp32-monitor/client/internal/collector"
 	"esp32-monitor/client/internal/companion"
 	"esp32-monitor/client/internal/config"
 	"esp32-monitor/client/internal/nowplaying"
@@ -21,6 +22,7 @@ type Application struct {
 	Companion  *companion.Service
 	GitHubAuth *githubauth.Client
 	Monitor    *transport.Backend
+	Collector  *collector.Manager
 }
 
 func New(c config.Config, cacheDir string) (*Application, error) {
@@ -53,6 +55,23 @@ func New(c config.Config, cacheDir string) (*Application, error) {
 			return nil, e
 		}
 		application.Monitor = backend
+	}
+	if c.Collector.Enabled {
+		dir := c.Collector.StateDirectory
+		if dir == "" {
+			base, e := os.UserConfigDir()
+			if e != nil {
+				_ = application.Close()
+				return nil, e
+			}
+			dir = filepath.Join(base, "ESP32-Monitor", "collector")
+		}
+		manager, e := collector.New(collector.Options{Executable: c.Collector.Executable, StateDirectory: dir, UploadURL: c.Collector.UploadURL, UploadToken: collector.TokenFile(c.Collector.UploadTokenFile)})
+		if e != nil {
+			_ = application.Close()
+			return nil, e
+		}
+		application.Collector = manager
 	}
 	return application, nil
 }
@@ -109,10 +128,14 @@ func (a *Application) ConnectMonitorSerial(ctx context.Context, port string, sel
 	return a.Monitor.ConnectSerial(ctx, port, selection)
 }
 func (a *Application) Close() error {
-	if a.Monitor != nil {
-		return a.Monitor.Close()
+	var errs []error
+	if a.Collector != nil {
+		errs = append(errs, a.Collector.Close())
 	}
-	return nil
+	if a.Monitor != nil {
+		errs = append(errs, a.Monitor.Close())
+	}
+	return errors.Join(errs...)
 }
 
 func (a *Application) ListMonitorSerialPorts() ([]transport.DiscoveredDevice, error) {
