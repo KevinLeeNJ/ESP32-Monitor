@@ -13,3 +13,7 @@ build:
 .PHONY: build-nowplaying-macos
 build-nowplaying-macos:
 	./scripts/build-nowplaying-macos.sh
+
+.PHONY: test-collector-e2e
+test-collector-e2e:
+	python3 tests/e2e/collector_loopback.py --evidence "$${TMPDIR:-/tmp}/esp32-collector-e2e.json"

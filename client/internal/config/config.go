@@ -7,6 +7,16 @@ type Config struct {
 	Codex     Codex     `json:"codex"`
 	Music     Music     `json:"music"`
 	Companion Companion `json:"companion"`
+	Collector Collector `json:"collector"`
+}
+
+// Collector contains paths and endpoint settings, never upload credentials.
+type Collector struct {
+	Enabled         bool   `json:"enabled"`
+	Executable      string `json:"executable"`
+	StateDirectory  string `json:"state_directory"`
+	UploadURL       string `json:"upload_url,omitempty"`
+	UploadTokenFile string `json:"upload_token_file,omitempty"`
 }
 type GitHub struct {
 	Enabled  bool   `json:"enabled"`

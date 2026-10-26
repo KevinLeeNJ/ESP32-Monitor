@@ -6,14 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"esp32-monitor/client/internal/app"
+	"esp32-monitor/client/internal/collector"
+	"esp32-monitor/client/internal/companion"
 	"esp32-monitor/client/internal/config"
 	"flag"
+	"fmt"
 	"io"
 	"time"
 )
 
-// Run emits one JSON snapshot by default. --watch emits JSONL every two seconds,
-// while each provider independently applies its polling and retry schedule.
+// Run emits one JSON snapshot by default. --watch, --collector and --companion
+// stay in the background and emit JSONL while services own their own schedules.
 func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	fs := flag.NewFlagSet("monitor-agent", flag.ContinueOnError)
 	fs.SetOutput(errOut)
@@ -21,6 +24,8 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	var cacheDir string
 	var watch bool
 	var login bool
+	var collectorAPI string
+	var collectorScan bool
 	fs.StringVar(&c.GitHub.Login, "github-user", "", "GitHub login; enables contribution calendar using the application credential store")
 	fs.StringVar(&c.GitHub.ClientID, "github-client-id", "", "public GitHub OAuth App client ID (device flow must be enabled)")
 	fs.BoolVar(&login, "github-login", false, "open the OS default browser for GitHub login, then read the authorized user's calendar")
@@ -38,6 +43,13 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	fs.StringVar(&c.Companion.BindIP, "companion-ip", "", "selected LAN IPv4 address; required with --companion")
 	fs.StringVar(&c.Companion.StateDirectory, "companion-state-dir", "", "private identity/pairing vault; proxy configuration is never persisted")
 	fs.BoolVar(&watch, "watch", false, "emit snapshots as JSONL until interrupted")
+	fs.BoolVar(&c.Collector.Enabled, "collector", false, "enable managed Telegraf and restore the last committed configuration")
+	fs.StringVar(&c.Collector.Executable, "telegraf-executable", "telegraf", "Telegraf 1.40.2 executable path")
+	fs.StringVar(&c.Collector.StateDirectory, "collector-state-dir", "", "private collector state and native bridge descriptor directory")
+	fs.StringVar(&c.Collector.UploadURL, "collector-upload-url", "", "HTTPS Server ingest URL (HTTP allowed only for IP loopback)")
+	fs.StringVar(&c.Collector.UploadTokenFile, "collector-upload-token-file", "", "private 0600 Server token file; never returned by the GUI API")
+	fs.StringVar(&collectorAPI, "collector-api", "", "authenticated native bridge API at 127.0.0.1:PORT; enables collector")
+	fs.BoolVar(&collectorScan, "collector-scan", false, "print actual Telegraf metric capabilities as JSON and exit")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -45,6 +57,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		return errors.New("unexpected_arguments")
 	}
 	c.GitHub.Enabled = c.GitHub.Login != ""
+	c.Collector.Enabled = c.Collector.Enabled || collectorAPI != "" || collectorScan
 	application, err := app.New(c, cacheDir)
 	if err != nil {
 		return err
@@ -88,8 +101,41 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 			return err
 		}
 	}
+	var localAPI *collector.API
+	if application.Collector != nil {
+		if collectorScan {
+			caps, e := application.DiscoverCollectorMetrics(ctx)
+			if e != nil {
+				return e
+			}
+			return json.NewEncoder(out).Encode(caps)
+		}
+		if err := application.Collector.Restore(ctx); err != nil {
+			_, _ = fmt.Fprintln(errOut, "collector_restore_failed:", err)
+		}
+		if application.Collector.Capabilities().SchemaVersion == 0 {
+			if _, err := application.DiscoverCollectorMetrics(ctx); err != nil {
+				_, _ = fmt.Fprintln(errOut, "collector_discovery_failed:", err)
+			}
+		}
+		if collectorAPI != "" {
+			localAPI, err = application.Collector.ListenAPI(collectorAPI)
+			if err != nil {
+				return err
+			}
+			defer localAPI.Close()
+		}
+	}
 	service := application.Companion
-	encoder := json.NewEncoder(out)
+	writeSnapshot := func() error {
+		if application.Collector == nil {
+			return json.NewEncoder(out).Encode(service.Snapshot())
+		}
+		return json.NewEncoder(out).Encode(struct {
+			companion.Snapshot
+			Collector collector.Snapshot `json:"collector"`
+		}{Snapshot: service.Snapshot(), Collector: application.Collector.Snapshot()})
+	}
 	// Provider requests execute on a worker; the snapshot loop stays responsive.
 	done := make(chan struct{})
 	wake := make(chan struct{}, 1)
@@ -111,7 +157,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		}
 	}()
 	defer func() { cancel(); <-done; <-tasksDone; <-musicDone }()
-	if !watch && !c.Companion.Enabled {
+	if !watch && !c.Companion.Enabled && collectorAPI == "" && !c.Collector.Enabled {
 		// A one-shot must wait for its requested reads rather than return starting.
 		service.Refresh(ctx)
 		taskCtx, taskCancel := context.WithTimeout(ctx, 8*time.Second)
@@ -121,13 +167,13 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		return encoder.Encode(service.Snapshot())
+		return writeSnapshot()
 	}
 	wake <- struct{}{}
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
-		if err := encoder.Encode(service.Snapshot()); err != nil {
+		if err := writeSnapshot(); err != nil {
 			return errors.New("snapshot_write_failed")
 		}
 		select {
