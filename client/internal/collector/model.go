@@ -3,6 +3,7 @@ package collector
 import (
 	"encoding/json"
 	"errors"
+	"esp32-monitor/client/internal/collector/uploadv2"
 	"math"
 	"slices"
 	"strings"
@@ -19,8 +20,9 @@ type Selection struct {
 	Upload  bool                `json:"upload"`
 }
 type Config struct {
-	IntervalSeconds int         `json:"interval_seconds"`
-	Selections      []Selection `json:"selections"`
+	IntervalSeconds int                    `json:"interval_seconds"`
+	Selections      []Selection            `json:"selections"`
+	Upload          *uploadv2.UploadConfig `json:"upload,omitempty"`
 }
 
 func DefaultConfig() Config { return Config{IntervalSeconds: 10, Selections: []Selection{}} }
@@ -30,6 +32,7 @@ type Metric struct {
 	Tags      map[string]string  `json:"tags"`
 	Fields    map[string]float64 `json:"fields"`
 	Timestamp int64              `json:"timestamp"`
+	Exact     map[string]string  `json:"exact,omitempty"`
 }
 type Batch struct {
 	Metrics []Metric `json:"metrics"`
@@ -56,27 +59,30 @@ type Category struct {
 	Sources []Capability `json:"sources"`
 }
 type Capabilities struct {
-	SchemaVersion   int        `json:"schema_version"`
-	CoreCollector   string     `json:"core_collector"`
-	NativeCollector string     `json:"native_collector"`
-	OS              string     `json:"os"`
-	Arch            string     `json:"arch"`
-	ObservedAt      time.Time  `json:"observed_at"`
-	Categories      []Category `json:"categories"`
+	SchemaVersion   int             `json:"schema_version"`
+	CoreCollector   string          `json:"core_collector"`
+	NativeCollector string          `json:"native_collector"`
+	OS              string          `json:"os"`
+	Arch            string          `json:"arch"`
+	ObservedAt      time.Time       `json:"observed_at"`
+	Categories      []Category      `json:"categories"`
+	V2              *V2Capabilities `json:"v2,omitempty"`
 }
 type Snapshot struct {
-	SchemaVersion  int        `json:"schema_version"`
-	Revision       uint64     `json:"revision"`
-	State          string     `json:"state"`
-	ErrorCode      string     `json:"error_code,omitempty"`
-	PID            int        `json:"pid"`
-	Config         Config     `json:"config"`
-	Preview        Batch      `json:"preview"`
-	LastReceivedAt *time.Time `json:"last_received_at"`
-	LastUploadAt   *time.Time `json:"last_upload_at"`
-	UploadError    string     `json:"upload_error,omitempty"`
-	QueueDepth     int        `json:"queue_depth"`
-	DroppedMetrics uint64     `json:"dropped_metrics"`
+	SchemaVersion   int              `json:"schema_version"`
+	Revision        uint64           `json:"revision"`
+	State           string           `json:"state"`
+	ErrorCode       string           `json:"error_code,omitempty"`
+	PID             int              `json:"pid"`
+	Config          Config           `json:"config"`
+	Preview         Batch            `json:"preview"`
+	LastReceivedAt  *time.Time       `json:"last_received_at"`
+	LastUploadAt    *time.Time       `json:"last_upload_at"`
+	UploadError     string           `json:"upload_error,omitempty"`
+	QueueDepth      int              `json:"queue_depth"`
+	DroppedMetrics  uint64           `json:"dropped_metrics"`
+	V2Sample        *uploadv2.Sample `json:"v2_sample,omitempty"`
+	ProfileRevision uint64           `json:"profile_revision,omitempty"`
 }
 
 func detached[T any](v T) T {
@@ -181,7 +187,7 @@ func parseBatch(body []byte) (Batch, error) {
 				return Batch{}, errors.New("invalid_payload")
 			}
 		}
-		m := Metric{r.Name, r.Tags, map[string]float64{}, r.Timestamp}
+		m := Metric{Name: r.Name, Tags: r.Tags, Fields: map[string]float64{}, Timestamp: r.Timestamp}
 		for k, v := range r.Fields {
 			if len(k) == 0 || len(k) > 128 {
 				return Batch{}, errors.New("invalid_payload")
@@ -205,6 +211,7 @@ func filter(b Batch, c Config, upload bool) Batch {
 	out := Batch{Metrics: []Metric{}}
 	for _, m := range b.Metrics {
 		f := map[string]float64{}
+		exact := map[string]string{}
 		for _, s := range c.Selections {
 			p := strings.Split(s.ID, "/")
 			if len(p) != 3 || p[1] != m.Name || !matches(s, m.Tags) || (upload && !s.Upload) {
@@ -213,9 +220,12 @@ func filter(b Batch, c Config, upload bool) Batch {
 			if v, ok := m.Fields[p[2]]; ok {
 				f[p[2]] = v
 			}
+			if v, ok := m.Exact[p[2]]; ok && !upload {
+				exact[p[2]] = v
+			}
 		}
-		if len(f) > 0 {
-			out.Metrics = append(out.Metrics, Metric{m.Name, m.Tags, f, m.Timestamp})
+		if len(f) > 0 || len(exact) > 0 {
+			out.Metrics = append(out.Metrics, Metric{Name: m.Name, Tags: m.Tags, Fields: f, Exact: exact, Timestamp: m.Timestamp})
 		}
 	}
 	return out

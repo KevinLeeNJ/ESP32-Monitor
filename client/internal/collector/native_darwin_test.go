@@ -2,7 +2,11 @@
 
 package collector
 
-import "testing"
+import (
+	"context"
+	"encoding/json"
+	"testing"
+)
 
 func TestDarwinMemoryAndBatteryParsing(t *testing.T) {
 	vm := `Mach Virtual Memory Statistics: (page size of 4096 bytes)
@@ -102,5 +106,38 @@ func TestParseSwVers(t *testing.T) {
 	name, version, build = parseSwVers("")
 	if name != "" || version != "" || build != "" {
 		t.Fatal("empty output invented values")
+	}
+}
+
+func TestDarwinFixedInventorySurvivesForks(t *testing.T) {
+	fixed := &darwinFixed{}
+	fixed.once.Do(func() {
+		fixed.brand = "cached-cpu"
+		fixed.batch = Batch{Metrics: []Metric{
+			{Name: "darwin_cpu", Tags: map[string]string{"model": "cached-cpu"}, Fields: map[string]float64{"physical_cores": 123, "logical_cores": 456}},
+			{Name: "darwin_system", Tags: map[string]string{"product_name": "cached-product", "os_name": "cached-os"}, Fields: map[string]float64{"present": 1}},
+		}}
+	})
+	base := &darwinCollector{fixed: fixed}
+	for n := 0; n < 3; n++ {
+		fork := base.Fork().(*darwinCollector)
+		batch, _ := fork.Gather(context.Background(), []string{"darwin_cpu", "darwin_system"})
+		if got := fixedMetric(batch, "darwin_cpu", "", ""); got.Tags["model"] != "cached-cpu" || got.Fields["physical_cores"] != 123 {
+			t.Fatalf("CPU metadata re-probed: %+v", got)
+		}
+		if got := fixedMetric(batch, "darwin_system", "", ""); got.Tags["product_name"] != "cached-product" {
+			t.Fatalf("system metadata re-probed: %+v", got)
+		}
+	}
+}
+
+func TestPlistLargeSMARTIntegerRemainsExact(t *testing.T) {
+	value, err := decodePlist(`<plist><dict><key>counter</key><integer>340282366920938463463374607431768211455</integer></dict></plist>`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, ok := value.(map[string]any)["counter"].(json.Number)
+	if !ok || n.String() != "340282366920938463463374607431768211455" {
+		t.Fatalf("rounded SMART counter: %#v", value)
 	}
 }

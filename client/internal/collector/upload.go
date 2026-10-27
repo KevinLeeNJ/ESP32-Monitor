@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	v2 "esp32-monitor/client/internal/collector/uploadv2"
 	"esp32-monitor/client/internal/platform/proxy"
 )
 
@@ -24,12 +25,14 @@ type queued struct {
 	at       time.Time
 	attempt  int
 	next     time.Time
+	v2       *v2.SampleBatch
+	profile  *v2.Profile
 }
 
 func (m *Manager) initUploader() error {
 	if m.opts.UploadURL != "" {
 		u, err := url.Parse(m.opts.UploadURL)
-		if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Hostname() == "" || u.Path != "/v1/ingest/telegraf" {
+		if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Hostname() == "" || (u.Path != "/v1/ingest/telegraf" && u.Path != "/v2/collector/samples") {
 			return errors.New("invalid_upload_url")
 		}
 		ip := net.ParseIP(u.Hostname())
@@ -53,13 +56,17 @@ func (m *Manager) initUploader() error {
 func queueMetrics(q []queued) int {
 	n := 0
 	for _, b := range q {
-		n += len(b.batch.Metrics)
+		if b.v2 != nil {
+			n += len(b.v2.Samples)
+		} else {
+			n += len(b.batch.Metrics)
+		}
 	}
 	return n
 }
 func (m *Manager) trimQueueLocked(now time.Time) {
-	for len(m.queue) > 0 && (now.Sub(m.queue[0].at) > 5*time.Minute || queueMetrics(m.queue) > 1000) {
-		m.snapshot.DroppedMetrics += uint64(len(m.queue[0].batch.Metrics))
+	for len(m.queue) > 0 && (now.Sub(m.queue[0].at) > 5*time.Minute || queueMetrics(m.queue) > 1000 || m.isV2() && queueBytes(m.queue) > maxBody) {
+		m.snapshot.DroppedMetrics += uint64(queueMetrics(m.queue[:1]))
 		m.queue = m.queue[1:]
 	}
 }
@@ -102,6 +109,10 @@ func (m *Manager) deliver() {
 		return
 	}
 	m.mu.Unlock()
+	if q.v2 != nil {
+		m.deliverV2(q)
+		return
+	}
 	body, _ := json.Marshal(q.batch)
 	if len(body) > maxBody || len(q.batch.Metrics) > 100 {
 		m.finishDelivery(q, 413, nil)
@@ -140,12 +151,14 @@ func (m *Manager) finishDelivery(q queued, status int, headers http.Header) {
 	switch {
 	case status >= 200 && status < 300:
 		now := time.Now()
-		m.snapshot.LastUploadAt = &now
+		if q.v2 == nil || len(q.v2.Samples) > 0 {
+			m.snapshot.LastUploadAt = &now
+		}
 		m.snapshot.UploadError = ""
 		m.queue = m.queue[1:]
 	case status == 401 || status == 403:
 		m.snapshot.UploadError = "upload_auth_required"
-	case status == 413 && len(q.batch.Metrics) > 1:
+	case status == 413 && q.v2 == nil && len(q.batch.Metrics) > 1:
 		half := len(q.batch.Metrics) / 2
 		a, b := q, q
 		a.batch = Batch{q.batch.Metrics[:half]}
@@ -171,7 +184,7 @@ func (m *Manager) finishDelivery(q queued, status int, headers http.Header) {
 		if status == 422 {
 			m.snapshot.UploadError = "upload_invalid_sample_or_clock"
 		}
-		m.snapshot.DroppedMetrics += uint64(len(q.batch.Metrics))
+		m.snapshot.DroppedMetrics += uint64(queueMetrics([]queued{q}))
 		m.queue = m.queue[1:]
 	}
 }

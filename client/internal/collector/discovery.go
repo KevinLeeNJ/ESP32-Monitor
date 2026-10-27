@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -21,11 +22,13 @@ func (m *Manager) Discover(ctx context.Context) (Capabilities, error) {
 func (m *Manager) discover(ctx context.Context) (Capabilities, error) {
 	ctx, cancel := context.WithTimeout(ctx, m.opts.ApplyTimeout)
 	defer cancel()
-	batch, reasons := gather(ctx, m.opts.CoreFactory(), m.opts.NativeFactory(), allSources())
+	ids := slices.DeleteFunc(allSources(), func(id string) bool { return id == "darwin_public_ip" })
+	batch, reasons := gather(ctx, m.opts.CoreFactory(), m.opts.NativeFactory(), ids)
 	if ctx.Err() != nil {
 		return Capabilities{}, ctx.Err()
 	}
 	caps := capabilitiesFrom(batch, reasons)
+	caps.V2 = m.v2Capabilities(batch)
 
 	m.mu.Lock()
 	m.caps = caps
@@ -35,7 +38,14 @@ func (m *Manager) discover(ctx context.Context) (Capabilities, error) {
 func capabilitiesFor(plugin string, b Batch) []MetricCapability {
 	byID := map[string]*MetricCapability{}
 	for _, sample := range b.Metrics {
+		fields := map[string]bool{}
 		for field := range sample.Fields {
+			fields[field] = true
+		}
+		for field := range sample.Exact {
+			fields[field] = true
+		}
+		for field := range fields {
 			id := metricID(plugin, sample.Name, field)
 			c := byID[id]
 			if c == nil {

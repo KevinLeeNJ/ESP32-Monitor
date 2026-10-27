@@ -11,10 +11,15 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 type darwinCollector struct {
+	mu         sync.Mutex
+	fixed      *darwinFixed
+	smart      []Metric
+	smartAt    time.Time
 	publicIP   string
 	publicIPAt time.Time
 }
@@ -37,6 +42,9 @@ func numeric(s string) (float64, bool) {
 	return v, e == nil && v >= 0
 }
 func (d *darwinCollector) Gather(ctx context.Context, ids []string) (Batch, map[string]string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	fixed := d.fixedLocked(ctx)
 	out := Batch{Metrics: []Metric{}}
 	reasons := map[string]string{}
 	add := func(id string, tags map[string]string, fields map[string]float64) {
@@ -48,9 +56,8 @@ func (d *darwinCollector) Gather(ctx context.Context, ids []string) (Batch, map[
 	}
 	var cpuSensors, gpuSensors map[string]float64
 	var fans []float64
-	brand := ""
+	brand := fixed.brand
 	if slices.Contains(ids, "darwin_cpu") || slices.Contains(ids, "darwin_gpu") || slices.Contains(ids, "darwin_fan") {
-		brand = sysctlValue(ctx, "machdep.cpu.brand_string")
 		cpuSensors, gpuSensors, fans = readSMC(brand)
 	}
 	for _, id := range ids {
@@ -60,16 +67,8 @@ func (d *darwinCollector) Gather(ctx context.Context, ids []string) (Batch, map[
 		}
 		switch id {
 		case "darwin_cpu":
-			tags := map[string]string{}
-			if brand != "" {
-				tags["model"] = brand
-			}
-			fields := map[string]float64{}
-			for field, key := range map[string]string{"physical_cores": "hw.physicalcpu", "logical_cores": "hw.logicalcpu", "performance_cores": "hw.perflevel0.physicalcpu", "efficiency_cores": "hw.perflevel1.physicalcpu"} {
-				if v, ok := numeric(sysctlValue(ctx, key)); ok {
-					fields[field] = v
-				}
-			}
+			cached := fixedMetric(fixed.batch, id, "", "")
+			tags, fields := cached.Tags, cached.Fields
 			if avg, ok := sensorAverage(cpuSensors); ok {
 				fields["temperature_celsius"] = avg
 			}
@@ -82,10 +81,12 @@ func (d *darwinCollector) Gather(ctx context.Context, ids []string) (Batch, map[
 			if err != nil {
 				reasons[id] = gatherReason(err)
 			}
-			out.Metrics = append(out.Metrics, gpu...)
 			if avg, ok := sensorAverage(gpuSensors); ok {
-				add(id, map[string]string{"device": "soc"}, map[string]float64{"temperature_celsius": avg})
+				if len(gpu) == 1 {
+					gpu[0].Fields["temperature_celsius"] = avg
+				}
 			}
+			out.Metrics = append(out.Metrics, gpu...)
 			if len(gpu) == 0 && len(gpuSensors) == 0 && reasons[id] == "" {
 				reasons[id] = "unavailable"
 			}
@@ -97,13 +98,20 @@ func (d *darwinCollector) Gather(ctx context.Context, ids []string) (Batch, map[
 				reasons[id] = "unavailable"
 			}
 		case "darwin_disk":
-			disks, err := readDisks(ctx)
-			if err != nil {
-				reasons[id] = gatherReason(err)
-			} else if len(disks) == 0 {
+			if d.smartAt.IsZero() || time.Since(d.smartAt) >= 5*time.Minute {
+				disks, err := readDisksFor(ctx, fixed.devices, false)
+				if err != nil {
+					reasons[id] = gatherReason(err)
+				} else {
+					d.smart = disks
+					d.smartAt = time.Now()
+				}
+			}
+			if len(d.smart) == 0 {
 				reasons[id] = "unavailable"
 			}
-			out.Metrics = append(out.Metrics, disks...)
+			out.Metrics = append(out.Metrics, detached(d.smart)...)
+
 		case "darwin_public_ip":
 			if d.publicIP == "" || time.Since(d.publicIPAt) > 5*time.Minute {
 				ip, err := publicIPv4(ctx)
@@ -116,7 +124,7 @@ func (d *darwinCollector) Gather(ctx context.Context, ids []string) (Batch, map[
 				}
 			}
 			if d.publicIP != "" {
-				add(id, map[string]string{"ipv4": d.publicIP}, map[string]float64{"present": 1})
+				out.Metrics = append(out.Metrics, Metric{Name: id, Tags: map[string]string{"ipv4": d.publicIP}, Fields: map[string]float64{"present": 1}, Timestamp: d.publicIPAt.Unix()})
 			}
 		case "darwin_memory":
 			fields := map[string]float64{}
@@ -133,35 +141,35 @@ func (d *darwinCollector) Gather(ctx context.Context, ids []string) (Batch, map[
 				}
 			}
 		case "darwin_network":
-			ports, err := darwinCommand(ctx, "/usr/sbin/networksetup", "-listallhardwareports")
-			interfaces, iferr := net.Interfaces()
-			if err != nil || iferr != nil {
+			interfaces, err := net.Interfaces()
+			if err != nil {
 				reasons[id] = "unavailable"
 				continue
 			}
-			kinds := parseNetworkPorts(ports)
-			count := 0
 			for _, iface := range interfaces {
-				kind, ok := kinds[iface.Name]
-				if !ok || iface.Flags&net.FlagUp == 0 {
+				kind, ok := fixed.kinds[iface.Name]
+				if !ok {
 					continue
 				}
 				addresses, err := iface.Addrs()
 				if err != nil {
+					reasons[id] = "partial_data"
 					continue
 				}
-				for _, address := range addresses {
-					ip, _, err := net.ParseCIDR(address.String())
-					if err != nil || ip.To4() == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
-						continue
+				ips := []string{}
+				for _, a := range addresses {
+					ip, _, e := net.ParseCIDR(a.String())
+					if e == nil && ip.To4() != nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
+						ips = append(ips, ip.To4().String())
 					}
-					add(id, map[string]string{"interface": iface.Name, "type": kind, "ipv4": ip.String()}, map[string]float64{"connected": 1})
-					count++
 				}
+				up := float64(0)
+				if iface.Flags&net.FlagUp != 0 {
+					up = 1
+				}
+				add(id, map[string]string{"interface": iface.Name, "type": kind, "ipv4": strings.Join(ips, ",")}, map[string]float64{"connected": up})
 			}
-			if count == 0 {
-				reasons[id] = "unavailable"
-			}
+
 		case "darwin_battery":
 			fields := map[string]float64{}
 			if s, err := darwinCommand(ctx, "/usr/bin/pmset", "-g", "batt"); err == nil {
@@ -169,35 +177,13 @@ func (d *darwinCollector) Gather(ctx context.Context, ids []string) (Batch, map[
 			}
 			add(id, map[string]string{}, fields)
 		case "darwin_system":
-			tags := map[string]string{}
-			if s := sysctlValue(ctx, "hw.model"); s != "" {
-				tags["model_id"] = s
-				if name := macProductName(s); name != "" {
-					tags["product_name"] = name
-				} else {
-					tags["product_name"] = s
-				}
-			}
-			if s, err := darwinCommand(ctx, "/usr/bin/sw_vers"); err == nil {
-				name, version, build := parseSwVers(s)
-				if name != "" {
-					tags["os_name"] = name
-				}
-				if version != "" {
-					tags["os_version"] = version
-					if codename := darwinOSCodename(version); codename != "" {
-						tags["os_codename"] = codename
-					}
-				}
-				if build != "" {
-					tags["os_build"] = build
-				}
-			}
-			if len(tags) > 0 {
-				add(id, tags, map[string]float64{"present": 1})
+			cached := fixedMetric(fixed.batch, id, "", "")
+			if len(cached.Tags) > 0 {
+				out.Metrics = append(out.Metrics, cached)
 			} else {
 				reasons[id] = "unavailable"
 			}
+
 		default:
 			reasons[id] = "unsupported"
 		}

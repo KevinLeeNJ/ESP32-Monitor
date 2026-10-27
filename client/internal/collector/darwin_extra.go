@@ -24,7 +24,7 @@ func readGPU(ctx context.Context) ([]Metric, error) {
 	}
 	list, _ := v.([]any)
 	out := []Metric{}
-	for _, item := range list {
+	for index, item := range list {
 		obj, ok := item.(map[string]any)
 		if !ok {
 			continue
@@ -48,7 +48,7 @@ func readGPU(ctx context.Context) ([]Metric, error) {
 			if class == "" {
 				class = "gpu"
 			}
-			out = append(out, Metric{Name: "darwin_gpu", Tags: map[string]string{"device": class}, Fields: fields, Timestamp: time.Now().Unix()})
+			out = append(out, Metric{Name: "darwin_gpu", Tags: map[string]string{"device": class + "-" + strconv.Itoa(index)}, Fields: fields, Timestamp: time.Now().Unix()})
 		}
 	}
 	return out, nil
@@ -64,17 +64,27 @@ func readDisks(ctx context.Context) ([]Metric, error) {
 	}
 	root, _ := v.(map[string]any)
 	disks, _ := root["WholeDisks"].([]any)
-	out := []Metric{}
+	devices := []string{}
 	for _, item := range disks {
-		disk, ok := item.(string)
-		if !ok || !strings.HasPrefix(disk, "disk") {
+		if device, ok := item.(string); ok {
+			devices = append(devices, device)
+		}
+	}
+	return readDisksFor(ctx, devices, true)
+}
+
+func readDisksFor(ctx context.Context, devices []string, fixed bool) ([]Metric, error) {
+	out := []Metric{}
+
+	for _, disk := range devices {
+		if !strings.HasPrefix(disk, "disk") {
 			continue
 		}
-		s, e = darwinCommand(ctx, "/usr/sbin/diskutil", "info", "-plist", disk)
+		s, e := darwinCommand(ctx, "/usr/sbin/diskutil", "info", "-plist", disk)
 		if e != nil {
 			continue
 		}
-		v, e = decodePlist(s)
+		v, e := decodePlist(s)
 		if e != nil {
 			continue
 		}
@@ -83,11 +93,20 @@ func readDisks(ctx context.Context) ([]Metric, error) {
 			continue
 		}
 		tags := map[string]string{"device": disk}
-		model, _ := info["MediaName"].(string)
-		if model != "" {
+		model := ""
+		if fixed {
+			model, _ = info["MediaName"].(string)
+		}
+		if fixed && model != "" {
 			tags["model"] = model
 		}
 		fields := map[string]float64{}
+		exact := map[string]string{}
+		if fixed {
+			if n, ok := info["TotalSize"].(float64); ok {
+				fields["total"] = n
+			}
+		}
 		if status, ok := info["SMARTStatus"].(string); ok {
 			switch strings.ToLower(status) {
 			case "verified":
@@ -100,14 +119,16 @@ func readDisks(ctx context.Context) ([]Metric, error) {
 			for k, name := range map[string]string{"PERCENTAGE_USED": "smart_percent_used", "AVAILABLE_SPARE": "smart_available_spare_percent", "AVAILABLE_SPARE_THRESHOLD": "smart_spare_threshold_percent", "MEDIA_ERRORS_0": "smart_media_errors", "POWER_ON_HOURS_0": "smart_power_on_hours", "UNSAFE_SHUTDOWNS_0": "smart_unsafe_shutdowns"} {
 				if n, ok := smart[k].(float64); ok && n >= 0 {
 					fields[name] = n
+				} else if n, ok := smart[k].(json.Number); ok {
+					exact[name] = n.String()
 				}
 			}
 		}
-		if model != "" {
+		if fixed && model != "" {
 			fields["present"] = 1
 		}
-		if len(fields) > 0 {
-			out = append(out, Metric{Name: "darwin_disk", Tags: tags, Fields: fields, Timestamp: time.Now().Unix()})
+		if len(fields) > 0 || len(exact) > 0 {
+			out = append(out, Metric{Name: "darwin_disk", Tags: tags, Fields: fields, Exact: exact, Timestamp: time.Now().Unix()})
 		}
 	}
 	return out, nil

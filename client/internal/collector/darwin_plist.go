@@ -3,8 +3,10 @@
 package collector
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 )
@@ -96,7 +98,16 @@ func plistValue(d *xml.Decoder, start xml.StartElement) (any, error) {
 			return nil, e
 		}
 		switch start.Name.Local {
-		case "integer", "real":
+		case "integer":
+			integer, ok := new(big.Int).SetString(strings.TrimSpace(value), 10)
+			if !ok {
+				return nil, fmt.Errorf("invalid plist integer")
+			}
+			if integer.BitLen() > 53 {
+				return json.Number(integer.String()), nil
+			}
+			return float64(integer.Int64()), nil
+		case "real":
 			v, e := strconv.ParseFloat(strings.TrimSpace(value), 64)
 			return v, e
 		default:

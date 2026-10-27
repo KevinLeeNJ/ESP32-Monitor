@@ -95,3 +95,29 @@ func TestRatesAndScope(t *testing.T) {
 		t.Fatal("out of scope field retained")
 	}
 }
+
+func TestCoreFixedInventorySurvivesForksAndIsDetached(t *testing.T) {
+	fixed := &coreFixed{}
+	fixed.once.Do(func() {
+		fixed.batch = Batch{Metrics: []Metric{
+			{Name: "mem", Tags: map[string]string{}, Fields: map[string]float64{"total": 12345}},
+			{Name: "system", Tags: map[string]string{"os_platform": "frozen-os", "os_version": "startup"}, Fields: map[string]float64{"n_cpus": 123}},
+		}}
+	})
+	core := &CoreCollector{fixed: fixed}
+	for n := 0; n < 3; n++ {
+		fork := core.Fork().(*CoreCollector)
+		batch, reasons := fork.Gather(context.Background(), []string{"mem", "system"})
+		if len(reasons) > 0 {
+			t.Fatal(reasons)
+		}
+		if fixedMetric(batch, "mem", "", "").Fields["total"] != 12345 || fixedMetric(batch, "system", "", "").Tags["os_platform"] != "frozen-os" {
+			t.Fatal("startup metadata was re-probed")
+		}
+		snapshot := fork.Fixed(context.Background())
+		snapshot.Metrics[0].Fields["total"] = 999
+	}
+	if fixed.batch.Metrics[0].Fields["total"] != 12345 {
+		t.Fatal("caller mutated immutable cache")
+	}
+}
