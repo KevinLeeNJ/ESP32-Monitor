@@ -62,7 +62,7 @@ func TestConfigurationTransactionAndRestore(t *testing.T) {
 	m := newHelper(t, "")
 	ctx := context.Background()
 	caps, err := m.Discover(ctx)
-	if err != nil || len(caps.Categories) != 6 {
+	if err != nil || len(caps.Categories) != 7 {
 		t.Fatalf("scan: %v %+v", err, caps)
 	}
 	first, err := m.Apply(ctx, cfg("mem/mem/used", false))

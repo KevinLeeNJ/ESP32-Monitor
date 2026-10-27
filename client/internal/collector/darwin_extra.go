@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -154,4 +155,34 @@ func parsePublicIPv4(b []byte) (string, error) {
 		return "", io.ErrUnexpectedEOF
 	}
 	return ip.To4().String(), nil
+}
+
+func parseSwVers(s string) (name, version, build string) {
+	for _, line := range strings.Split(s, "\n") {
+		key, value, _ := strings.Cut(line, ":")
+		switch strings.TrimSpace(key) {
+		case "ProductName":
+			name = strings.TrimSpace(value)
+		case "ProductVersion":
+			version = strings.TrimSpace(value)
+		case "BuildVersion":
+			build = strings.TrimSpace(value)
+		}
+	}
+	return name, version, build
+}
+
+// macOS marketing names keyed by major version, adapted from fastfetch
+// (src/detection/os/os_apple.m, MIT license, (c) fastfetch-cli contributors).
+var darwinOSCodenames = map[int]string{
+	27: "Golden Gate", 26: "Tahoe", 16: "Tahoe", 15: "Sequoia", 14: "Sonoma", 13: "Ventura", 12: "Monterey", 11: "Big Sur",
+}
+
+func darwinOSCodename(version string) string {
+	major, _, _ := strings.Cut(version, ".")
+	n, err := strconv.Atoi(major)
+	if err != nil {
+		return ""
+	}
+	return darwinOSCodenames[n]
 }

@@ -15,7 +15,7 @@ func TestDarwinLiveProbe(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	b, r := newNativeCollector().Gather(ctx, []string{"darwin_cpu", "darwin_gpu", "darwin_disk", "darwin_fan"})
+	b, r := newNativeCollector().Gather(ctx, []string{"darwin_cpu", "darwin_gpu", "darwin_disk", "darwin_fan", "darwin_system"})
 	for _, m := range b.Metrics {
 		t.Logf("%s tags=%v fields=%v", m.Name, m.Tags, m.Fields)
 	}

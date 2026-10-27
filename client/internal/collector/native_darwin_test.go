@@ -66,3 +66,41 @@ func TestParsePublicIPv4(t *testing.T) {
 		}
 	}
 }
+
+func TestMacProductName(t *testing.T) {
+	for model, want := range map[string]string{
+		"Mac16,12":       "MacBook Air (13-inch, M4, 2025)",
+		"Mac14,2":        "MacBook Air (M2, 2022)",
+		"MacBookPro18,3": "MacBook Pro (14-inch, 2021)",
+		"Macmini9,1":     "Mac mini (M1, 2020)",
+	} {
+		if got := macProductName(model); got != want {
+			t.Fatalf("%s: %q != %q", model, got, want)
+		}
+	}
+	if macProductName("Mac99,9") != "" {
+		t.Fatal("unknown model invented a name")
+	}
+}
+
+func TestDarwinOSCodename(t *testing.T) {
+	for version, want := range map[string]string{"27.2": "Golden Gate", "26.0": "Tahoe", "14.5": "Sonoma", "10.15": ""} {
+		if got := darwinOSCodename(version); got != want {
+			t.Fatalf("%s: %q != %q", version, got, want)
+		}
+	}
+	if darwinOSCodename("broken") != "" || darwinOSCodename("") != "" {
+		t.Fatal("invalid version invented a codename")
+	}
+}
+
+func TestParseSwVers(t *testing.T) {
+	name, version, build := parseSwVers("ProductName:\t\tmacOS\nProductVersion:\t\t27.2\nBuildVersion:\t\t26B118\n")
+	if name != "macOS" || version != "27.2" || build != "26B118" {
+		t.Fatalf("sw_vers: %q %q %q", name, version, build)
+	}
+	name, version, build = parseSwVers("")
+	if name != "" || version != "" || build != "" {
+		t.Fatal("empty output invented values")
+	}
+}
