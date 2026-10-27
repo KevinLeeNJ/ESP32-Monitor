@@ -2,11 +2,8 @@ package collector
 
 import (
 	"context"
-	"os/exec"
-	"runtime"
 	"sort"
 	"strings"
-	"time"
 )
 
 func (m *Manager) Discover(ctx context.Context) (Capabilities, error) {
@@ -22,52 +19,14 @@ func (m *Manager) Discover(ctx context.Context) (Capabilities, error) {
 	return caps, err
 }
 func (m *Manager) discover(ctx context.Context) (Capabilities, error) {
-	version, err := m.exe.version(ctx)
-	if err != nil {
-		return Capabilities{}, err
+	ctx, cancel := context.WithTimeout(ctx, m.opts.ApplyTimeout)
+	defer cancel()
+	batch, reasons := gather(ctx, m.opts.CoreFactory(), m.opts.NativeFactory(), allSources())
+	if ctx.Err() != nil {
+		return Capabilities{}, ctx.Err()
 	}
-	caps := Capabilities{SchemaVersion: SchemaVersion, TelegrafVersion: version, OS: runtime.GOOS, Arch: runtime.GOARCH, ObservedAt: time.Now(), Categories: []Category{
-		{ID: "cpu", Name: "CPU", Sources: []Capability{}}, {ID: "memory", Name: "内存（Swap）", Sources: []Capability{}}, {ID: "disk", Name: "磁盘", Sources: []Capability{}},
-		{ID: "network", Name: "网络", Sources: []Capability{}}, {ID: "system", Name: "系统指标", Sources: []Capability{}}, {ID: "hardware", Name: "硬件与传感器", Sources: []Capability{}},
-	}}
-	for _, s := range sources {
-		if ctx.Err() != nil {
-			return Capabilities{}, ctx.Err()
-		}
-		c := Capability{ID: s.id, State: "unsupported", Metrics: []MetricCapability{}}
-		switch {
-		case s.reason != "":
-			c.Reason = s.reason
-		case s.platforms != "" && !contains(strings.Fields(s.platforms), runtime.GOOS):
-			c.Reason = "unsupported_os"
-		default:
-			if s.dependency != "" {
-				if _, err := exec.LookPath(s.dependency); err != nil {
-					c.State = "missing_dependency"
-					c.Reason = s.dependency
-					break
-				}
-			}
-			batch, reason := m.exe.probe(ctx, s.id)
-			c.Reason = reason
-			c.State = "unsupported"
-			if reason == "permission_required" {
-				c.State = "permission_required"
-			}
-			if len(batch.Metrics) > 0 {
-				c.State = "available"
-				if reason != "" {
-					c.State = "partial"
-				}
-				c.Metrics = capabilitiesFor(s.id, batch)
-			}
-		}
-		for i := range caps.Categories {
-			if caps.Categories[i].ID == s.category {
-				caps.Categories[i].Sources = append(caps.Categories[i].Sources, c)
-			}
-		}
-	}
+	caps := capabilitiesFrom(batch, reasons)
+
 	m.mu.Lock()
 	m.caps = caps
 	m.mu.Unlock()
@@ -80,7 +39,7 @@ func capabilitiesFor(plugin string, b Batch) []MetricCapability {
 			id := metricID(plugin, sample.Name, field)
 			c := byID[id]
 			if c == nil {
-				c = &MetricCapability{ID: id, Measurement: sample.Name, Field: field, Unit: unit(field), UploadSupported: uploadSupported(sample.Name, field), Objects: []map[string]string{}}
+				c = &MetricCapability{ID: id, Measurement: sample.Name, Field: field, Unit: unit(sample.Name, field), UploadSupported: uploadSupported(sample.Name, field), Objects: []map[string]string{}}
 				if !c.UploadSupported {
 					c.UploadReason = "server_schema_not_supported"
 				}

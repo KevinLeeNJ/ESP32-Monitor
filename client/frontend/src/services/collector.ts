@@ -1,7 +1,7 @@
-import type { CollectorCapabilities, CollectorConfig, CollectorSnapshot } from "../types/collector";
+import type { CollectorCapabilities, CollectorConfig, CollectorSnapshot } from "../types/collector.js";
 
 /** Implement in the trusted native bridge. The web frontend receives no tokens,
- * filesystem paths or Telegraf TOML. Go Application exposes the same methods. */
+ * filesystem paths or collector internals. Go Application exposes the same methods. */
 export interface CollectorBridge {
   DiscoverCollectorMetrics(): Promise<CollectorCapabilities>;
   GetCollectorCapabilities(): Promise<CollectorCapabilities>;

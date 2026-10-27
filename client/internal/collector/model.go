@@ -9,7 +9,6 @@ import (
 	"time"
 )
 
-const TelegrafVersion = "1.40.2"
 const SchemaVersion = 1
 const maxBody = 256 * 1024
 
@@ -45,10 +44,11 @@ type MetricCapability struct {
 	Objects         []map[string]string `json:"objects"`
 }
 type Capability struct {
-	ID      string             `json:"id"`
-	State   string             `json:"state"`
-	Reason  string             `json:"reason,omitempty"`
-	Metrics []MetricCapability `json:"metrics"`
+	ID        string             `json:"id"`
+	Collector string             `json:"collector"`
+	State     string             `json:"state"`
+	Reason    string             `json:"reason,omitempty"`
+	Metrics   []MetricCapability `json:"metrics"`
 }
 type Category struct {
 	ID      string       `json:"id"`
@@ -57,7 +57,8 @@ type Category struct {
 }
 type Capabilities struct {
 	SchemaVersion   int        `json:"schema_version"`
-	TelegrafVersion string     `json:"telegraf_version"`
+	CoreCollector   string     `json:"core_collector"`
+	NativeCollector string     `json:"native_collector"`
 	OS              string     `json:"os"`
 	Arch            string     `json:"arch"`
 	ObservedAt      time.Time  `json:"observed_at"`
@@ -120,10 +121,21 @@ var uploadFields = map[string][]string{
 }
 
 func uploadSupported(name, field string) bool { return slices.Contains(uploadFields[name], field) }
-func unit(field string) string {
+func unit(measurement, field string) string {
+	if measurement == "processes" || measurement == "netstat" {
+		return "count"
+	}
+	if measurement == "diskio" && strings.HasSuffix(field, "time") {
+		return "milliseconds"
+	}
+	if measurement == "swap" && (field == "in" || field == "out") {
+		return "bytes"
+	}
 	switch {
 	case strings.Contains(field, "percent") || strings.HasPrefix(field, "usage_"):
 		return "percent"
+	case strings.HasPrefix(field, "inodes_") || strings.HasPrefix(field, "packets_") || strings.HasPrefix(field, "err_") || strings.HasPrefix(field, "drop_") || field == "reads" || field == "writes" || field == "n_cpus" || field == "n_users":
+		return "count"
 	case field == "uptime":
 		return "seconds"
 	case strings.Contains(field, "bytes") || slices.Contains([]string{"total", "used", "available", "free", "cached", "buffered", "wired", "active", "inactive"}, field):

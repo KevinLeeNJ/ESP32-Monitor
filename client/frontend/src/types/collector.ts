@@ -1,4 +1,4 @@
-/** Collector schema v1. Values and objects come from real Telegraf samples. */
+/** Collector schema v1. Values and objects come from Core/Native Collector samples. */
 export type Tags = Record<string, string>;
 export type CapabilityState = "available" | "partial" | "missing_dependency" | "permission_required" | "unsupported";
 export interface CollectorSelection { id: string; objects?: Tags[]; upload: boolean }
@@ -8,9 +8,9 @@ export interface CollectorMetric {
   upload_supported: boolean; upload_reason?: string; objects: Tags[];
 }
 export interface CollectorCapabilities {
-  schema_version: 1; telegraf_version: string; os: string; arch: string; observed_at: string;
+  schema_version: 1; core_collector: string; native_collector: string; os: string; arch: string; observed_at: string;
   categories: Array<{ id: string; name: string; sources: Array<{
-    id: string; state: CapabilityState; reason?: string; metrics: CollectorMetric[];
+    id: string; collector: "core" | "native"; state: CapabilityState; reason?: string; metrics: CollectorMetric[];
   }> }>;
 }
 export interface CollectorBatch {

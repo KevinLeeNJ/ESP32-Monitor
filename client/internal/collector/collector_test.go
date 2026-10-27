@@ -4,61 +4,33 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/pelletier/go-toml/v2"
 )
 
-// Helper processes exercise the real exec/HTTP/lifecycle path deterministically.
-// The opt-in end-to-end suite separately uses an installed, real Telegraf binary.
-func TestMain(m *testing.M) {
-	if os.Getenv("ESP32_COLLECTOR_TEST_HELPER") == "1" {
-		os.Exit(helper())
-	}
-	os.Exit(m.Run())
-}
-func helper() int {
-	if len(os.Args) == 2 && os.Args[1] == "version" {
-		fmt.Println("Telegraf " + TelegrafVersion)
-		return 0
-	}
-	if len(os.Args) < 3 {
-		return 2
-	}
-	if !slices.Contains(os.Args, "--strict-env-handling") {
-		return 7
-	}
-	path := os.Args[2]
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 3
-	}
-	var doc struct {
-		Inputs  map[string][]map[string]any `toml:"inputs"`
-		Outputs struct {
-			HTTP []struct {
-				URL     string            `toml:"url"`
-				Headers map[string]string `toml:"headers"`
-			} `toml:"http"`
-		} `toml:"outputs"`
-	}
-	if toml.Unmarshal(data, &doc) != nil {
-		return 4
-	}
-	once := (len(os.Args) > 3 && os.Args[3] == "--once") || len(doc.Outputs.HTTP) == 0
-	b := Batch{Metrics: []Metric{}}
-	for id := range doc.Inputs {
+// Deterministic collectors exercise transactions, scheduling and the real uploader.
+type testCollector struct{ dir string }
+
+func (c *testCollector) Gather(ctx context.Context, ids []string) (Batch, map[string]string) {
+	batch := Batch{Metrics: []Metric{}}
+	reasons := map[string]string{}
+	for _, id := range ids {
+		if ctx.Err() != nil {
+			reasons[id] = "canceled"
+			continue
+		}
+		if id == "system" {
+			if _, err := os.Stat(filepath.Join(c.dir, "fail-system")); err == nil {
+				reasons[id] = "collect_failed"
+				continue
+			}
+		}
 		field := "value"
 		switch id {
 		case "mem":
@@ -68,53 +40,17 @@ func helper() int {
 		case "system":
 			field = "uptime"
 		}
-		b.Metrics = append(b.Metrics, Metric{id, map[string]string{}, map[string]float64{field: 42}, time.Now().Unix()})
-		if !once && id == "system" {
-			if _, e := os.Stat(filepath.Join(filepath.Dir(path), "fail-system")); e == nil {
-				return 6
-			}
-		}
+		batch.Metrics = append(batch.Metrics, Metric{id, map[string]string{}, map[string]float64{field: 42}, time.Now().Unix()})
 	}
-	if once {
-		_ = json.NewEncoder(os.Stdout).Encode(b)
-		return 0
-	}
-	if len(doc.Outputs.HTTP) != 1 {
-		return 5
-	}
-	out := doc.Outputs.HTTP[0]
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
-	body, _ := json.Marshal(b)
-	for {
-		req, _ := http.NewRequest("POST", out.URL, bytes.NewReader(body))
-		for k, v := range out.Headers {
-			req.Header.Set(k, v)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil {
-			resp.Body.Close()
-		}
-		select {
-		case <-ctx.Done():
-			return 0
-		case <-time.After(25 * time.Millisecond):
-		}
-	}
+	return batch, reasons
 }
 func newHelper(t *testing.T, uploadURL string) *Manager {
 	t.Helper()
-	t.Setenv("ESP32_COLLECTOR_TEST_HELPER", "1")
-	t.Setenv("GORACE", "atexit_sleep_ms=0")
-	exe, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
 	dir := t.TempDir()
-	if err = os.Chmod(dir, 0700); err != nil {
+	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	m, err := New(Options{Executable: exe, StateDirectory: dir, UploadURL: uploadURL, UploadToken: func(context.Context) (string, error) { return strings.Repeat("a", 64), nil }, ApplyTimeout: 3 * time.Second, HTTPClient: &http.Client{Timeout: time.Second}})
+	m, err := New(Options{CoreFactory: func() Collector { return &testCollector{dir} }, StateDirectory: dir, UploadURL: uploadURL, UploadToken: func(context.Context) (string, error) { return strings.Repeat("a", 64), nil }, ApplyTimeout: time.Second, HTTPClient: &http.Client{Timeout: time.Second}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +58,7 @@ func newHelper(t *testing.T, uploadURL string) *Manager {
 	return m
 }
 func cfg(id string, upload bool) Config { return Config{5, []Selection{{ID: id, Upload: upload}}} }
-func TestConfigurationTransactionAndRollback(t *testing.T) {
+func TestConfigurationTransactionAndRestore(t *testing.T) {
 	m := newHelper(t, "")
 	ctx := context.Background()
 	caps, err := m.Discover(ctx)
@@ -137,13 +73,13 @@ func TestConfigurationTransactionAndRollback(t *testing.T) {
 	before, _ := os.ReadFile(snapshotPath)
 	_, err = m.Apply(ctx, cfg("net/net/value", true))
 	if err == nil || m.Snapshot().PID != first.PID {
-		t.Fatal("invalid upload changed running process")
+		t.Fatal("invalid upload changed running configuration")
 	}
 	if err = os.WriteFile(filepath.Join(m.opts.StateDirectory, "fail-system"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
 	rolled, err := m.Apply(ctx, cfg("system/system/uptime", false))
-	if err == nil || rolled.State != "healthy" || rolled.Revision != 1 || rolled.PID == first.PID || rolled.Config.Selections[0].ID != "mem/mem/used" {
+	if err == nil || rolled.State != "healthy" || rolled.Revision != 1 || rolled.PID != first.PID || rolled.Config.Selections[0].ID != "mem/mem/used" {
 		t.Fatalf("rollback: %+v %v", rolled, err)
 	}
 	after, _ := os.ReadFile(snapshotPath)
@@ -151,7 +87,7 @@ func TestConfigurationTransactionAndRollback(t *testing.T) {
 		t.Fatal("failed candidate committed")
 	}
 	second, err := m.Apply(ctx, cfg("cpu/cpu/usage_idle", false))
-	if err != nil || second.Revision != 2 || second.PID == rolled.PID || len(second.Preview.Metrics) != 1 || second.Preview.Metrics[0].Name != "cpu" {
+	if err != nil || second.Revision != 2 || second.PID != rolled.PID || len(second.Preview.Metrics) != 1 || second.Preview.Metrics[0].Name != "cpu" {
 		t.Fatalf("second: %+v %v", second, err)
 	}
 	second.Preview.Metrics[0].Fields["usage_idle"] = 999
@@ -324,55 +260,20 @@ func TestQueueBoundAndExpiry(t *testing.T) {
 	}
 }
 
-func TestReceiverSecurityAndStopWithoutExecutable(t *testing.T) {
+func TestCancellationPreservesRunningSelection(t *testing.T) {
 	m := newHelper(t, "")
-	ctx := context.Background()
-	if _, err := m.Apply(ctx, cfg("mem/mem/used", false)); err != nil {
+	if _, err := m.Apply(context.Background(), cfg("mem/mem/used", false)); err != nil {
 		t.Fatal(err)
-	}
-	paths, _ := filepath.Glob(filepath.Join(m.opts.StateDirectory, "telegraf-*.conf"))
-	data, _ := os.ReadFile(paths[0])
-	var doc struct {
-		Outputs struct {
-			HTTP []struct {
-				URL     string            `toml:"url"`
-				Headers map[string]string `toml:"headers"`
-			} `toml:"http"`
-		} `toml:"outputs"`
-	}
-	if err := toml.Unmarshal(data, &doc); err != nil {
-		t.Fatal(err)
-	}
-	out := doc.Outputs.HTTP[0]
-	send := func(body string, auth string) int {
-		r, _ := http.NewRequest("POST", out.URL, strings.NewReader(body))
-		r.Header.Set("Authorization", auth)
-		response, err := http.DefaultClient.Do(r)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer response.Body.Close()
-		_, _ = io.Copy(io.Discard, response.Body)
-		return response.StatusCode
-	}
-	if send(`{}`, "") != 401 {
-		t.Fatal("collector receiver accepted absent token")
-	}
-	if send(`{}`, out.Headers["Authorization"]) != 400 {
-		t.Fatal("collector receiver accepted malformed batch")
-	}
-	if send(strings.Repeat("x", maxBody+1), out.Headers["Authorization"]) != 413 {
-		t.Fatal("collector receiver accepted oversized body")
 	}
 	before := m.Snapshot()
-	canceled, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := m.Apply(canceled, cfg("cpu/cpu/usage_idle", false)); err == nil || m.Snapshot().PID != before.PID {
-		t.Fatal("cancellation changed running configuration")
+	if _, err := m.Apply(ctx, cfg("cpu/cpu/usage_idle", false)); err == nil || m.Snapshot().Revision != before.Revision {
+		t.Fatal("cancellation changed configuration")
 	}
-	m.exe.path = filepath.Join(m.opts.StateDirectory, "missing")
-	if stopped, err := m.Apply(ctx, DefaultConfig()); err != nil || stopped.PID != 0 {
-		t.Fatalf("cannot stop without executable: %+v %v", stopped, err)
+	paths, _ := filepath.Glob(filepath.Join(m.opts.StateDirectory, "telegraf-*"))
+	if len(paths) > 0 {
+		t.Fatal("legacy config created")
 	}
 }
 
@@ -425,27 +326,5 @@ func TestRestoreUnavailableSelectionRemainsRepairable(t *testing.T) {
 	repaired, err := restored.Apply(context.Background(), cfg("mem/mem/used", false))
 	if err != nil || repaired.State != "healthy" || repaired.Revision != 5 {
 		t.Fatalf("cannot repair: %+v %v", repaired, err)
-	}
-}
-
-func TestGeneratedConfigUsesCurrentOptions(t *testing.T) {
-	b, err := renderConfig(cfg("mem/mem/used", false), "http://127.0.0.1:12345/v1/collect", "local-token")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var doc map[string]any
-	if err = toml.Unmarshal(b, &doc); err != nil {
-		t.Fatal(err)
-	}
-	if doc["agent"].(map[string]any)["skip_processors_after_aggregators"] != true {
-		t.Fatal("processor behavior relies on a changing default")
-	}
-	for _, old := range []string{"fieldpass", "fielddrop", "tagpass", "tagdrop", "ignore_protocol_stats"} {
-		if strings.Contains(string(b), old) {
-			t.Fatalf("legacy option emitted: %s", old)
-		}
-	}
-	if !strings.Contains(string(b), "fieldinclude") {
-		t.Fatal("field filter not generated")
 	}
 }

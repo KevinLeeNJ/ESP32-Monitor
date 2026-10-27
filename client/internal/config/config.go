@@ -13,7 +13,6 @@ type Config struct {
 // Collector contains paths and endpoint settings, never upload credentials.
 type Collector struct {
 	Enabled         bool   `json:"enabled"`
-	Executable      string `json:"executable"`
 	StateDirectory  string `json:"state_directory"`
 	UploadURL       string `json:"upload_url,omitempty"`
 	UploadTokenFile string `json:"upload_token_file,omitempty"`

@@ -24,7 +24,7 @@ func readPrivateFile(path string, limit int64) ([]byte, error) {
 
 // Handler is a loopback-only authenticated backend API for a trusted native GUI
 // bridge. No CORS is enabled; browser-origin requests are rejected. Tokens and
-// generated TOML are never included in capability/configuration/snapshot DTOs.
+// collector internals are never included in capability/configuration/snapshot DTOs.
 func (m *Manager) Handler(token string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
