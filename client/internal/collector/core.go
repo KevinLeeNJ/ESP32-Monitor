@@ -14,11 +14,9 @@ import (
 
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
-	"github.com/shirou/gopsutil/v4/host"
 	"github.com/shirou/gopsutil/v4/load"
 	"github.com/shirou/gopsutil/v4/mem"
 	gnet "github.com/shirou/gopsutil/v4/net"
-	"github.com/shirou/gopsutil/v4/process"
 )
 
 // CoreCollector owns its CPU baseline; discovery and other generations cannot
@@ -26,6 +24,7 @@ import (
 type CoreCollector struct {
 	mu       sync.Mutex
 	previous map[string]cpu.TimesStat
+	rates    map[string]rateSample
 }
 
 func (c *CoreCollector) Gather(ctx context.Context, ids []string) (Batch, map[string]string) {
@@ -33,6 +32,31 @@ func (c *CoreCollector) Gather(ctx context.Context, ids []string) (Batch, map[st
 	defer c.mu.Unlock()
 	out := Batch{Metrics: []Metric{}}
 	reasons := map[string]string{}
+	if c.rates == nil && (slices.Contains(ids, "diskio") || slices.Contains(ids, "net")) {
+		c.rates = map[string]rateSample{}
+		now := time.Now()
+		if slices.Contains(ids, "diskio") {
+			if values, err := disk.IOCountersWithContext(ctx); err == nil {
+				for name, v := range values {
+					c.rates["diskio"+tagKey(map[string]string{"name": name})] = rateSample{now, map[string]float64{"read_bytes": float64(v.ReadBytes), "write_bytes": float64(v.WriteBytes)}}
+				}
+			}
+		}
+		if slices.Contains(ids, "net") {
+			if values, err := gnet.IOCountersWithContext(ctx, true); err == nil {
+				for _, v := range values {
+					c.rates["net"+tagKey(map[string]string{"interface": v.Name})] = rateSample{now, map[string]float64{"bytes_sent": float64(v.BytesSent), "bytes_recv": float64(v.BytesRecv)}}
+				}
+			}
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+	}
+
 	add := func(name string, tags map[string]string, fields map[string]float64) {
 		for k, v := range fields {
 			if math.IsNaN(v) || math.IsInf(v, 0) {
@@ -152,78 +176,8 @@ func (c *CoreCollector) Gather(ctx context.Context, ids []string) (Batch, map[st
 			for _, v := range counters {
 				add(id, map[string]string{"interface": v.Name}, map[string]float64{"bytes_sent": float64(v.BytesSent), "bytes_recv": float64(v.BytesRecv), "packets_sent": float64(v.PacketsSent), "packets_recv": float64(v.PacketsRecv), "err_in": float64(v.Errin), "err_out": float64(v.Errout), "drop_in": float64(v.Dropin), "drop_out": float64(v.Dropout)})
 			}
-		case "netstat":
-			connections, err := gnet.ConnectionsWithContext(ctx, "all")
-			if err != nil {
-				reasons[id] = gatherReason(err)
-				continue
-			}
-			f := map[string]float64{"tcp_established": 0, "tcp_syn_sent": 0, "tcp_syn_recv": 0, "tcp_fin_wait1": 0, "tcp_fin_wait2": 0, "tcp_time_wait": 0, "tcp_close": 0, "tcp_close_wait": 0, "tcp_last_ack": 0, "tcp_listen": 0, "tcp_closing": 0, "tcp_none": 0, "udp_socket": 0}
-			for _, v := range connections {
-				if v.Type == 2 {
-					f["udp_socket"]++
-					continue
-				}
-				if v.Type != 1 {
-					continue
-				}
-				key := "tcp_" + strings.ToLower(v.Status)
-				if _, ok := f[key]; ok {
-					f[key]++
-				} else {
-					f["tcp_none"]++
-				}
-			}
-			add(id, map[string]string{}, f)
-		case "processes":
-			pids, err := process.PidsWithContext(ctx)
-			if err != nil {
-				reasons[id] = gatherReason(err)
-				continue
-			}
-			f := map[string]float64{"total": float64(len(pids)), "running": 0, "sleeping": 0, "stopped": 0, "zombies": 0, "unknown": 0, "total_threads": 0}
-			threadsComplete := true
-			for _, pid := range pids {
-				p, err := process.NewProcessWithContext(ctx, pid)
-				if err != nil {
-					f["unknown"]++
-					threadsComplete = false
-					continue
-				}
-				status, err := p.StatusWithContext(ctx)
-				key := "unknown"
-				if err == nil && len(status) > 0 {
-					switch status[0] {
-					case "running":
-						key = "running"
-					case "sleep", "idle", "wait", "lock":
-						key = "sleeping"
-					case "stop":
-						key = "stopped"
-					case "zombie":
-						key = "zombies"
-					}
-				}
-				f[key]++
-				threads, err := p.NumThreadsWithContext(ctx)
-				if err != nil {
-					threadsComplete = false
-				} else {
-					f["total_threads"] += float64(threads)
-				}
-			}
-			if !threadsComplete {
-				delete(f, "total_threads")
-			}
-			add(id, map[string]string{}, f)
 		case "system":
 			f := map[string]float64{}
-			uptime, err := host.UptimeWithContext(ctx)
-			if err != nil {
-				reasons[id] = gatherReason(err)
-			} else {
-				f["uptime"] = float64(uptime)
-			}
 			count, err := cpu.CountsWithContext(ctx, true)
 			if err == nil {
 				f["n_cpus"] = float64(count)
@@ -235,14 +189,12 @@ func (c *CoreCollector) Gather(ctx context.Context, ids []string) (Batch, map[st
 					f["load5"] = avg.Load5
 					f["load15"] = avg.Load15
 				}
-				users, err := host.UsersWithContext(ctx)
-				if err == nil {
-					f["n_users"] = float64(len(users))
-				}
+
 			}
 			add(id, map[string]string{}, f)
 		}
 	}
+	out = c.restrictAndRate(out)
 	sort.Slice(out.Metrics, func(i, j int) bool {
 		a, b := out.Metrics[i], out.Metrics[j]
 		return a.Name+tagKey(a.Tags) < b.Name+tagKey(b.Tags)
@@ -348,4 +300,57 @@ func cpuUsage(prev, now cpu.TimesStat) map[string]float64 {
 	}
 	f["usage_active"] = 100 - f["usage_idle"]
 	return f
+}
+
+// Only the agreed metrics leave the core collector. Counters are converted to
+// rates with per-instance baselines; resets and the first reading are omitted.
+type rateSample struct {
+	at     time.Time
+	values map[string]float64
+}
+
+func (c *CoreCollector) restrictAndRate(batch Batch) Batch {
+	allowed := map[string]map[string]bool{
+		"cpu": {"usage_active": true}, "mem": {"total": true, "used": true, "used_percent": true},
+		"swap":   {"total": true, "used": true, "used_percent": true},
+		"disk":   {"total": true, "used": true, "used_percent": true},
+		"system": {"load1": true, "load5": true, "load15": true, "n_cpus": true},
+	}
+	if c.rates == nil {
+		c.rates = map[string]rateSample{}
+	}
+	result := Batch{Metrics: []Metric{}}
+	now := time.Now()
+	for _, m := range batch.Metrics {
+		if m.Name == "diskio" || m.Name == "net" {
+			key := m.Name + tagKey(m.Tags)
+			old, ok := c.rates[key]
+			fields := map[string]float64{}
+			names := map[string]string{"read_bytes": "read_bytes_per_second", "write_bytes": "write_bytes_per_second"}
+			if m.Name == "net" {
+				names = map[string]string{"bytes_sent": "upload_bytes_per_second", "bytes_recv": "download_bytes_per_second"}
+			}
+			if ok && now.After(old.at) {
+				for input, output := range names {
+					v, exists := m.Fields[input]
+					previous, had := old.values[input]
+					if exists && had && v >= previous {
+						fields[output] = (v - previous) / now.Sub(old.at).Seconds()
+					}
+				}
+			}
+			c.rates[key] = rateSample{now, m.Fields}
+			m.Fields = fields
+		} else {
+			for k := range m.Fields {
+				if !allowed[m.Name][k] {
+					delete(m.Fields, k)
+				}
+			}
+		}
+		if len(m.Fields) > 0 {
+			result.Metrics = append(result.Metrics, m)
+		}
+	}
+	return result
 }

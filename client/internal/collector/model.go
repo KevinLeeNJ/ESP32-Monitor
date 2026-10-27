@@ -132,6 +132,16 @@ func unit(measurement, field string) string {
 		return "bytes"
 	}
 	switch {
+	case strings.HasSuffix(field, "_bytes_per_second"):
+		return "bytes_per_second"
+	case strings.HasSuffix(field, "_celsius"):
+		return "celsius"
+	case strings.HasSuffix(field, "_rpm"):
+		return "rpm"
+	case strings.HasSuffix(field, "_hz"):
+		return "hertz"
+	case strings.HasSuffix(field, "_cores") || field == "pressure_level" || field == "charging":
+		return "count"
 	case strings.Contains(field, "percent") || strings.HasPrefix(field, "usage_"):
 		return "percent"
 	case strings.HasPrefix(field, "inodes_") || strings.HasPrefix(field, "packets_") || strings.HasPrefix(field, "err_") || strings.HasPrefix(field, "drop_") || field == "reads" || field == "writes" || field == "n_cpus" || field == "n_users":
