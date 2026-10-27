@@ -39,7 +39,10 @@ export function mountCollectorPanel(root: HTMLElement, bridge: CollectorBridge) 
     const interval = element("input");
     interval.type = "number"; interval.min = "5"; interval.max = "60"; interval.value = String(draft.interval_seconds);
     interval.disabled = controller.busy;
-    interval.onchange = () => { draft.interval_seconds = Number(interval.value); };
+    interval.onchange = () => {
+      draft.interval_seconds = Number(interval.value);
+      if (draft.upload) draft.upload.interval_seconds = draft.interval_seconds;
+    };
     intervalLabel.append(interval); root.append(intervalLabel);
     for (const category of controller.capabilities?.categories ?? []) {
       const group = element("fieldset");

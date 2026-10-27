@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"esp32-monitor/client/internal/collector/uploadv2"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -41,11 +42,16 @@ type Manager struct {
 	workerDone chan struct{}
 	wake       chan struct{}
 	queue      []queued
+	fixed      Batch
+	v2         *v2State
 }
 type generation struct {
 	config       Config
 	revision     uint64
 	staged       Batch
+	collect      Config
+	profile      *uploadv2.Profile
+	slow         map[string]int64
 	core, native Collector
 	cancel       context.CancelFunc
 	done         chan struct{}
@@ -54,12 +60,6 @@ type generation struct {
 func New(opts Options) (*Manager, error) {
 	if opts.StateDirectory == "" {
 		return nil, errors.New("collector_state_directory_required")
-	}
-	if opts.CoreFactory == nil {
-		opts.CoreFactory = func() Collector { return &CoreCollector{} }
-	}
-	if opts.NativeFactory == nil {
-		opts.NativeFactory = func() Collector { return newNativeCollector() }
 	}
 	if opts.ApplyTimeout == 0 {
 		opts.ApplyTimeout = 20 * time.Second
@@ -91,6 +91,35 @@ func New(opts Options) (*Manager, error) {
 		lock.Close()
 		return nil, err
 	}
+	// One immutable inventory for this Manager lifetime. Scans and candidates
+	// get fresh CPU/rate baselines, never fresh fixed metadata probes.
+	startup, startupCancel := context.WithTimeout(ctx, opts.ApplyTimeout)
+	defer startupCancel()
+	for _, factory := range []*func() Collector{&m.opts.CoreFactory, &m.opts.NativeFactory} {
+		if *factory == nil {
+			var base Collector = &CoreCollector{}
+			if factory == &m.opts.NativeFactory {
+				base = newNativeCollector()
+			}
+			if fixed, ok := base.(fixedCollector); ok {
+				m.fixed.Metrics = append(m.fixed.Metrics, fixed.Fixed(startup).Metrics...)
+				*factory = fixed.Fork
+			} else {
+				*factory = func() Collector { return base }
+			}
+		} else if fixed, ok := (*factory)().(fixedCollector); ok {
+			m.fixed.Metrics = append(m.fixed.Metrics, fixed.Fixed(startup).Metrics...)
+			*factory = fixed.Fork
+		}
+	}
+	if m.isV2() {
+		if err := m.initV2(); err != nil {
+			cancel()
+			unlockFile(lock)
+			lock.Close()
+			return nil, err
+		}
+	}
 	go m.uploadLoop()
 	return m, nil
 }
@@ -118,11 +147,16 @@ func (m *Manager) apply(ctx context.Context, c Config) (Snapshot, error) {
 		return m.Snapshot(), errClosed
 	}
 	c = detached(c)
+	var prepareErr error
+	c, prepareErr = m.prepareV2(c)
+	if prepareErr != nil {
+		return m.failure(prepareErr)
+	}
 	if c.IntervalSeconds < 5 || c.IntervalSeconds > 60 || len(c.Selections) > 256 {
 		return m.failure(errors.New("invalid_collector_config"))
 	}
 	// Empty selections stop collection without probing dependencies.
-	if len(c.Selections) == 0 {
+	if len(c.Selections) == 0 && (c.Upload == nil || !c.Upload.Enabled) {
 		return m.disable(ctx, c)
 	}
 	// Re-probe on every configuration change, including vanished objects or dependencies.
@@ -188,6 +222,10 @@ func (m *Manager) disable(ctx context.Context, c Config) (Snapshot, error) {
 	m.snapshot.Preview = Batch{Metrics: []Metric{}}
 	m.snapshot.LastReceivedAt = nil
 	m.snapshot.LastUploadAt = nil
+	m.snapshot.V2Sample = nil
+	if m.isV2() {
+		m.enqueueV2ProfileLocked(c, revision)
+	}
 	m.mu.Unlock()
 	m.delivery.Unlock()
 	return m.Snapshot(), nil
@@ -206,9 +244,13 @@ func (m *Manager) commit(g *generation) {
 	m.snapshot.Preview = Batch{Metrics: []Metric{}}
 	m.snapshot.LastReceivedAt = nil
 	m.snapshot.LastUploadAt = nil
+	m.snapshot.V2Sample = nil
 	// Pending samples belong to the previous config and must not escape after a switch.
 	m.snapshot.DroppedMetrics += uint64(queueMetrics(m.queue))
 	m.queue = nil
+	if m.isV2() && (g.config.Upload == nil || !g.config.Upload.Enabled) {
+		m.enqueueV2ProfileLocked(g.config, g.revision)
+	}
 	m.mu.Unlock()
 	m.accept(g, g.staged)
 	ctx, cancel := context.WithCancel(m.ctx)
@@ -226,15 +268,31 @@ func randomToken() string {
 func (m *Manager) start(ctx context.Context, c Config, revision uint64) (*generation, error) {
 	ctx, cancel := context.WithTimeout(ctx, m.opts.ApplyTimeout)
 	defer cancel()
-	g := &generation{config: c, revision: revision, core: m.opts.CoreFactory(), native: m.opts.NativeFactory()}
-	batch, _ := gather(ctx, g.core, g.native, selectedSources(c))
+	g := &generation{config: c, collect: v2CollectConfig(c), revision: revision, core: m.opts.CoreFactory(), native: m.opts.NativeFactory(), slow: map[string]int64{}}
+	if core, ok := g.core.(*CoreCollector); ok && c.Upload != nil && c.Upload.Enabled {
+		core.maxRateGap = time.Duration(c.IntervalSeconds) * 2 * time.Second
+	}
+	batch, _ := gather(ctx, g.core, g.native, selectedSources(g.collect))
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
 	if err := validate(c, capabilitiesFrom(batch, nil)); err != nil {
 		return nil, err
 	}
-	g.staged = filter(batch, c, false)
+	if c.Upload != nil && c.Upload.Enabled {
+		if err := m.validateV2Selection(c, batch); err != nil {
+			return nil, err
+		}
+		profile := m.profileV2(c)
+		if err := validateV2Profile(profile); err != nil {
+			return nil, err
+		}
+		g.profile = &profile
+		if _, err := m.sampleV2(c, batch); err != nil {
+			return nil, err
+		}
+	}
+	g.staged = batch
 	return g, nil
 }
 func (m *Manager) collectLoop(ctx context.Context, g *generation) {
@@ -248,7 +306,7 @@ func (m *Manager) collectLoop(ctx context.Context, g *generation) {
 		case <-ticker.C:
 		}
 		sampleCtx, cancel := context.WithTimeout(ctx, m.opts.ApplyTimeout)
-		batch, reasons := gather(sampleCtx, g.core, g.native, selectedSources(g.config))
+		batch, reasons := gather(sampleCtx, g.core, g.native, selectedSources(g.collect))
 		cancel()
 		if ctx.Err() != nil {
 			return
@@ -263,7 +321,7 @@ func (m *Manager) collectLoop(ctx context.Context, g *generation) {
 			}
 		}
 		m.mu.Unlock()
-		m.accept(g, filter(batch, g.config, false))
+		m.accept(g, batch)
 	}
 }
 func (m *Manager) accept(g *generation, b Batch) {
@@ -276,7 +334,18 @@ func (m *Manager) accept(g *generation, b Batch) {
 	if len(b.Metrics) > 0 {
 		m.snapshot.LastReceivedAt = &now
 	}
-	m.snapshot.Preview = detached(b)
+	m.snapshot.Preview = filter(b, g.config, false)
+	if g.config.Upload != nil && g.config.Upload.Enabled {
+		sample, err := m.sampleV2(g.config, b)
+		if err != nil {
+			m.snapshot.State = "error"
+			m.snapshot.ErrorCode = err.Error()
+			return
+		}
+		m.enqueueV2Locked(g, sample, now)
+		m.snapshot.V2Sample = ptr(detached(sample))
+		return
+	}
 	upload := filter(b, g.config, true)
 	if len(upload.Metrics) > 0 {
 		m.enqueueLocked(upload, g.revision, now)

@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// Collector returns Telegraf-compatible numeric samples and per-source failures.
+// Collector returns local observations (including exact integer text) and failures.
 // Failed/unimplemented sources emit no invented zero samples.
 type Collector interface {
 	Gather(context.Context, []string) (Batch, map[string]string)

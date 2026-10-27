@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,14 +24,17 @@ import (
 // CoreCollector owns its CPU baseline; discovery and other generations cannot
 // consume the running collector's deltas via gopsutil's global Percent cache.
 type CoreCollector struct {
-	mu       sync.Mutex
-	previous map[string]cpu.TimesStat
-	rates    map[string]rateSample
+	mu         sync.Mutex
+	fixed      *coreFixed
+	maxRateGap time.Duration
+	previous   map[string]cpu.TimesStat
+	rates      map[string]rateSample
 }
 
 func (c *CoreCollector) Gather(ctx context.Context, ids []string) (Batch, map[string]string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	fixed := c.fixedLocked(ctx)
 	out := Batch{Metrics: []Metric{}}
 	reasons := map[string]string{}
 	if c.rates == nil && (slices.Contains(ids, "diskio") || slices.Contains(ids, "net")) {
@@ -89,7 +93,10 @@ func (c *CoreCollector) Gather(ctx context.Context, ids []string) (Batch, map[st
 				reasons[id] = gatherReason(err)
 				continue
 			}
-			f := map[string]float64{"total": float64(v.Total), "available": float64(v.Available), "used": float64(v.Used), "free": float64(v.Free), "used_percent": v.UsedPercent}
+			f := map[string]float64{"available": float64(v.Available), "used": float64(v.Used), "free": float64(v.Free), "used_percent": v.UsedPercent}
+			if total, ok := fixedMetric(fixed.batch, "mem", "", "").Fields["total"]; ok {
+				f["total"] = total
+			}
 			if v.Total > 0 {
 				f["available_percent"] = float64(v.Available) / float64(v.Total) * 100
 			}
@@ -107,6 +114,7 @@ func (c *CoreCollector) Gather(ctx context.Context, ids []string) (Batch, map[st
 				f["wired"] = float64(v.Wired)
 			}
 			add(id, map[string]string{}, f)
+			out.Metrics[len(out.Metrics)-1].Exact = map[string]string{"used": strconv.FormatUint(v.Used, 10)}
 		case "swap":
 			v, err := mem.SwapMemoryWithContext(ctx)
 			if err != nil {
@@ -119,12 +127,9 @@ func (c *CoreCollector) Gather(ctx context.Context, ids []string) (Batch, map[st
 				f["out"] = float64(v.Sout)
 			}
 			add(id, map[string]string{}, f)
+			out.Metrics[len(out.Metrics)-1].Exact = map[string]string{"total": strconv.FormatUint(v.Total, 10), "used": strconv.FormatUint(v.Used, 10)}
 		case "disk":
-			partitions, err := disk.PartitionsWithContext(ctx, false)
-			if err != nil {
-				reasons[id] = gatherReason(err)
-				continue
-			}
+			partitions := fixed.partitions
 			seen := map[string]bool{}
 			for _, p := range partitions {
 				if seen[p.Mountpoint] {
@@ -136,7 +141,10 @@ func (c *CoreCollector) Gather(ctx context.Context, ids []string) (Batch, map[st
 					reasons[id] = gatherReason(err)
 					continue
 				}
-				f := map[string]float64{"total": float64(v.Total), "free": float64(v.Free), "used": float64(v.Used), "used_percent": v.UsedPercent}
+				f := map[string]float64{"free": float64(v.Free), "used": float64(v.Used), "used_percent": v.UsedPercent}
+				if total, ok := fixedMetric(fixed.batch, "disk", "path", p.Mountpoint).Fields["total"]; ok {
+					f["total"] = total
+				}
 				if runtime.GOOS != "windows" {
 					f["inodes_total"] = float64(v.InodesTotal)
 					f["inodes_free"] = float64(v.InodesFree)
@@ -148,6 +156,7 @@ func (c *CoreCollector) Gather(ctx context.Context, ids []string) (Batch, map[st
 					mode = "ro"
 				}
 				add(id, map[string]string{"path": p.Mountpoint, "device": strings.TrimPrefix(p.Device, "/dev/"), "fstype": p.Fstype, "mode": mode}, f)
+				out.Metrics[len(out.Metrics)-1].Exact = map[string]string{"used": strconv.FormatUint(v.Used, 10)}
 			}
 		case "diskio":
 			counters, err := disk.IOCountersWithContext(ctx)
@@ -178,22 +187,10 @@ func (c *CoreCollector) Gather(ctx context.Context, ids []string) (Batch, map[st
 				add(id, map[string]string{"interface": v.Name}, map[string]float64{"bytes_sent": float64(v.BytesSent), "bytes_recv": float64(v.BytesRecv), "packets_sent": float64(v.PacketsSent), "packets_recv": float64(v.PacketsRecv), "err_in": float64(v.Errin), "err_out": float64(v.Errout), "drop_in": float64(v.Dropin), "drop_out": float64(v.Dropout)})
 			}
 		case "system":
-			f := map[string]float64{}
-			tags := map[string]string{}
+			cached := fixedMetric(fixed.batch, "system", "", "")
+			f, tags := cached.Fields, cached.Tags
 			if uptime, err := host.UptimeWithContext(ctx); err == nil {
 				f["uptime"] = float64(uptime)
-			}
-			if platform, _, version, err := host.PlatformInformationWithContext(ctx); err == nil {
-				if platform != "" {
-					tags["os_platform"] = platform
-				}
-				if version != "" {
-					tags["os_version"] = version
-				}
-			}
-			count, err := cpu.CountsWithContext(ctx, true)
-			if err == nil {
-				f["n_cpus"] = float64(count)
 			}
 			if runtime.GOOS != "windows" {
 				avg, err := load.AvgWithContext(ctx)
@@ -343,7 +340,7 @@ func (c *CoreCollector) restrictAndRate(batch Batch) Batch {
 			if m.Name == "net" {
 				names = map[string]string{"bytes_sent": "upload_bytes_per_second", "bytes_recv": "download_bytes_per_second"}
 			}
-			if ok && now.After(old.at) {
+			if ok && now.After(old.at) && (c.maxRateGap == 0 || now.Sub(old.at) <= c.maxRateGap) {
 				for input, output := range names {
 					v, exists := m.Fields[input]
 					previous, had := old.values[input]

@@ -40,7 +40,7 @@ func (c *testCollector) Gather(ctx context.Context, ids []string) (Batch, map[st
 		case "system":
 			field = "uptime"
 		}
-		batch.Metrics = append(batch.Metrics, Metric{id, map[string]string{}, map[string]float64{field: 42}, time.Now().Unix()})
+		batch.Metrics = append(batch.Metrics, Metric{Name: id, Tags: map[string]string{}, Fields: map[string]float64{field: 42}, Timestamp: time.Now().Unix()})
 	}
 	return batch, reasons
 }
@@ -57,7 +57,9 @@ func newHelper(t *testing.T, uploadURL string) *Manager {
 	t.Cleanup(func() { _ = m.Close() })
 	return m
 }
-func cfg(id string, upload bool) Config { return Config{5, []Selection{{ID: id, Upload: upload}}} }
+func cfg(id string, upload bool) Config {
+	return Config{IntervalSeconds: 5, Selections: []Selection{{ID: id, Upload: upload}}}
+}
 func TestConfigurationTransactionAndRestore(t *testing.T) {
 	m := newHelper(t, "")
 	ctx := context.Background()
