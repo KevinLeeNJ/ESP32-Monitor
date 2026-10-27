@@ -20,8 +20,8 @@ type source struct{ id, category, collector string }
 var sources = []source{
 	{"cpu", "cpu", "core"}, {"mem", "memory", "core"}, {"swap", "memory", "core"},
 	{"disk", "disk", "core"}, {"diskio", "disk", "core"}, {"net", "network", "core"},
-	{"system", "cpu", "core"},
-	{"darwin_cpu", "cpu", "native"}, {"darwin_memory", "memory", "native"}, {"darwin_gpu", "gpu", "native"}, {"darwin_disk", "disk", "native"}, {"darwin_network", "network", "native"}, {"darwin_battery", "battery", "native"}, {"darwin_fan", "cpu", "native"}, {"darwin_public_ip", "network", "native"},
+	{"system", "system", "core"},
+	{"darwin_cpu", "cpu", "native"}, {"darwin_memory", "memory", "native"}, {"darwin_gpu", "gpu", "native"}, {"darwin_disk", "disk", "native"}, {"darwin_network", "network", "native"}, {"darwin_battery", "battery", "native"}, {"darwin_fan", "cpu", "native"}, {"darwin_public_ip", "network", "native"}, {"darwin_system", "system", "native"},
 }
 
 func allSources() []string {
@@ -69,7 +69,7 @@ func capabilitiesFrom(batch Batch, reasons map[string]string) Capabilities {
 	caps := Capabilities{SchemaVersion: SchemaVersion, CoreCollector: "gopsutil", NativeCollector: runtime.GOOS, OS: runtime.GOOS, Arch: runtime.GOARCH, ObservedAt: time.Now(), Categories: []Category{
 		{ID: "cpu", Name: "CPU", Sources: []Capability{}}, {ID: "memory", Name: "内存（Swap）", Sources: []Capability{}},
 		{ID: "gpu", Name: "GPU", Sources: []Capability{}}, {ID: "disk", Name: "磁盘", Sources: []Capability{}}, {ID: "network", Name: "网络", Sources: []Capability{}},
-		{ID: "battery", Name: "电池", Sources: []Capability{}},
+		{ID: "battery", Name: "电池", Sources: []Capability{}}, {ID: "system", Name: "系统", Sources: []Capability{}},
 	}}
 	for _, src := range sources {
 		samples := Batch{Metrics: []Metric{}}

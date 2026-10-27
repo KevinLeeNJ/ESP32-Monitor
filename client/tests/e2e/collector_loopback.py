@@ -171,12 +171,12 @@ panel:
                 "API accepted web origin")
         passed("native bridge API rejects missing credential and browser origins")
         status, caps = api("capabilities")
-        require(status == 200 and len(caps["categories"]) == 6, "six category capability contract missing")
+        require(status == 200 and len(caps["categories"]) == 7, "seven category capability contract missing")
         metrics = {metric["id"]: metric for category in caps["categories"]
                    for source in category["sources"] for metric in source["metrics"]}
-        for identity in ["mem/mem/used_percent", "cpu/cpu/usage_active", "system/system/uptime", "net/net/bytes_recv"]:
+        for identity in ["mem/mem/used_percent", "cpu/cpu/usage_active", "system/system/uptime", "net/net/download_bytes_per_second"]:
             require(identity in metrics and metrics[identity]["objects"], "actual collector field/objects missing: " + identity)
-        require(not metrics["net/net/bytes_recv"]["upload_supported"], "unsupported network upload advertised")
+        require(not metrics["net/net/download_bytes_per_second"]["upload_supported"], "unsupported network upload advertised")
         passed("frontend capability API contains real CPU/memory/network/uptime fields and observed objects")
         for _ in range(3):
             scan_code, rescanned = api("rescan", method="POST")
@@ -200,7 +200,7 @@ panel:
         wait(lambda: any(row[:2] == ("mem", "used_percent") for row in rows()), "memory not persisted")
         require(all(row[:2] == ("mem", "used_percent") for row in rows()), "unselected fields uploaded")
         passed("real gopsutil memory sample reaches Agent uploader, HTTP 204 and Server SQLite")
-        bad = {"interval_seconds": 5, "selections": [{"id": "net/net/bytes_recv", "upload": True}]}
+        bad = {"interval_seconds": 5, "selections": [{"id": "net/net/upload_bytes_per_second", "upload": True}]}
         require(api("config", bad, "PUT")[0] == 422 and api("status")[1]["pid"] == agent_pid,
                 "unsupported upload changed the running collector")
         passed("invalid upload selection leaves the active generation/configuration intact")
@@ -208,7 +208,7 @@ panel:
         new = {"interval_seconds": 5, "selections": [
             {"id": "cpu/cpu/usage_active", "objects": [total], "upload": True},
             {"id": "system/system/uptime", "upload": True},
-            {"id": "net/net/bytes_recv", "upload": False},
+            {"id": "net/net/download_bytes_per_second", "upload": False},
         ]}
         code, changed = api("config", new, "PUT")
         require(code == 200 and changed["revision"] == 2 and changed["pid"] == agent_pid,

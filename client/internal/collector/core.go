@@ -14,6 +14,7 @@ import (
 
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
+	"github.com/shirou/gopsutil/v4/host"
 	"github.com/shirou/gopsutil/v4/load"
 	"github.com/shirou/gopsutil/v4/mem"
 	gnet "github.com/shirou/gopsutil/v4/net"
@@ -178,6 +179,18 @@ func (c *CoreCollector) Gather(ctx context.Context, ids []string) (Batch, map[st
 			}
 		case "system":
 			f := map[string]float64{}
+			tags := map[string]string{}
+			if uptime, err := host.UptimeWithContext(ctx); err == nil {
+				f["uptime"] = float64(uptime)
+			}
+			if platform, _, version, err := host.PlatformInformationWithContext(ctx); err == nil {
+				if platform != "" {
+					tags["os_platform"] = platform
+				}
+				if version != "" {
+					tags["os_version"] = version
+				}
+			}
 			count, err := cpu.CountsWithContext(ctx, true)
 			if err == nil {
 				f["n_cpus"] = float64(count)
@@ -191,7 +204,7 @@ func (c *CoreCollector) Gather(ctx context.Context, ids []string) (Batch, map[st
 				}
 
 			}
-			add(id, map[string]string{}, f)
+			add(id, tags, f)
 		}
 	}
 	out = c.restrictAndRate(out)
@@ -314,7 +327,7 @@ func (c *CoreCollector) restrictAndRate(batch Batch) Batch {
 		"cpu": {"usage_active": true}, "mem": {"total": true, "used": true, "used_percent": true},
 		"swap":   {"total": true, "used": true, "used_percent": true},
 		"disk":   {"total": true, "used": true, "used_percent": true},
-		"system": {"load1": true, "load5": true, "load15": true, "n_cpus": true},
+		"system": {"uptime": true, "load1": true, "load5": true, "load15": true, "n_cpus": true},
 	}
 	if c.rates == nil {
 		c.rates = map[string]rateSample{}

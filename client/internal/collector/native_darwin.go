@@ -48,8 +48,10 @@ func (d *darwinCollector) Gather(ctx context.Context, ids []string) (Batch, map[
 	}
 	var cpuSensors, gpuSensors map[string]float64
 	var fans []float64
+	brand := ""
 	if slices.Contains(ids, "darwin_cpu") || slices.Contains(ids, "darwin_gpu") || slices.Contains(ids, "darwin_fan") {
-		cpuSensors, gpuSensors, fans = readSMC(sysctlValue(ctx, "machdep.cpu.brand_string"))
+		brand = sysctlValue(ctx, "machdep.cpu.brand_string")
+		cpuSensors, gpuSensors, fans = readSMC(brand)
 	}
 	for _, id := range ids {
 		if ctx.Err() != nil {
@@ -59,11 +61,11 @@ func (d *darwinCollector) Gather(ctx context.Context, ids []string) (Batch, map[
 		switch id {
 		case "darwin_cpu":
 			tags := map[string]string{}
-			if s := sysctlValue(ctx, "machdep.cpu.brand_string"); s != "" {
-				tags["model"] = s
+			if brand != "" {
+				tags["model"] = brand
 			}
 			fields := map[string]float64{}
-			for field, key := range map[string]string{"physical_cores": "hw.physicalcpu", "logical_cores": "hw.logicalcpu", "performance_cores": "hw.perflevel0.physicalcpu", "efficiency_cores": "hw.perflevel1.physicalcpu", "max_frequency_hz": "hw.cpufrequency_max"} {
+			for field, key := range map[string]string{"physical_cores": "hw.physicalcpu", "logical_cores": "hw.logicalcpu", "performance_cores": "hw.perflevel0.physicalcpu", "efficiency_cores": "hw.perflevel1.physicalcpu"} {
 				if v, ok := numeric(sysctlValue(ctx, key)); ok {
 					fields[field] = v
 				}
@@ -166,6 +168,36 @@ func (d *darwinCollector) Gather(ctx context.Context, ids []string) (Batch, map[
 				fields = parseBattery(s)
 			}
 			add(id, map[string]string{}, fields)
+		case "darwin_system":
+			tags := map[string]string{}
+			if s := sysctlValue(ctx, "hw.model"); s != "" {
+				tags["model_id"] = s
+				if name := macProductName(s); name != "" {
+					tags["product_name"] = name
+				} else {
+					tags["product_name"] = s
+				}
+			}
+			if s, err := darwinCommand(ctx, "/usr/bin/sw_vers"); err == nil {
+				name, version, build := parseSwVers(s)
+				if name != "" {
+					tags["os_name"] = name
+				}
+				if version != "" {
+					tags["os_version"] = version
+					if codename := darwinOSCodename(version); codename != "" {
+						tags["os_codename"] = codename
+					}
+				}
+				if build != "" {
+					tags["os_build"] = build
+				}
+			}
+			if len(tags) > 0 {
+				add(id, tags, map[string]float64{"present": 1})
+			} else {
+				reasons[id] = "unavailable"
+			}
 		default:
 			reasons[id] = "unsupported"
 		}
