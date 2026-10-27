@@ -123,7 +123,7 @@ func (p *proxyWorker) fetch(ctx context.Context, endpoint, token string, out any
 		return errors.New("invalid_upstream")
 	}
 	b, e := io.ReadAll(io.LimitReader(resp.Body, int64(limit+1)))
-	if e != nil || wire.Decode(b, out, limit) != nil {
+	if e != nil || wire.DecodeJSON(b, out, limit) != nil {
 		return errors.New("invalid_upstream")
 	}
 	return nil
@@ -301,7 +301,7 @@ func (p *proxyWorker) fetchWeather(ctx context.Context, endpoint string, out any
 		return errors.New("invalid_upstream")
 	}
 	data, e := io.ReadAll(io.LimitReader(resp.Body, 16385))
-	if e != nil || wire.Decode(data, out, 16384) != nil {
+	if e != nil || wire.DecodeJSON(data, out, 16384) != nil {
 		return errors.New("invalid_upstream")
 	}
 	return nil

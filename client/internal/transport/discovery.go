@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"esp32-monitor/client/internal/transport/wire"
 	"net"
@@ -101,7 +100,10 @@ func (b *Backend) query(ctx context.Context, target string, pair *Pairing, durat
 		m.PairingID = &pair.PairingID
 		m.MAC = wire.Ptr(DiscoveryMAC(m, pair.SerialKey))
 	}
-	data, _ := json.Marshal(m)
+	data, encodeErr := wire.Marshal(m)
+	if encodeErr != nil {
+		return nil, encodeErr
+	}
 	if _, e = conn.WriteToUDP(data, a); e != nil {
 		return nil, errors.New("network_unreachable")
 	}
@@ -177,7 +179,10 @@ func (b *Backend) query(ctx context.Context, target string, pair *Pairing, durat
 				o.SessionID = &sid
 				o.MAC = wire.Ptr(DiscoveryMAC(o, pair.SerialKey))
 			}
-			payload, _ := json.Marshal(o)
+			payload, encodeErr := wire.Marshal(o)
+			if encodeErr != nil {
+				return nil, encodeErr
+			}
 			if len(payload) > 1024 {
 				return nil, errors.New("payload_too_large")
 			}

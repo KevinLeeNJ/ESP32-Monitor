@@ -71,9 +71,10 @@ func Clip(s string, n int) string {
 	return b.String()
 }
 
-// Validate rejects duplicate keys before unmarshalling (encoding/json otherwise
+// ValidateJSON is for upstream HTTP JSON and the in-process DTO adapter.
+// It rejects duplicate keys before unmarshalling (encoding/json otherwise
 // accepts last-key-wins), invalid UTF-8, control strings, trailing JSON and depth.
-func Validate(b []byte, limit int) error {
+func ValidateJSON(b []byte, limit int) error {
 	if len(b) == 0 || len(b) > limit || !utf8.Valid(b) || bytes.HasPrefix(b, []byte{239, 187, 191}) {
 		return ErrMessage
 	}
@@ -133,8 +134,8 @@ func Validate(b []byte, limit int) error {
 	return nil
 }
 
-func Decode(b []byte, out any, limit int) error {
-	if e := Validate(b, limit); e != nil {
+func DecodeJSON(b []byte, out any, limit int) error {
+	if e := ValidateJSON(b, limit); e != nil {
 		return e
 	}
 	if e := json.Unmarshal(b, out); e != nil {

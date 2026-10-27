@@ -3,10 +3,10 @@ package simesp32
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"esp32-monitor/client/internal/transport"
 	"esp32-monitor/client/internal/transport/wire"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -103,7 +103,7 @@ func (m *Monitor) discover() {
 			if pair != nil {
 				r.MAC = wire.Ptr(transport.DiscoveryMAC(r, pair.SerialKey))
 			}
-			data, _ := json.Marshal(r)
+			data, _ := wire.Marshal(r)
 			_, _ = m.UDP.WriteToUDP(data, a)
 			contextMsg = &r
 			source = a.String()
@@ -140,12 +140,12 @@ func (m *Monitor) pairHTTP(d wire.Discovery, ip string) error {
 	client := &http.Client{Timeout: 4 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	request := wire.PairRequest{ProtocolVersion: 1, Step: "begin", RequestID: wire.NewID(), DeviceID: m.DeviceID, DeviceName: m.Name, DeviceNonce: wire.Nonce()}
 	call := func(req wire.PairRequest) (wire.PairResponse, error) {
-		data, _ := json.Marshal(req)
+		data, _ := wire.Marshal(req)
 		r, e := http.NewRequestWithContext(m.ctx, "POST", base, bytes.NewReader(data))
 		if e != nil {
 			return wire.PairResponse{}, e
 		}
-		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Content-Type", wire.ContentType)
 		resp, e := client.Do(r)
 		if e != nil {
 			return wire.PairResponse{}, e
@@ -155,7 +155,10 @@ func (m *Monitor) pairHTTP(d wire.Discovery, ip string) error {
 			return wire.PairResponse{}, errors.New("pair_http_failed")
 		}
 		var p wire.PairResponse
-		e = json.NewDecoder(resp.Body).Decode(&p)
+		data, e = io.ReadAll(io.LimitReader(resp.Body, 4097))
+		if e == nil {
+			e = wire.Decode(data, &p, 4096)
+		}
 		return p, e
 	}
 	r, e := call(request)
@@ -212,9 +215,15 @@ func (m *Monitor) lan(d wire.Discovery, ip string, pair transport.Pairing) error
 	var seq, lastSeq uint32
 	send := func(topic string, data any, req *string, qos byte) error {
 		seq++
-		body, _ := json.Marshal(data)
+		body, err := wire.Marshal(data)
+		if err != nil {
+			return err
+		}
 		control := wire.Control{ProtocolVersion: 1, HostID: d.HostID, DeviceID: m.DeviceID, SessionID: sid, Seq: seq, SentAt: time.Now().Unix(), RequestID: req, Data: body}
-		payload, _ := json.Marshal(control)
+		payload, err := wire.Marshal(control)
+		if err != nil {
+			return err
+		}
 		return client.Publish(pre+"/up/"+topic, payload, qos, false)
 	}
 	req := wire.NewID()

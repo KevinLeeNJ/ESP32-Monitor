@@ -7,7 +7,6 @@ import (
 	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -87,7 +86,7 @@ func (d *SerialDecoder) parse(now time.Time) []SerialFrame {
 			break
 		}
 		n := int(binary.LittleEndian.Uint16(d.buf[6:8]))
-		if d.buf[4] != 1 || !serialType(d.buf[5]) || n < 2 || n > 16368 || binary.LittleEndian.Uint32(d.buf[8:12]) == 0 {
+		if d.buf[4] != wire.WireVersion || !serialType(d.buf[5]) || n < 2 || n > 16368 || binary.LittleEndian.Uint32(d.buf[8:12]) == 0 {
 			d.buf = d.buf[1:]
 			d.since = time.Time{}
 			continue
@@ -122,7 +121,7 @@ func EncodeSerial(t byte, seq uint32, data []byte, key []byte, direction byte) (
 	}
 	b := make([]byte, 12, 16+n)
 	copy(b, "EMON")
-	b[4] = 1
+	b[4] = wire.WireVersion
 	b[5] = t
 	binary.LittleEndian.PutUint16(b[6:8], uint16(n))
 	binary.LittleEndian.PutUint32(b[8:12], seq)
@@ -202,15 +201,7 @@ func DeriveSerialKeys(host, device, pairing, session, hn, dn, key string) (Seria
 	return k, nil
 }
 
-type EncryptedConfig struct {
-	ProtocolVersion int    `json:"protocol_version"`
-	SessionID       string `json:"session_id"`
-	RequestID       string `json:"request_id"`
-	Algorithm       string `json:"algorithm"`
-	Nonce           string `json:"nonce"`
-	Ciphertext      string `json:"ciphertext"`
-	Tag             string `json:"tag"`
-}
+type EncryptedConfig = wire.EncryptedConfig
 
 func configGCM(key []byte) (cipher.AEAD, error) {
 	block, e := aes.NewCipher(key)
@@ -234,9 +225,9 @@ func EncryptSerialConfig(key []byte, seq uint32, session, request string, plain 
 	nonce := make([]byte, 12)
 	binary.BigEndian.PutUint32(nonce[8:], seq)
 	sealed := g.Seal(nil, nonce, plain, configAAD(session, request))
-	out.Nonce = base64.RawURLEncoding.EncodeToString(nonce)
-	out.Ciphertext = base64.RawURLEncoding.EncodeToString(sealed[:len(sealed)-16])
-	out.Tag = base64.RawURLEncoding.EncodeToString(sealed[len(sealed)-16:])
+	out.Nonce = nonce
+	out.Ciphertext = sealed[:len(sealed)-16]
+	out.Tag = sealed[len(sealed)-16:]
 	return out, nil
 }
 func DecryptSerialConfig(key []byte, seq uint32, session string, wrapped []byte) ([]byte, error) {
@@ -244,13 +235,10 @@ func DecryptSerialConfig(key []byte, seq uint32, session string, wrapped []byte)
 	if wire.Decode(wrapped, &e, 8192) != nil || e.ProtocolVersion != 1 || e.SessionID != session || !wire.UUID(e.RequestID) || e.Algorithm != "aes-256-gcm" || seq == 0 {
 		return nil, wire.ErrMessage
 	}
-	decode := base64.RawURLEncoding.Strict().DecodeString
-	nonce, a := decode(e.Nonce)
-	ciphertext, b := decode(e.Ciphertext)
-	tag, c := decode(e.Tag)
+	nonce, ciphertext, tag := e.Nonce, e.Ciphertext, e.Tag
 	expected := make([]byte, 12)
 	binary.BigEndian.PutUint32(expected[8:], seq)
-	if a != nil || b != nil || c != nil || len(tag) != 16 || !bytes.Equal(nonce, expected) || len(ciphertext) > 4096 {
+	if len(tag) != 16 || !bytes.Equal(nonce, expected) || len(ciphertext) > 4096 {
 		return nil, wire.ErrMessage
 	}
 	g, err := configGCM(key)

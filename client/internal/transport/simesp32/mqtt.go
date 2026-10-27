@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"esp32-monitor/client/internal/transport/wire"
 	"io"
 	"net"
 	"sync"
@@ -91,7 +92,12 @@ func DialMQTT(address, device, session, token, prefix string) (*MQTT, error) {
 	b = append(b, 4, 0xce, 0, 60)
 	b = field(b, []byte("emon-"+device))
 	b = field(b, []byte(prefix+"/up/presence"))
-	will := []byte(`{"protocol_version":1,"host_id":"` + hostFromPrefix(prefix) + `","device_id":"` + device + `","session_id":"` + session + `","state":"offline","reason":"transport_lost"}`)
+	will, err := wire.Marshal(wire.Presence{ProtocolVersion: 1, HostID: hostFromPrefix(prefix), DeviceID: device, SessionID: session, State: "offline", Reason: "transport_lost"})
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+
 	b = field(b, will)
 	b = field(b, []byte(device+":"+session))
 	b = field(b, []byte(token))

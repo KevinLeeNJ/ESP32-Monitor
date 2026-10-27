@@ -2,7 +2,6 @@ package transport
 
 import (
 	"crypto/subtle"
-	"encoding/json"
 	"esp32-monitor/client/internal/transport/wire"
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/packets"
@@ -183,31 +182,28 @@ func (h *brokerHook) OnDisconnect(cl *mqtt.Client, _ error, _ bool) {
 	}
 }
 func (b *Backend) sendMQTT(s *session, topic string, data any, qos byte) error {
-	payload, e := json.Marshal(data)
-	if e == nil && (topic == "heartbeat" || topic == "snapshot") {
-		var root map[string]any
-		_ = json.Unmarshal(payload, &root)
-		now := time.Now()
-		root["sent_at"] = now.Unix()
-		if topic == "heartbeat" {
-			if td, ok := root["time"].(map[string]any); ok {
-				td["utc_unix_ms"] = now.UnixMilli()
-			}
-		} else {
-			if sections, ok := root["sections"].(map[string]any); ok {
-				if proxy, ok := sections["proxy"].(map[string]any); ok {
-					if pd, ok := proxy["data"].(map[string]any); ok {
-						if ts, ok := pd["time"].(map[string]any); ok {
-							if td, ok := ts["data"].(map[string]any); ok {
-								td["utc_unix_ms"] = now.UnixMilli()
-							}
-						}
-					}
-				}
+	now := time.Now()
+	switch x := data.(type) {
+	case wire.Heartbeat:
+		x.SentAt = now.Unix()
+		if x.Time != nil {
+			t := *x.Time
+			t.UnixMS = now.UnixMilli()
+			x.Time = &t
+		}
+		data = x
+	case wire.Snapshot:
+		x.SentAt = now.Unix()
+		if pd, ok := x.Sections.Proxy.Data.(wire.ProxyData); ok {
+			if td, ok := pd.Time.Data.(wire.TimeData); ok {
+				td.UnixMS = now.UnixMilli()
+				pd.Time.Data = td
+				x.Sections.Proxy.Data = pd
 			}
 		}
-		payload, e = json.Marshal(root)
+		data = x
 	}
+	payload, e := wire.Marshal(data)
 	if e != nil {
 		return wire.ErrMessage
 	}

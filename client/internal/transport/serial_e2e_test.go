@@ -3,7 +3,6 @@ package transport
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"esp32-monitor/client/internal/transport/wire"
 	"net"
 	"path/filepath"
@@ -33,7 +32,7 @@ func TestSerialEndToEndSimulatedMonitor(t *testing.T) {
 	send := func(typ byte, data any, key []byte) {
 		t.Helper()
 		seq++
-		p, _ := json.Marshal(data)
+		p, _ := wire.Marshal(data)
 		frame, e := EncodeSerial(typ, seq, p, key, 2)
 		if e != nil {
 			t.Fatal(e)
@@ -59,7 +58,7 @@ func TestSerialEndToEndSimulatedMonitor(t *testing.T) {
 		t.Fatal("missing hello")
 	}
 	var hello Hello
-	json.Unmarshal(p, &hello)
+	wire.Decode(p, &hello, 2048)
 	hello.Step = "response"
 	hello.DeviceID = pair.DeviceID
 	hello.DeviceName = pair.DeviceName
@@ -73,7 +72,7 @@ func TestSerialEndToEndSimulatedMonitor(t *testing.T) {
 		t.Fatal("missing challenge")
 	}
 	var auth Auth
-	json.Unmarshal(p, &auth)
+	wire.Decode(p, &auth, 2048)
 	keys, e := DeriveSerialKeys(b.HostID(), pair.DeviceID, pair.PairingID, auth.SessionID, hello.HostNonce, hello.DeviceNonce, pair.SerialKey)
 	if e != nil {
 		t.Fatal(e)
@@ -83,7 +82,7 @@ func TestSerialEndToEndSimulatedMonitor(t *testing.T) {
 	send(SerialAuth, auth, nil)
 	f, p = recv(nil)
 	var result Auth
-	json.Unmarshal(p, &result)
+	wire.Decode(p, &result, 2048)
 	if value(result.Proof) != keys.HostProof || result.Accepted == nil || !*result.Accepted {
 		t.Fatal("host auth failed")
 	}
@@ -91,7 +90,7 @@ func TestSerialEndToEndSimulatedMonitor(t *testing.T) {
 	cfg := disabledConfig()
 	cfg.DeviceID = pair.DeviceID
 	cfg.SessionID = auth.SessionID
-	data, _ := json.Marshal(cfg)
+	data, _ := wire.Marshal(cfg)
 	wrapped, e := EncryptSerialConfig(keys.Config, seq+1, auth.SessionID, cfg.RequestID, data)
 	if e != nil {
 		t.Fatal(e)
@@ -120,7 +119,7 @@ func TestSerialEndToEndSimulatedMonitor(t *testing.T) {
 			t.Fatalf("expected heartbeat, type=%x", f.Type)
 		}
 		var hb wire.Heartbeat
-		json.Unmarshal(p, &hb)
+		wire.Decode(p, &hb, 4096)
 		if hb.Seq != f.Seq || hb.Time == nil || hb.Time.Trusted {
 			t.Fatal("heartbeat time/sequence")
 		}
@@ -153,7 +152,14 @@ func TestSerialInvalidHandshakeReleasesFloodedReader(t *testing.T) {
 	if _, e := device.Read(buf); e != nil {
 		t.Fatal(e)
 	}
-	bad, _ := EncodeSerial(SerialHello, 1, []byte(`{"invalid":true}`), nil, 2)
+	wrong, err := wire.Marshal(wire.Goodbye{ProtocolVersion: 1, SessionID: "invalid", Reason: "wrong_message_type"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad, err := EncodeSerial(SerialHello, 1, wrong, nil, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
 	burst := bytes.Repeat(bad, 20)
 	go func() { _, _ = device.Write(burst) }()
 	select {

@@ -1,0 +1,533 @@
+// Monitor companion binary serialization revision 2. Field numbers are permanent.
+// Generate from client/: protoc --go_out=. --go_opt=module=esp32-monitor/client internal/transport/wire/companion.proto
+// Nullable DTO values use optional presence; absent is unknown, present zero is a real zero.
+syntax = "proto2";
+package esp32monitor.companion;
+option go_package = "esp32-monitor/client/internal/transport/wire/pb";
+
+message Envelope {
+  required uint32 wire_version = 1; // Must be 2; business protocol_version remains 1.
+  oneof payload {
+    Error error = 10;
+    Discovery discovery = 11;
+    PairRequest pair_request = 12;
+    PairResponse pair_response = 13;
+    Open open = 14;
+    Session session = 15;
+    Control control = 16;
+    Config config = 17;
+    ConfigAck config_ack = 18;
+    Ack ack = 19;
+    Goodbye goodbye = 20;
+    Presence presence = 21;
+    Resync resync = 22;
+    Snapshot snapshot = 23;
+    Heartbeat heartbeat = 24;
+    Hello hello = 25;
+    Auth auth = 26;
+    EncryptedConfig encrypted_config = 27;
+    Capabilities capabilities = 28;
+  }
+}
+
+message Error {
+  required sint32 protocol_version = 1;
+  optional string request_id = 2;
+  required ErrorDetail error = 3;
+}
+
+message ErrorDetail {
+  required string code = 1;
+  required string message = 2;
+  required bool retryable = 3;
+  optional sint32 retry_after_ms = 4;
+}
+
+message Discovery {
+  required sint32 protocol_version = 1;
+  required string type = 2;
+  required string request_id = 3;
+  required string host_id = 4;
+  optional string device_id = 5;
+  optional string pairing_id = 6;
+  required string nonce = 7;
+  optional string response_nonce = 8;
+  optional sint32 host_port = 9;
+  optional sint32 mqtt_port = 10;
+  optional string session_id = 11;
+  optional string device_name = 12;
+  optional string firmware_version = 13;
+  optional bool pairing_open = 14;
+  optional string mac = 15;
+}
+
+message PairRequest {
+  required sint32 protocol_version = 1;
+  required string step = 2;
+  required string request_id = 3;
+  optional string device_id = 4;
+  optional string device_name = 5;
+  optional string device_nonce = 6;
+  optional string pairing_id = 7;
+  optional string pairing_ticket = 8;
+  optional bool device_confirmed = 9;
+}
+
+message PairResponse {
+  required sint32 protocol_version = 1;
+  required string pairing_id = 2;
+  required string state = 3;
+  required string host_id = 4;
+  required string host_name = 5;
+  required string host_nonce = 6;
+  required string pairing_ticket = 7;
+  required sint64 expires_in_ms = 8;
+  optional string device_token = 9;
+  optional string serial_key = 10;
+}
+
+message Open {
+  required sint32 protocol_version = 1;
+  required string request_id = 2;
+  required string pairing_id = 3;
+  required string device_id = 4;
+  required string device_name = 5;
+  required string firmware_version = 6;
+  required string transport = 7;
+}
+
+message Session {
+  required sint32 protocol_version = 1;
+  required string host_id = 2;
+  required string device_id = 3;
+  required string pairing_id = 4;
+  required string session_id = 5;
+  required string transport = 6;
+  required sint32 heartbeat_interval_ms = 7;
+  required sint32 disconnect_timeout_ms = 8;
+  required bool config_required = 9;
+}
+
+message Control {
+  required sint32 protocol_version = 1;
+  required string host_id = 2;
+  required string device_id = 3;
+  required string session_id = 4;
+  required uint32 seq = 5;
+  required sint64 sent_at = 6;
+  optional string request_id = 7;
+  required bytes data = 8;
+}
+
+message Config {
+  required sint32 protocol_version = 1;
+  required string request_id = 2;
+  required string device_id = 3;
+  required string session_id = 4;
+  required string config_epoch = 5;
+  required uint32 config_revision = 6;
+  required WeatherConfig weather = 7;
+  required DevicesConfig devices = 8;
+  required TimeConfig time = 9;
+}
+
+message WeatherConfig {
+  required bool enabled = 1;
+  required string location_mode = 2;
+  optional double latitude = 3;
+  optional double longitude = 4;
+  optional string qweather_host = 5;
+  optional string qweather_key = 6;
+}
+
+message DevicesConfig {
+  required bool enabled = 1;
+  optional string devices_api_url = 2;
+  optional string devices_token = 3;
+}
+
+message TimeConfig {
+  required bool enabled = 1;
+  required sint32 utc_offset_minutes = 2;
+}
+
+message ConfigAck {
+  required sint32 protocol_version = 1;
+  optional string request_id = 2;
+  required string device_id = 3;
+  required string session_id = 4;
+  optional string config_epoch = 5;
+  optional uint32 config_revision = 6;
+  required string state = 7;
+  required bool weather_configured = 8;
+  required bool devices_configured = 9;
+}
+
+message Ack {
+  required sint32 protocol_version = 1;
+  required string session_id = 2;
+  required uint32 ack_seq = 3;
+  required string status = 4;
+}
+
+message Goodbye {
+  required sint32 protocol_version = 1;
+  required string session_id = 2;
+  required string reason = 3;
+}
+
+message Presence {
+  required sint32 protocol_version = 1;
+  required string host_id = 2;
+  required string device_id = 3;
+  required string session_id = 4;
+  required string state = 5;
+  required string reason = 6;
+}
+
+message Resync {
+  optional uint32 last_snapshot_seq = 1;
+  required string reason = 2;
+}
+
+message Health {
+  required string state = 1;
+  optional sint64 observed_at = 2;
+  optional sint64 last_success_at = 3;
+  optional string error_code = 4;
+  optional string source_version = 5;
+  optional sint64 age_ms = 6;
+  required sint64 stale_after_ms = 7;
+  required sint64 expire_after_ms = 8;
+}
+
+message Sections {
+  required GitHubSection github = 1;
+  required CodexSection codex = 2;
+  required MusicSection music = 3;
+  required ProxySection proxy = 4;
+}
+
+message Snapshot {
+  required sint32 protocol_version = 1;
+  required string host_id = 2;
+  required string device_id = 3;
+  required string session_id = 4;
+  required uint32 seq = 5;
+  required sint64 sent_at = 6;
+  required string config_epoch = 7;
+  required uint32 config_revision = 8;
+  required Sections sections = 9;
+}
+
+message TimeData {
+  required sint64 utc_unix_ms = 1;
+  required sint32 utc_offset_minutes = 2;
+  required bool trusted = 3;
+  required string source = 4;
+}
+
+message ProxyData {
+  required string config_epoch = 1;
+  required uint32 config_revision = 2;
+  required TimeSection time = 3;
+  required WeatherSection weather = 4;
+  required AQISection aqi = 5;
+  required DevicesSection devices = 6;
+}
+
+message SourceLease {
+  required string path = 1;
+  required uint32 snapshot_seq = 2;
+  required sint64 observed_at = 3;
+  required sint64 last_success_at = 4;
+  required sint64 age_ms = 5;
+}
+
+message Heartbeat {
+  required sint32 protocol_version = 1;
+  required string host_id = 2;
+  required string device_id = 3;
+  required string session_id = 4;
+  required uint32 seq = 5;
+  required sint64 sent_at = 6;
+  optional uint32 last_snapshot_seq = 7;
+  optional string config_epoch = 8;
+  optional uint32 config_revision = 9;
+  optional HeartbeatTime time = 10;
+  repeated SourceLease source_updates = 11;
+}
+
+message HeartbeatTime {
+  required sint64 utc_unix_ms = 1;
+  required sint32 utc_offset_minutes = 2;
+  required bool trusted = 3;
+}
+
+message DeviceSummary {
+  required sint32 device_count = 1;
+  repeated DeviceCard devices = 2;
+}
+
+message DeviceCard {
+  required string name = 1;
+  required string uptime = 2;
+  required sint32 metric_count = 3;
+  repeated Metric metrics = 4;
+}
+
+message Metric {
+  required string name = 1;
+  required string value = 2;
+  optional sint32 percent = 3;
+}
+
+message Hello {
+  required sint32 protocol_version = 1;
+  required string step = 2;
+  required string host_id = 3;
+  required string host_name = 4;
+  required string host_nonce = 5;
+  repeated sint32 supported_versions = 6 [packed = true];
+  optional string device_id = 7;
+  optional string device_name = 8;
+  optional string firmware_version = 9;
+  optional string device_nonce = 10;
+  optional string pairing_id = 11;
+  optional sint32 max_payload_bytes = 12;
+}
+
+message Auth {
+  required sint32 protocol_version = 1;
+  required string step = 2;
+  required string host_id = 3;
+  required string device_id = 4;
+  required string pairing_id = 5;
+  required string session_id = 6;
+  required string host_nonce = 7;
+  required string device_nonce = 8;
+  optional string proof = 9;
+  optional bool accepted = 10;
+}
+
+message EncryptedConfig {
+  required sint32 protocol_version = 1;
+  required string session_id = 2;
+  required string request_id = 3;
+  required string algorithm = 4;
+  required bytes nonce = 5;
+  required bytes ciphertext = 6;
+  required bytes tag = 7;
+}
+
+message Capabilities {
+  required sint32 protocol_version = 1;
+  repeated sint32 supported_versions = 2 [packed = true];
+  required string host_id = 3;
+  required string host_name = 4;
+  required string app_version = 5;
+  required bool pairing_open = 6;
+  repeated string transports = 7;
+  repeated string features = 8;
+  required sint32 max_snapshot_bytes = 9;
+  required MQTTCapabilities mqtt = 10;
+}
+
+message MQTTCapabilities {
+  required string protocol = 1;
+  required sint32 port = 2;
+  required bool tls = 3;
+  required sint32 keep_alive_seconds = 4;
+  required sint32 idle_heartbeat_ms = 5;
+  required sint32 live_heartbeat_ms = 6;
+  required sint32 disconnect_timeout_ms = 7;
+}
+
+message GitHubSection {
+  required string state = 1;
+  optional sint64 observed_at = 2;
+  optional sint64 last_success_at = 3;
+  optional string error_code = 4;
+  optional string source_version = 5;
+  optional sint64 age_ms = 6;
+  required sint64 stale_after_ms = 7;
+  required sint64 expire_after_ms = 8;
+  optional GitHubData data = 9;
+}
+
+message CodexSection {
+  required string state = 1;
+  optional sint64 observed_at = 2;
+  optional sint64 last_success_at = 3;
+  optional string error_code = 4;
+  optional string source_version = 5;
+  optional sint64 age_ms = 6;
+  required sint64 stale_after_ms = 7;
+  required sint64 expire_after_ms = 8;
+  optional CodexData data = 9;
+}
+
+message QuotaSection {
+  required string state = 1;
+  optional sint64 observed_at = 2;
+  optional sint64 last_success_at = 3;
+  optional string error_code = 4;
+  optional string source_version = 5;
+  optional sint64 age_ms = 6;
+  required sint64 stale_after_ms = 7;
+  required sint64 expire_after_ms = 8;
+  optional QuotaData data = 9;
+}
+
+message TasksSection {
+  required string state = 1;
+  optional sint64 observed_at = 2;
+  optional sint64 last_success_at = 3;
+  optional string error_code = 4;
+  optional string source_version = 5;
+  optional sint64 age_ms = 6;
+  required sint64 stale_after_ms = 7;
+  required sint64 expire_after_ms = 8;
+  optional TasksData data = 9;
+}
+
+message MusicSection {
+  required string state = 1;
+  optional sint64 observed_at = 2;
+  optional sint64 last_success_at = 3;
+  optional string error_code = 4;
+  optional string source_version = 5;
+  optional sint64 age_ms = 6;
+  required sint64 stale_after_ms = 7;
+  required sint64 expire_after_ms = 8;
+  optional MusicData data = 9;
+}
+
+message ProxySection {
+  required string state = 1;
+  optional sint64 observed_at = 2;
+  optional sint64 last_success_at = 3;
+  optional string error_code = 4;
+  optional string source_version = 5;
+  optional sint64 age_ms = 6;
+  required sint64 stale_after_ms = 7;
+  required sint64 expire_after_ms = 8;
+  optional ProxyData data = 9;
+}
+
+message TimeSection {
+  required string state = 1;
+  optional sint64 observed_at = 2;
+  optional sint64 last_success_at = 3;
+  optional string error_code = 4;
+  optional string source_version = 5;
+  optional sint64 age_ms = 6;
+  required sint64 stale_after_ms = 7;
+  required sint64 expire_after_ms = 8;
+  optional TimeData data = 9;
+}
+
+message WeatherSection {
+  required string state = 1;
+  optional sint64 observed_at = 2;
+  optional sint64 last_success_at = 3;
+  optional string error_code = 4;
+  optional string source_version = 5;
+  optional sint64 age_ms = 6;
+  required sint64 stale_after_ms = 7;
+  required sint64 expire_after_ms = 8;
+  optional WeatherData data = 9;
+}
+
+message AQISection {
+  required string state = 1;
+  optional sint64 observed_at = 2;
+  optional sint64 last_success_at = 3;
+  optional string error_code = 4;
+  optional string source_version = 5;
+  optional sint64 age_ms = 6;
+  required sint64 stale_after_ms = 7;
+  required sint64 expire_after_ms = 8;
+  optional AQIData data = 9;
+}
+
+message DevicesSection {
+  required string state = 1;
+  optional sint64 observed_at = 2;
+  optional sint64 last_success_at = 3;
+  optional string error_code = 4;
+  optional string source_version = 5;
+  optional sint64 age_ms = 6;
+  required sint64 stale_after_ms = 7;
+  required sint64 expire_after_ms = 8;
+  optional DeviceSummary data = 9;
+}
+
+message GitHubData {
+  required string login = 1;
+  required string start_date = 2;
+  required uint32 days = 3;
+  required string levels = 4;
+  optional uint32 today_count = 5;
+  optional uint32 total_count = 6;
+}
+
+message CodexData {
+  required QuotaSection quota = 1;
+  required TasksSection tasks = 2;
+}
+
+message QuotaData {
+  repeated QuotaWindow windows = 1;
+  required bool truncated = 2;
+}
+
+message QuotaWindow {
+  required string bucket_id = 1;
+  optional sint64 window_minutes = 2;
+  optional double used_percent = 3;
+  optional sint64 resets_at = 4;
+}
+
+message TasksData {
+  required string adapter = 1;
+  required string scope = 2;
+  required string state = 3;
+  optional uint32 active_count = 4;
+  optional SelectedTask selected_task = 5;
+  optional sint64 last_completed_at = 6;
+}
+
+message SelectedTask {
+  required string id = 1;
+  required string state = 2;
+  required sint64 observed_at = 3;
+}
+
+message MusicData {
+  required string adapter = 1;
+  required string coverage = 2;
+  optional CurrentMusic current = 3;
+}
+
+message CurrentMusic {
+  required string state = 1;
+  optional string title = 2;
+  optional string artist = 3;
+  optional string source = 4;
+  optional double duration = 5;
+  optional double position = 6;
+  optional sint64 position_observed_at = 7;
+}
+
+message WeatherData {
+  required sint32 condition = 1;
+  optional double latitude = 2;
+  optional double longitude = 3;
+  required string location_source = 4;
+}
+
+message AQIData {
+  required uint32 value = 1;
+  required string scale = 2;
+}

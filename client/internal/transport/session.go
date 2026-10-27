@@ -91,7 +91,10 @@ func (s *session) control(b *Backend, topic string, data any, id *string) error 
 	if s.transport == "serial" {
 		return s.send(b, topic, data, 1)
 	}
-	raw, _ := json.Marshal(data)
+	raw, err := wire.Marshal(data)
+	if err != nil {
+		return err
+	}
 	c := wire.Control{ProtocolVersion: 1, HostID: b.HostID(), DeviceID: s.pair.DeviceID, SessionID: s.id, Seq: s.next(), SentAt: time.Now().Unix(), RequestID: id, Data: raw}
 	return s.send(b, topic, c, 1)
 }
@@ -212,10 +215,8 @@ func (s *session) handle(b *Backend, m incoming) error {
 	if s.transport == "serial" {
 		body = m.data
 		if m.topic == "proxy-config" {
-			var id struct {
-				RequestID string `json:"request_id"`
-			}
-			if json.Unmarshal(body, &id) == nil {
+			var id wire.Config
+			if wire.Decode(body, &id, 4096) == nil {
 				req = &id.RequestID
 			}
 		}
@@ -234,11 +235,10 @@ func (s *session) handle(b *Backend, m incoming) error {
 		req = c.RequestID
 		seq = c.Seq
 	}
-	var canonical any
-	if json.Unmarshal(body, &canonical) != nil {
+	normalizedBody, canonicalErr := wire.Canonical(body)
+	if canonicalErr != nil {
 		return wire.ErrMessage
 	}
-	normalizedBody, _ := json.Marshal(canonical)
 	if seq <= s.inputSeq {
 		return nil
 	} // replays never renew a watchdog
@@ -451,14 +451,7 @@ func (s *session) heartbeat(b *Backend, sections wire.Sections) error {
 		h.SourceUpdates = nil
 		s.outputSeq--
 	}
-	var payload any = h
-	if s.transport == "lan" {
-		payload = struct {
-			wire.Heartbeat
-			SourceUpdates []wire.SourceLease `json:"source_updates"`
-		}{h, updates}
-	}
-	if e := s.send(b, "heartbeat", payload, 0); e != nil {
+	if e := s.send(b, "heartbeat", h, 0); e != nil {
 		return e
 	}
 	s.lastSent = time.Now()
