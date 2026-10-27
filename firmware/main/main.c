@@ -159,9 +159,12 @@ static uint32_t milliseconds_to_minute(void)
     return (uint32_t)((minute_us - wall_time_us() % minute_us + 999) / 1000);
 }
 
-static bool minute_needs_hpm(void)
+static bool minute_needs_hpm(const monitor_pages_t *pages)
 {
-    return monitor_clock_is_valid() && milliseconds_to_minute() <= MINUTE_PREPARE_MS;
+    /* The clock lives on the first page. While the activity page is visible a
+     * minute roll has nothing to draw, so keep the panel in low-power mode. */
+    return monitor_clock_is_valid() && !monitor_pages_is_second(pages) &&
+           milliseconds_to_minute() <= MINUTE_PREPARE_MS;
 }
 
 /* Capture during a page transition without serial output in the timed path.
@@ -174,12 +177,15 @@ typedef struct {
     int64_t previous_done;
 } page_perf_t;
 
-static esp_err_t commit_page_timed(monitor_lvgl_t *renderer, monitor_pages_t *pages, page_perf_t *perf)
+static esp_err_t commit_page_timed(monitor_lvgl_t *renderer, monitor_pages_t *pages,
+                                   page_perf_t *perf)
 {
     int64_t start = esp_timer_get_time();
     lv_anim_refr_now(); /* The 33ms LVGL timer alone can miss a 31.25ms TE slot. */
     esp_err_t err = monitor_lvgl_render(renderer);
     int64_t ready = esp_timer_get_time();
+    /* Commit even a byte-identical frame: display_port paces one panel scan slot
+     * per commit, which is what keeps the transition cadence honest. */
     if(err == ESP_OK) err = monitor_lvgl_present(renderer);
     int64_t done = esp_timer_get_time();
     if(perf->count < sizeof(perf->frames) / sizeof(perf->frames[0])) {
@@ -204,13 +210,14 @@ static void report_page_perf(const page_perf_t *perf)
 
 /* The sole display owner prepares HPM before :00. Notifications received while
  * preparing are coalesced, but cannot move the absolute minute deadline. */
-static uint32_t wait_display_refresh(rlcd_port_t *port, monitor_lvgl_t *renderer)
+static uint32_t wait_display_refresh(rlcd_port_t *port, monitor_lvgl_t *renderer,
+                                     const monitor_pages_t *pages)
 {
     uint32_t reasons = 0;
     for (;;) {
         uint32_t timer_delay = monitor_lvgl_process_timers(renderer);
         if (monitor_lvgl_frame_pending(renderer)) return MONITOR_REFRESH_LVGL;
-        if (minute_needs_hpm()) {
+        if (minute_needs_hpm(pages)) {
             const int64_t now = wall_time_us();
             const int64_t boundary = (now / 60000000LL + 1) * 60000000LL;
             UBaseType_t original = raise_animation_priority();
@@ -228,7 +235,7 @@ static uint32_t wait_display_refresh(rlcd_port_t *port, monitor_lvgl_t *renderer
             return reasons | MONITOR_REFRESH_CLOCK;
         }
         uint32_t until = UINT32_MAX;
-        if (monitor_clock_is_valid()) {
+        if (monitor_clock_is_valid() && !monitor_pages_is_second(pages)) {
             uint32_t remaining = milliseconds_to_minute();
             /* Time may advance into the preparation window since the check. */
             if (remaining <= MINUTE_PREPARE_MS) continue;
@@ -263,6 +270,13 @@ static void update_animation_clock(monitor_lvgl_t *renderer, display_snapshot_t 
     }
 }
 
+/* Only the visible page may hold the panel in high-power mode; a timeline on the
+ * hidden page lands its values without spending frames nobody can see. */
+static bool visible_page_animation(lv_obj_t *root, const monitor_pages_t *pages)
+{
+    return !monitor_pages_is_second(pages) && monitor_ui_animation_active(root);
+}
+
 /* The UI owns finite timelines, the display task owns panel mode and cadence.
  * No animation task/timer remains running after the last frame. Data producer
  * notifications stay queued while a short animation is being presented. */
@@ -271,7 +285,7 @@ static esp_err_t present_monitor(monitor_lvgl_t *renderer, rlcd_port_t *port,
 {
     lv_obj_t *root = monitor_lvgl_root(renderer);
     monitor_pages_t *pages = monitor_pages_from_first(root);
-    bool animated = monitor_ui_animation_active(root) || monitor_pages_active(pages);
+    bool animated = visible_page_animation(root, pages) || monitor_pages_active(pages);
     const UBaseType_t original_priority = raise_animation_priority();
     esp_err_t result = animated ? rlcd_port_set_animation_mode(port, true) : ESP_OK;
     if (result != ESP_OK) {
@@ -286,9 +300,10 @@ static esp_err_t present_monitor(monitor_lvgl_t *renderer, rlcd_port_t *port,
     do {
         feed_task_watchdog();
         if (animated && result == ESP_OK) update_animation_clock(renderer, displayed);
-        esp_err_t draw = page_animated ? commit_page_timed(renderer, pages, &perf) : commit_monitor_frame(renderer);
+        esp_err_t draw = page_animated ? commit_page_timed(renderer, pages, &perf)
+                                       : commit_monitor_frame(renderer);
         if (draw != ESP_OK) { result = draw; break; }
-        if (!monitor_ui_animation_active(root) && !monitor_pages_active(pages)) break;
+        if (!visible_page_animation(root, pages) && !monitor_pages_active(pages)) break;
         if (!rlcd_port_frame_sync_active(port)) wait_animation_frame(&frame_tick, portMAX_DELAY);
         TickType_t now = xTaskGetTickCount();
         monitor_ui_advance(root, (uint32_t)((now - previous) * portTICK_PERIOD_MS));
@@ -306,6 +321,7 @@ static esp_err_t present_monitor(monitor_lvgl_t *renderer, rlcd_port_t *port,
     /* Include the 100ms LPM transition itself in the look-ahead, otherwise
      * returning to LPM can consume the remaining HPM preparation window. */
     const bool keep_hpm = result == ESP_OK && monitor_clock_is_valid() &&
+                          !monitor_pages_is_second(pages) &&
                           milliseconds_to_minute() <= MINUTE_PREPARE_MS + 100U;
     esp_err_t low_power = keep_hpm ? ESP_OK : restore_panel_lpm(port);
     vTaskPrioritySet(NULL, original_priority);
@@ -525,8 +541,12 @@ void app_main(void)
     if(!pages) ESP_LOGE(TAG, "page controller initialization failed");
     for(;;) {
         feed_task_watchdog();
-        uint32_t reasons = wait_display_refresh(port, renderer);
+        uint32_t reasons = wait_display_refresh(port, renderer, pages);
         if (!monitor_display_refresh_should_render(reasons, monitor_clock_is_valid())) continue;
+        /* Finite timelines belong to the visible page alone. Disabling also lands
+         * any pending roll on the hidden page immediately. */
+        monitor_ui_set_animations_enabled(monitor_lvgl_root(renderer),
+                                          !monitor_pages_is_second(pages));
         if (reasons == MONITOR_REFRESH_LVGL) {
             /* A timer wake must not publish cached sensor/network values ahead
              * of their normal clock boundary. Producer notifications stay queued. */

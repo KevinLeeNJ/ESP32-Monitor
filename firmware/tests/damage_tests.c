@@ -122,7 +122,7 @@ static void test_page_transition(void) {
     monitor_pages_t *pages = monitor_pages_create(r.root, MONITOR_FRAME_NORMAL, NULL);
     assert(pages && !monitor_pages_active(pages) && !monitor_pages_is_second(pages));
     assert(monitor_renderer_render(&r));
-    unsigned full_frames = 0, frames = 0, verified = 0;
+    unsigned full_frames = 0, frames = 0, verified = 0, quiet_frames = 0, band_tiles = 0;
     uint16_t *first_pixels = malloc(MONITOR_RGB565_BYTES);
     uint16_t *second_pixels = malloc(MONITOR_RGB565_BYTES);
     uint16_t *actual = malloc(MONITOR_RGB565_BYTES);
@@ -146,6 +146,8 @@ static void test_page_transition(void) {
             for(unsigned i = 0; i < sizeof(r.dirty.bits); ++i)
                 tiles += (unsigned)__builtin_popcount(r.dirty.bits[i]);
             if(tiles > 4000) ++full_frames;
+            else band_tiles += tiles;
+            if(!tiles) ++quiet_frames;
             if(direction == 1 && monitor_pages_active(pages)) {
                 int edge = monitor_pages_position(pages);
                 if(edge > 8 && edge < 390) {
@@ -165,8 +167,11 @@ static void test_page_transition(void) {
     assert(verified > 0);
     free(first_pixels); free(second_pixels); free(actual);
     assert(!memcmp(first, r.packed, sizeof(first)));
-    /* At least some frames are clipped below full-screen coverage. */
-    assert(full_frames < frames);
+    /* Only the first frame of each sweep may touch the whole screen; every later
+     * frame carries just the columns the edge crossed, and a repeated column is a
+     * no-op that leaves the damage bitmap empty. */
+    assert(full_frames == 2);
+    assert(quiet_frames >= 1 && band_tiles <= 2 * MONITOR_TILE_COUNT);
     assert(lv_timer_handler() == LV_NO_TIMER_READY);
     assert(monitor_pages_switch(pages, true));
     monitor_pages_settle(pages);
@@ -185,7 +190,8 @@ static void test_page_transition(void) {
     monitor_renderer_deinit(&r);
     lv_tick_inc(500);
     lv_timer_handler();
-    printf("Page transitions: %u frames, %u full redraws, idle timer stopped\n", frames, full_frames);
+    printf("Page transitions: %u frames, %u full redraws, %u no-op frames, %u band tiles, idle timer stopped\n",
+           frames, full_frames, quiet_frames, band_tiles);
 }
 
 int main(void) {

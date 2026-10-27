@@ -139,8 +139,18 @@ static int send_data(rlcd_port_t *p,const uint8_t *data,size_t len) {
 static int send_data1(rlcd_port_t *p,uint8_t data) { return send_data(p,&data,1); }
 static lv_obj_t *monitor_lvgl_root(monitor_lvgl_t *r) { return &r->root; }
 typedef struct monitor_pages monitor_pages_t;
-static monitor_pages_t *monitor_pages_from_first(lv_obj_t *r) { (void)r; return NULL; }
+static unsigned second_page_marker, second_page;
+/* The marker address means "activity page visible"; NULL is the monitor page. */
+static monitor_pages_t *monitor_pages_from_first(lv_obj_t *r) {
+    (void)r; return second_page ? (monitor_pages_t *)&second_page_marker : NULL;
+}
+static bool monitor_pages_is_second(const monitor_pages_t *p) {
+    return p == (const monitor_pages_t *)&second_page_marker;
+}
 static bool monitor_pages_active(const monitor_pages_t *p) { (void)p; return false; }
+static monitor_pages_t *second_pages(void) {
+    return second_page ? (monitor_pages_t *)&second_page_marker : NULL;
+}
 static void monitor_pages_resume(monitor_pages_t *p) { (void)p; }
 typedef struct { int unused; } page_perf_t;
 static int commit_page_timed(monitor_lvgl_t *, monitor_pages_t *, page_perf_t *);
@@ -176,20 +186,21 @@ for source, names in [(driver, ['retain_panel_pins', 'set_panel_awake', 'set_fra
                                'set_frame_rates', 'rlcd_port_set_animation_mode']),
                        (main, ['restore_panel_lpm', 'wait_animation_frame', 'raise_animation_priority',
                                'wall_time_us', 'milliseconds_to_minute', 'minute_needs_hpm',
-                               'wait_display_refresh', 'update_animation_clock', 'present_monitor'])]:
+                               'visible_page_animation', 'wait_display_refresh',
+                               'update_animation_clock', 'present_monitor'])]:
     code += '\n'.join(function(source, name) for name in names) + '\n'
 code += r'''
 static void reset(void) {
     watchdog_active=true; idle_notifications=0; tick=0; priority=1; command_count=fail_command=failed_draw=draws=notifications=0;
     first_clock_roll=first_draw=0; clock_valid=true;storm=false;
     pm_acquires=pm_releases=pm_active=0;
-    te_signal=te_token=false;te_waits=irq_enabled=0;
+    te_signal=te_token=false;te_waits=irq_enabled=0;second_page=0;
 }
 int main(void) {
     {
         rlcd_port_t p={0};
         tick=1000; timer_due=1025; timer_dirty=false; clock_valid=false;
-        assert(wait_display_refresh(&p, NULL)==MONITOR_REFRESH_LVGL);
+        assert(wait_display_refresh(&p, NULL, NULL)==MONITOR_REFRESH_LVGL);
         assert(tick==1025 && timer_dirty);
         timer_dirty=false; clock_valid=true;
         puts("LVGL timer deadline wakes idle owner without producer notification: PASS");
@@ -238,18 +249,24 @@ int main(void) {
     puts("Failures at HPM/LPM command recover through HPM to LPM: PASS");
     for(unsigned base=1;base<=7;base+=6) {
         reset();priority=base;tick=1000;p=(rlcd_port_t){.mode_known=true};
-        assert(wait_display_refresh(&p, NULL)&MONITOR_REFRESH_CLOCK);
+        assert(wait_display_refresh(&p, NULL, NULL)&MONITOR_REFRESH_CLOCK);
         assert(tick==60000 && command_at[0]==59620 && p.animation_mode && priority==base);
         assert(notifications==2 && idle_notifications==1 && watchdog_active);
         assert(command_at[0]+RLCD_HPM_PREPARE_MS==59920);
         reset();priority=base;tick=59620;storm=true;p=(rlcd_port_t){.mode_known=true};
-        assert(wait_display_refresh(&p, NULL)==3 && tick==60000 && notifications==80 && priority==base);
+        assert(wait_display_refresh(&p, NULL, NULL)==3 && tick==60000 && notifications==80 && priority==base);
     }
     assert(watchdog_active);
     reset();clock_valid=false;storm=true;p=(rlcd_port_t){.mode_known=true};
-    assert(wait_display_refresh(&p, NULL)==2 && tick==1 && idle_notifications==1 && watchdog_active);
+    assert(wait_display_refresh(&p, NULL, NULL)==2 && tick==1 && idle_notifications==1 && watchdog_active);
     puts("Idle display waits directly for minute preparation or notifications, restoring TWDT before active work: PASS");
     puts("Minute preparation at :59.620, ready at :59.920, dispatch at :00.000; notification storm does not delay it: PASS");
+    for(unsigned base=1;base<=7;base+=6) {
+        reset();priority=base;tick=59620;storm=true;second_page=1;p=(rlcd_port_t){.mode_known=true};
+        assert(wait_display_refresh(&p, NULL, second_pages())==2 && tick==59621);
+        assert(command_count==0 && !p.animation_mode && !pm_acquires && priority==base && watchdog_active);
+    }
+    puts("Minute window with the activity page visible skips HPM preparation and its no-sleep lock: PASS");
     for(unsigned base=1;base<=7;base+=6) for(unsigned fault=0;fault<=1;fault++) {
         reset();priority=base;tick=1000;failed_draw=fault?3:0;
         p=(rlcd_port_t){.mode_known=true};monitor_lvgl_t r={.root.remaining=12};
@@ -287,9 +304,14 @@ int main(void) {
     reset();tick=59470;p=(rlcd_port_t){.mode_known=true,.animation_mode=true};
     monitor_lvgl_t imminent={.root.remaining=1};
     assert(present_monitor(&imminent,&p,NULL)==ESP_OK && p.animation_mode);
-    assert(wait_display_refresh(&p, NULL)&MONITOR_REFRESH_CLOCK);
+    assert(wait_display_refresh(&p, NULL, NULL)&MONITOR_REFRESH_CLOCK);
     assert(tick==60000 && command_count==0 && priority==1);
     puts("Device animation ending near minute retains HPM, avoiding a late LPM/HPM round trip: PASS");
+    reset();tick=59470;second_page=1;p=(rlcd_port_t){.mode_known=true,.animation_mode=true};
+    monitor_lvgl_t hidden={.root.remaining=1};
+    assert(present_monitor(&hidden,&p,NULL)==ESP_OK && !p.animation_mode);
+    assert(draws==1 && command_count==1 && commands[0]==0x39 && tick==59577 && !pm_active && priority==1);
+    puts("Timeline while the activity page is visible runs one LPM frame and leaves HPM: PASS");
     reset();tick=59000;p=(rlcd_port_t){.mode_known=true,.animation_mode=true};
     monitor_lvgl_t r={.root.remaining=70};
     display_snapshot_t s={.time_text="00:00",.date_text="DATE"};
