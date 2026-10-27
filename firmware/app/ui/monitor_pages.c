@@ -16,12 +16,21 @@ static void *frame_alloc(size_t n) {
 #define TRANSITION_MS 600U
 #define PAGE_WIDTH MONITOR_DISPLAY_WIDTH
 #define PAGE_HEIGHT MONITOR_DISPLAY_HEIGHT
+#define COLUMN_BYTES (PAGE_HEIGHT / 4U) /* Packed bytes holding one two-pixel column. */
+/* cubic-bezier(0.76, 0, 0.24, 1): easeInOutQuart. The edge holds over the first
+ * and last columns, then crosses the middle at four times the average speed.
+ * Steeper curves (quint, expo) read as a jump because one 31ms frame would carry
+ * the edge more than a quarter of the screen. */
+#define EASE_X1 LV_BEZIER_VAL_FLOAT(0.76)
+#define EASE_Y1 0
+#define EASE_X2 LV_BEZIER_VAL_FLOAT(0.24)
+#define EASE_Y2 LV_BEZIER_VAL_FLOAT(1)
 
 struct monitor_pages {
     lv_obj_t *first, *second, *first_view, *second_view, *stripe;
     uint8_t *first_packed, *second_packed;
-    bool active, second_visible, target_second, next, first_frame;
-    int32_t position, previous_position;
+    bool active, second_visible, target_second, next;
+    int32_t position, committed_column;
 };
 
 /* LVGL computes easing; drawing is done in the panel's packed 1-bit layout. */
@@ -30,8 +39,8 @@ static void stripe_step(void *var, int32_t position)
     monitor_pages_t *p = var;
     if(position < 0) position = 0;
     if(position > PAGE_WIDTH) position = PAGE_WIDTH;
-    p->position = position;
-    int marker = position < 1 ? 1 : position > PAGE_WIDTH - 3 ? PAGE_WIDTH - 3 : position - 1;
+    p->position = position & ~1; /* One packed column is the smallest transferable step. */
+    int marker = p->position < 1 ? 1 : p->position > PAGE_WIDTH - 3 ? PAGE_WIDTH - 3 : p->position - 1;
     lv_obj_set_x(p->stripe, marker); /* Hidden; useful for simulator inspection. */
 }
 
@@ -186,7 +195,7 @@ bool monitor_pages_switch(monitor_pages_t *p, bool next)
     p->next = next;
     p->target_second = !p->second_visible;
     p->active = true;
-    p->first_frame = true;
+    p->committed_column = -1;
     lv_obj_move_foreground(p->stripe);
     /* The hidden marker tracks the reveal edge without drawing a line. */
     stripe_step(p, next ? PAGE_WIDTH : 0);
@@ -196,10 +205,8 @@ bool monitor_pages_switch(monitor_pages_t *p, bool next)
     lv_anim_set_exec_cb(&animation, stripe_step);
     lv_anim_set_values(&animation, next ? PAGE_WIDTH : 0, next ? 0 : PAGE_WIDTH);
     lv_anim_set_duration(&animation, TRANSITION_MS);
-    /* A flatter opening than LVGL's default ease-in-out, with a gentle stop. */
     lv_anim_set_path_cb(&animation, lv_anim_path_custom_bezier3);
-    lv_anim_set_bezier3_param(&animation, LV_BEZIER_VAL_FLOAT(0.65), 0,
-                              LV_BEZIER_VAL_FLOAT(0.35), LV_BEZIER_VAL_FLOAT(1));
+    lv_anim_set_bezier3_param(&animation, EASE_X1, EASE_Y1, EASE_X2, EASE_Y2);
     lv_anim_set_completed_cb(&animation, transition_done);
     lv_anim_t *started = lv_anim_start(&animation);
     if(!started) {
@@ -231,23 +238,27 @@ bool monitor_pages_compose(monitor_pages_t *p, uint8_t *packed, monitor_damage_t
     const uint8_t *source = p->target_second ? p->first_packed : p->second_packed;
     const uint8_t *left = p->next ? source : target;
     const uint8_t *right = p->next ? target : source;
-    unsigned column = (unsigned)p->position / 2U;
-    unsigned offset = column * (PAGE_HEIGHT / 4U);
-    memcpy(packed, left, offset);
-    memcpy(packed + offset, right + offset, MONITOR_FRAME_BYTES - offset);
-    if((p->position & 1) && offset < MONITOR_FRAME_BYTES) {
-        for(unsigned y = 0; y < PAGE_HEIGHT / 4U; ++y)
-            packed[offset + y] = (uint8_t)((left[offset + y] & 0xaaU) | (right[offset + y] & 0x55U));
-    }
-    if(p->first_frame) {
+    const unsigned column = (unsigned)p->position / 2U;
+    if(p->committed_column < 0) {
+        const unsigned split = column * COLUMN_BYTES;
+        memcpy(packed, left, split);
+        memcpy(packed + split, right + split, MONITOR_FRAME_BYTES - split);
+        p->committed_column = (int32_t)column;
+        /* The snapshots replace the whole accumulated frame, so the panel owns
+         * nothing until every byte has been compared against it. */
         monitor_damage_mark(dirty, 0, 0, PAGE_WIDTH - 1, PAGE_HEIGHT - 1);
-        p->first_frame = false;
-    } else if(p->position != p->previous_position) {
-        int lo = p->position < p->previous_position ? p->position : p->previous_position;
-        int hi = p->position > p->previous_position ? p->position : p->previous_position;
-        if(lo < PAGE_WIDTH) monitor_damage_mark(dirty, lo, 0, hi < PAGE_WIDTH ? hi : PAGE_WIDTH - 1, PAGE_HEIGHT - 1);
+    } else if(p->committed_column != (int32_t)column) {
+        /* Columns below the split always hold `left` and columns at or above it
+         * always hold `right`, so only the range the edge crossed can differ from
+         * what the panel already has. */
+        const bool growing = column > (unsigned)p->committed_column;
+        const unsigned from = growing ? (unsigned)p->committed_column : column;
+        const unsigned to = growing ? column : (unsigned)p->committed_column;
+        const uint8_t *fill = growing ? left : right;
+        memcpy(packed + from * COLUMN_BYTES, fill + from * COLUMN_BYTES, (to - from) * COLUMN_BYTES);
+        monitor_damage_mark(dirty, (int)from * 2, 0, (int)to * 2 - 1, PAGE_HEIGHT - 1);
+        p->committed_column = (int32_t)column;
     }
-    p->previous_position = p->position;
     if(!p->active) show_target(p);
     return true;
 }
