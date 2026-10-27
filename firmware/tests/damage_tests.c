@@ -1,7 +1,9 @@
 /* Real LVGL animation frames: dirty coverage, multi-flush accumulation and
  * reproducible host comparison against the previous byte scan. */
 #include "monitor_render.h"
+#include "monitor_pages.h"
 #include <assert.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -111,8 +113,84 @@ static void test_roll_damage(monitor_frame_variant_t variant) {
     printf("Startup roll final redraw: %u tiles, empty label reused\n",last_tiles);
     monitor_renderer_deinit(&r);
 }
+static void test_page_transition(void) {
+    monitor_renderer_t r;
+    assert(monitor_renderer_init(&r, monitor_ui_create));
+    assert(monitor_renderer_render(&r));
+    uint8_t first[MONITOR_FRAME_BYTES];
+    memcpy(first, r.packed, sizeof(first));
+    monitor_pages_t *pages = monitor_pages_create(r.root, MONITOR_FRAME_NORMAL, NULL);
+    assert(pages && !monitor_pages_active(pages) && !monitor_pages_is_second(pages));
+    assert(monitor_renderer_render(&r));
+    unsigned full_frames = 0, frames = 0, verified = 0;
+    uint16_t *first_pixels = malloc(MONITOR_RGB565_BYTES);
+    uint16_t *second_pixels = malloc(MONITOR_RGB565_BYTES);
+    uint16_t *actual = malloc(MONITOR_RGB565_BYTES);
+    assert(first_pixels && second_pixels && actual);
+    monitor_unpack_to_rgb565(first, 400, 300, MONITOR_FRAME_NORMAL, first_pixels);
+    for(unsigned direction = 0; direction < 2; ++direction) {
+        assert(monitor_pages_switch(pages, direction == 0));
+        assert(!monitor_pages_switch(pages, direction == 0));
+        int32_t start_pos = monitor_pages_position(pages);
+        lv_tick_inc(320); /* HPM preparation: no LVGL timer runs in this interval. */
+        monitor_pages_resume(pages);
+        lv_anim_refr_now();
+        assert(monitor_pages_active(pages) && monitor_pages_position(pages) == start_pos);
+        while(monitor_pages_active(pages)) {
+            memset(&r.dirty, 0, sizeof(r.dirty));
+            lv_tick_inc(32);
+            lv_anim_refr_now();
+            lv_timer_handler();
+            assert(monitor_renderer_render(&r));
+            unsigned tiles = 0;
+            for(unsigned i = 0; i < sizeof(r.dirty.bits); ++i)
+                tiles += (unsigned)__builtin_popcount(r.dirty.bits[i]);
+            if(tiles > 4000) ++full_frames;
+            if(direction == 1 && monitor_pages_active(pages)) {
+                int edge = monitor_pages_position(pages);
+                if(edge > 8 && edge < 390) {
+                    monitor_unpack_to_rgb565(r.packed, 400, 300, MONITOR_FRAME_NORMAL, actual);
+                    for(int y = 0; y < 300; ++y) for(int x = 0; x < 400; ++x) {
+                        if(x < edge - 3) assert(actual[y * 400 + x] == first_pixels[y * 400 + x]);
+                        if(x > edge + 3) assert(actual[y * 400 + x] == second_pixels[y * 400 + x]);
+                    }
+                    ++verified;
+                }
+            }
+            assert(++frames < 64);
+        }
+        assert(monitor_pages_is_second(pages) == (direction == 0));
+        if(direction == 0) monitor_unpack_to_rgb565(r.packed, 400, 300, MONITOR_FRAME_NORMAL, second_pixels);
+    }
+    assert(verified > 0);
+    free(first_pixels); free(second_pixels); free(actual);
+    assert(!memcmp(first, r.packed, sizeof(first)));
+    /* At least some frames are clipped below full-screen coverage. */
+    assert(full_frames < frames);
+    assert(lv_timer_handler() == LV_NO_TIMER_READY);
+    assert(monitor_pages_switch(pages, true));
+    monitor_pages_settle(pages);
+    assert(!monitor_pages_active(pages) && monitor_pages_is_second(pages));
+    assert(monitor_pages_switch(pages, true)); /* NEXT from page two wraps to one. */
+    monitor_pages_settle(pages);
+    assert(!monitor_pages_is_second(pages));
+    assert(monitor_pages_switch(pages, false)); /* PREVIOUS from page one wraps to two. */
+    monitor_pages_settle(pages);
+    assert(monitor_pages_is_second(pages));
+    assert(monitor_pages_switch(pages, false));
+    /* Rebuilding the first page removes its sibling and cancels animation. */
+    assert(monitor_renderer_rebuild(&r, monitor_ui_create));
+    assert(!monitor_pages_from_first(r.root));
+    assert(lv_obj_get_child_count(lv_obj_get_parent(r.root)) == 1);
+    monitor_renderer_deinit(&r);
+    lv_tick_inc(500);
+    lv_timer_handler();
+    printf("Page transitions: %u frames, %u full redraws, idle timer stopped\n", frames, full_frames);
+}
+
 int main(void) {
     test_timer_render();
+    test_page_transition();
     test_roll_damage(MONITOR_FRAME_NORMAL);
     test_roll_damage(MONITOR_FRAME_INVERTED);
     monitor_renderer_t r;assert(monitor_renderer_init(&r,monitor_ui_create));

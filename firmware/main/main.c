@@ -1,6 +1,7 @@
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_pm.h"
+#include "esp_timer.h"
 #include "esp_task_wdt.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
@@ -10,6 +11,7 @@
 #include "display_port.h"
 #include "monitor_lvgl.h"
 #include "monitor_ui.h"
+#include "monitor_pages.h"
 #include "monitor_wifi_manager.h"
 #include "monitor_clock.h"
 #include "monitor_sensors.h"
@@ -162,6 +164,44 @@ static bool minute_needs_hpm(void)
     return monitor_clock_is_valid() && milliseconds_to_minute() <= MINUTE_PREPARE_MS;
 }
 
+/* Capture during a page transition without serial output in the timed path.
+ * present_us includes TE wait and SPI, while render_us includes LVGL animation,
+ * layout, drawing and I1 packing. Times between completed presents show the
+ * achieved cadence, independently of the panel's nominal refresh rate. */
+typedef struct {
+    struct { uint32_t render_us, present_us, interval_us; int32_t position; } frames[48];
+    unsigned count;
+    int64_t previous_done;
+} page_perf_t;
+
+static esp_err_t commit_page_timed(monitor_lvgl_t *renderer, monitor_pages_t *pages, page_perf_t *perf)
+{
+    int64_t start = esp_timer_get_time();
+    lv_anim_refr_now(); /* The 33ms LVGL timer alone can miss a 31.25ms TE slot. */
+    esp_err_t err = monitor_lvgl_render(renderer);
+    int64_t ready = esp_timer_get_time();
+    if(err == ESP_OK) err = monitor_lvgl_present(renderer);
+    int64_t done = esp_timer_get_time();
+    if(perf->count < sizeof(perf->frames) / sizeof(perf->frames[0])) {
+        unsigned n = perf->count++;
+        perf->frames[n].render_us = (uint32_t)(ready - start);
+        perf->frames[n].present_us = (uint32_t)(done - ready);
+        perf->frames[n].interval_us = perf->previous_done ? (uint32_t)(done - perf->previous_done) : 0;
+        perf->frames[n].position = monitor_pages_position(pages);
+    }
+    perf->previous_done = done;
+    return err;
+}
+
+static void report_page_perf(const page_perf_t *perf)
+{
+    ESP_LOGI(TAG, "PAGE_PERF frames=%u target_us=31250", perf->count);
+    for(unsigned i = 0; i < perf->count; ++i)
+        ESP_LOGI(TAG, "PAGE_PERF frame=%u render_us=%u present_us=%u interval_us=%u position=%ld",
+                 i, (unsigned)perf->frames[i].render_us, (unsigned)perf->frames[i].present_us,
+                 (unsigned)perf->frames[i].interval_us, (long)perf->frames[i].position);
+}
+
 /* The sole display owner prepares HPM before :00. Notifications received while
  * preparing are coalesced, but cannot move the absolute minute deadline. */
 static uint32_t wait_display_refresh(rlcd_port_t *port, monitor_lvgl_t *renderer)
@@ -230,18 +270,25 @@ static esp_err_t present_monitor(monitor_lvgl_t *renderer, rlcd_port_t *port,
                                  display_snapshot_t *displayed)
 {
     lv_obj_t *root = monitor_lvgl_root(renderer);
-    bool animated = monitor_ui_animation_active(root);
+    monitor_pages_t *pages = monitor_pages_from_first(root);
+    bool animated = monitor_ui_animation_active(root) || monitor_pages_active(pages);
     const UBaseType_t original_priority = raise_animation_priority();
     esp_err_t result = animated ? rlcd_port_set_animation_mode(port, true) : ESP_OK;
-    if (result != ESP_OK) monitor_ui_set_animations_enabled(root, false);
+    if (result != ESP_OK) {
+        monitor_ui_set_animations_enabled(root, false);
+        monitor_pages_settle(pages);
+    }
+    bool page_animated = monitor_pages_active(pages);
+    page_perf_t perf = {0};
+    if(page_animated) monitor_pages_resume(pages);
     TickType_t frame_tick = xTaskGetTickCount();
     TickType_t previous = frame_tick;
     do {
         feed_task_watchdog();
         if (animated && result == ESP_OK) update_animation_clock(renderer, displayed);
-        esp_err_t draw = commit_monitor_frame(renderer);
+        esp_err_t draw = page_animated ? commit_page_timed(renderer, pages, &perf) : commit_monitor_frame(renderer);
         if (draw != ESP_OK) { result = draw; break; }
-        if (!monitor_ui_animation_active(root)) break;
+        if (!monitor_ui_animation_active(root) && !monitor_pages_active(pages)) break;
         if (!rlcd_port_frame_sync_active(port)) wait_animation_frame(&frame_tick, portMAX_DELAY);
         TickType_t now = xTaskGetTickCount();
         monitor_ui_advance(root, (uint32_t)((now - previous) * portTICK_PERIOD_MS));
@@ -250,6 +297,7 @@ static esp_err_t present_monitor(monitor_lvgl_t *renderer, rlcd_port_t *port,
     if (result != ESP_OK) {
         /* Errors also leave a settled scene and attempt to restore LPM. */
         monitor_ui_set_animations_enabled(root, false);
+        monitor_pages_settle(pages);
         monitor_ui_set_animations_enabled(root, true);
         esp_err_t retry = commit_monitor_frame(renderer);
         if (retry != ESP_OK) ESP_LOGE(TAG, "settled frame retry failed: %s", esp_err_to_name(retry));
@@ -261,6 +309,7 @@ static esp_err_t present_monitor(monitor_lvgl_t *renderer, rlcd_port_t *port,
                           milliseconds_to_minute() <= MINUTE_PREPARE_MS + 100U;
     esp_err_t low_power = keep_hpm ? ESP_OK : restore_panel_lpm(port);
     vTaskPrioritySet(NULL, original_priority);
+    if(page_animated) report_page_perf(&perf);
     return low_power != ESP_OK ? low_power : result;
 }
 
@@ -470,6 +519,10 @@ void app_main(void)
     /* Sample the latest caches after the hold, then reuse normal animations. */
     display_snapshot_t displayed;
     ESP_ERROR_CHECK(present_boot_monitor(renderer, port, &displayed));
+    /* Explicit hardware-preview fixture, shared with the simulator. */
+    monitor_activity_data_t activity = monitor_activity_demo();
+    monitor_pages_t *pages = monitor_pages_create(monitor_lvgl_root(renderer), MONITOR_FRAME_NORMAL, &activity);
+    if(!pages) ESP_LOGE(TAG, "page controller initialization failed");
     for(;;) {
         feed_task_watchdog();
         uint32_t reasons = wait_display_refresh(port, renderer);
@@ -488,8 +541,17 @@ void app_main(void)
          * arriving later remain cached for the next scheduled update. */
         display_snapshot_t current;
         capture_display_snapshot(&current);
-        if (!display_snapshot_equal(&displayed, &current)) {
-            apply_display_snapshot(renderer, &current, displayed.devices.version != current.devices.version);
+        bool changed = !display_snapshot_equal(&displayed, &current);
+        if (changed) apply_display_snapshot(renderer, &current, displayed.devices.version != current.devices.version);
+        uint32_t page_events = reasons & (MONITOR_REFRESH_PAGE_NEXT | MONITOR_REFRESH_PAGE_PREVIOUS);
+        bool switched = false;
+        if (page_events == MONITOR_REFRESH_PAGE_NEXT || page_events == MONITOR_REFRESH_PAGE_PREVIOUS) {
+            int64_t prepare_start = esp_timer_get_time();
+            switched = monitor_pages_switch(pages, page_events == MONITOR_REFRESH_PAGE_NEXT);
+            ESP_LOGI(TAG, "PAGE_PERF prepare_us=%lu", (unsigned long)(esp_timer_get_time() - prepare_start));
+            if (!switched) ESP_LOGW(TAG, "page switch unavailable");
+        }
+        if (changed || switched) {
             esp_err_t draw_err = present_monitor(renderer, port, &current);
             if (draw_err != ESP_OK) {
                 ESP_LOGE(TAG, "display commit failed: %s", esp_err_to_name(draw_err));

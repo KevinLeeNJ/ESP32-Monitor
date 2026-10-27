@@ -49,6 +49,8 @@ CONTRACT(refresh_combinations, "display batches every combination of producer re
         TEST_ASSERT_EQUAL(immediate, monitor_display_refresh_should_render(reasons, true));
         TEST_ASSERT_TRUE(monitor_display_refresh_should_render(reasons, false));
     }
+    TEST_ASSERT_TRUE(monitor_display_refresh_should_render(MONITOR_REFRESH_PAGE_NEXT, true));
+    TEST_ASSERT_TRUE(monitor_display_refresh_should_render(MONITOR_REFRESH_PAGE_PREVIOUS, true));
 }
 
 CONTRACT(animation_cadence, "animation deadlines skip overruns at different tick rates", "[animation]")

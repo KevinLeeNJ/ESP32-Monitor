@@ -4,6 +4,7 @@
 #include "monitor_devices.h"
 #include "monitor_display_refresh.h"
 #include "monitor_pm_profile.h"
+#include "monitor_page_buttons.h"
 
 #include <string>
 #include <atomic>
@@ -275,6 +276,8 @@ static void button_task(void *arg)
     bool key_timing = stable[1] && !stable[0], key_triggered = both_timing;
     TickType_t key_since = both_since;
 #endif
+    monitor_page_buttons_t page_buttons;
+    monitor_page_buttons_init(&page_buttons, (stable[0] ? BTN_BOOT : 0) | (stable[1] ? BTN_KEY : 0));
     configure_wake_levels(stable[0], stable[1]);
     uint32_t pending = 0;
     for (;;) {
@@ -301,6 +304,11 @@ static void button_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(30));
             bool next[2] = {gpio_get_level(BOOT_BUTTON_GPIO) == 0, gpio_get_level(KEY_BUTTON_GPIO) == 0};
             stable[0] = next[0]; stable[1] = next[1];
+            uint8_t page = monitor_page_buttons_update(&page_buttons,
+                (stable[0] ? BTN_BOOT : 0) | (stable[1] ? BTN_KEY : 0),
+                xTaskGetTickCount(), pdMS_TO_TICKS(1000));
+            if(page == BTN_BOOT) monitor_display_refresh_request_reason(MONITOR_REFRESH_PAGE_NEXT);
+            else if(page == BTN_KEY) monitor_display_refresh_request_reason(MONITOR_REFRESH_PAGE_PREVIOUS);
             pending = 0;
             configure_wake_levels(stable[0], stable[1]);
             const bool both = stable[0] && stable[1];

@@ -177,6 +177,23 @@ static void delete_state(lv_event_t *event)
     lv_free(lv_event_get_user_data(event));
 }
 
+monitor_activity_data_t monitor_activity_demo(void)
+{
+    monitor_activity_data_t data = {
+        .github_available = true, .github_start_year = 2026, .github_start_month = 3, .github_start_day = 16,
+        .agent_state = MONITOR_TASK_RUNNING, .usage_5h_percent = 36, .usage_week_percent = 24,
+        .music_available = true, .music_playing = true,
+        .music_title = "Blue", .music_artist = "Yung Kai", .music_source = "Spotify",
+        .music_position_seconds = 88, .music_duration_seconds = 225
+    };
+    for(unsigned week = 0; week < MONITOR_ACTIVITY_WEEKS; ++week)
+        for(unsigned day = 0; day < MONITOR_ACTIVITY_DAYS; ++day) {
+            unsigned n = (week * 17 + day * 11 + week * day * 3) % 13;
+            data.levels[week * MONITOR_ACTIVITY_DAYS + day] = n < 5 ? 0 : n < 8 ? 1 : n < 10 ? 2 : n < 12 ? 3 : 4;
+        }
+    return data;
+}
+
 lv_obj_t *monitor_activity_create(lv_obj_t *parent, const monitor_activity_data_t *data,
                                   monitor_frame_variant_t variant)
 {
@@ -193,16 +210,23 @@ lv_obj_t *monitor_activity_create(lv_obj_t *parent, const monitor_activity_data_
 
     icon(root, &activity_github, 24, 10, inv);
     label(root, "Contributions", 53, 11, 200, &monitor_misans_20, inv);
-    month_labels(root, data, inv);
-    label(root, "M", 11, 54, 10, &monitor_misans_8, inv);
-    label(root, "W", 11, 76, 10, &monitor_misans_8, inv);
-    label(root, "F", 11, 98, 10, &monitor_misans_8, inv);
+    if(data->github_available) month_labels(root, data, inv);
+    if(data->github_available) {
+        label(root, "M", 11, 54, 10, &monitor_misans_8, inv);
+        label(root, "W", 11, 76, 10, &monitor_misans_8, inv);
+        label(root, "F", 11, 98, 10, &monitor_misans_8, inv);
+    }
     lv_obj_t *wall = lv_obj_create(root);
     lv_obj_remove_style_all(wall);
     lv_obj_clear_flag(wall, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_pos(wall, 24, 54);
     lv_obj_set_size(wall, 353, 78);
-    lv_obj_add_event_cb(wall, draw_wall, LV_EVENT_DRAW_MAIN, state);
+    if(data->github_available) lv_obj_add_event_cb(wall, draw_wall, LV_EVENT_DRAW_MAIN, state);
+    else {
+        lv_obj_add_flag(wall, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_t *unavailable = label(root, "DATA UNAVAILABLE", 30, 77, 352, &monitor_misans_14, inv);
+        lv_obj_set_style_text_align(unavailable, LV_TEXT_ALIGN_CENTER, 0);
+    }
     box(root, 15, 142, 370, 1, 0, true, false, inv);
 
     lv_obj_t *agent = box(root, 15, 150, 180, 134, 8, false, true, inv);

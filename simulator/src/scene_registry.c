@@ -1,4 +1,5 @@
 #include "scene_registry.h"
+#include "monitor_pages.h"
 
 #include <string.h>
 
@@ -170,22 +171,39 @@ static lv_obj_t *create_profiling(lv_obj_t *parent, monitor_frame_variant_t vari
     return root;
 }
 
+static monitor_activity_data_t activity_fixture(monitor_task_state_t state, bool playing)
+{
+    monitor_activity_data_t data = monitor_activity_demo();
+    data.agent_state = state;
+    data.music_playing = playing;
+    return data;
+}
+
 static lv_obj_t *create_activity_state(lv_obj_t *parent, monitor_frame_variant_t variant, monitor_task_state_t state, bool playing)
 {
-    monitor_activity_data_t data = {
-        .github_start_year = 2026, .github_start_month = 3, .github_start_day = 16,
-        .agent_state = state, .usage_5h_percent = 36, .usage_week_percent = 24,
-        .music_available = true, .music_playing = playing,
-        .music_title = "Blue", .music_artist = "Yung Kai", .music_source = "Spotify",
-        .music_position_seconds = 88, .music_duration_seconds = 225
-    };
-    for(unsigned week = 0; week < MONITOR_ACTIVITY_WEEKS; ++week)
-        for(unsigned day = 0; day < MONITOR_ACTIVITY_DAYS; ++day) {
-            unsigned n = (week * 17 + day * 11 + week * day * 3) % 13;
-            data.levels[week * MONITOR_ACTIVITY_DAYS + day] = n < 5 ? 0 : n < 8 ? 1 : n < 10 ? 2 : n < 12 ? 3 : 4;
-        }
+    monitor_activity_data_t data = activity_fixture(state, playing);
     return monitor_activity_create(parent, &data, variant);
 }
+
+static lv_obj_t *create_page_transition(lv_obj_t *parent, monitor_frame_variant_t variant, bool next)
+{
+    lv_obj_t *first = create_monitor_scene(parent, variant);
+    if(!first) return NULL;
+    monitor_activity_data_t data = activity_fixture(MONITOR_TASK_RUNNING, true);
+    monitor_pages_t *pages = monitor_pages_create(first, variant, &data);
+    if(!pages) { lv_obj_delete(first); return NULL; }
+    if(!next) {
+        if(!monitor_pages_switch(pages, true)) { lv_obj_delete(first); return NULL; }
+        monitor_pages_settle(pages);
+    }
+    if(!monitor_pages_switch(pages, next)) { lv_obj_delete(first); return NULL; }
+    monitor_pages_resume(pages);
+    return first;
+}
+static lv_obj_t *create_page_next(lv_obj_t *parent, monitor_frame_variant_t variant)
+{ return create_page_transition(parent, variant, true); }
+static lv_obj_t *create_page_previous(lv_obj_t *parent, monitor_frame_variant_t variant)
+{ return create_page_transition(parent, variant, false); }
 
 #define ACTIVITY_FACTORY(name, state) \
     static lv_obj_t *create_activity_##name(lv_obj_t *parent, monitor_frame_variant_t variant) \
@@ -203,6 +221,8 @@ static lv_obj_t *create_activity_paused(lv_obj_t *parent, monitor_frame_variant_
 { return create_activity_state(parent, variant, MONITOR_TASK_RUNNING, false); }
 
 static const simulator_scene_t SCENES[] = {
+    { .name = "page-next", .description = "First to second page transition", .create = create_page_next },
+    { .name = "page-previous", .description = "Second to first page transition", .create = create_page_previous },
     { .name = "activity-paused", .description = "Music is not playing", .create = create_activity_paused },
     { .name = "activity", .description = "GitHub, agent and playback second page", .create = create_activity_running },
     { .name = "activity-idle", .description = "Codex idle", .create = create_activity_idle },

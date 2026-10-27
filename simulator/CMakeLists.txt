@@ -44,6 +44,7 @@ add_library(monitor_sim_core STATIC
     "${FIRMWARE_ROOT}/src/display/monitor_render.c"
     "${FIRMWARE_ROOT}/app/ui/monitor_ui.c"
     "${FIRMWARE_ROOT}/app/ui/monitor_activity.c"
+    "${FIRMWARE_ROOT}/app/ui/monitor_pages.c"
     "${FIRMWARE_ROOT}/app/ui/activity_assets.c"
     "${FIRMWARE_ROOT}/app/ui/weather_assets.c"
     "${FIRMWARE_ROOT}/app/ui/fonts/monitor_misans_8.c"
