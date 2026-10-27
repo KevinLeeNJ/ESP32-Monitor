@@ -170,7 +170,48 @@ static lv_obj_t *create_profiling(lv_obj_t *parent, monitor_frame_variant_t vari
     return root;
 }
 
+static lv_obj_t *create_activity_state(lv_obj_t *parent, monitor_frame_variant_t variant, monitor_task_state_t state, bool playing)
+{
+    monitor_activity_data_t data = {
+        .github_start_year = 2026, .github_start_month = 3, .github_start_day = 16,
+        .agent_state = state, .usage_5h_percent = 36, .usage_week_percent = 24,
+        .music_available = true, .music_playing = playing,
+        .music_title = "Blue", .music_artist = "Yung Kai", .music_source = "Spotify",
+        .music_position_seconds = 88, .music_duration_seconds = 225
+    };
+    for(unsigned week = 0; week < MONITOR_ACTIVITY_WEEKS; ++week)
+        for(unsigned day = 0; day < MONITOR_ACTIVITY_DAYS; ++day) {
+            unsigned n = (week * 17 + day * 11 + week * day * 3) % 13;
+            data.levels[week * MONITOR_ACTIVITY_DAYS + day] = n < 5 ? 0 : n < 8 ? 1 : n < 10 ? 2 : n < 12 ? 3 : 4;
+        }
+    return monitor_activity_create(parent, &data, variant);
+}
+
+#define ACTIVITY_FACTORY(name, state) \
+    static lv_obj_t *create_activity_##name(lv_obj_t *parent, monitor_frame_variant_t variant) \
+    { return create_activity_state(parent, variant, state, true); }
+ACTIVITY_FACTORY(running, MONITOR_TASK_RUNNING)
+ACTIVITY_FACTORY(idle, MONITOR_TASK_IDLE)
+ACTIVITY_FACTORY(waiting_input, MONITOR_TASK_WAITING_INPUT)
+ACTIVITY_FACTORY(waiting_approval, MONITOR_TASK_WAITING_APPROVAL)
+ACTIVITY_FACTORY(completed, MONITOR_TASK_COMPLETED)
+ACTIVITY_FACTORY(failed, MONITOR_TASK_FAILED)
+ACTIVITY_FACTORY(cancelled, MONITOR_TASK_CANCELLED)
+ACTIVITY_FACTORY(unknown, MONITOR_TASK_UNKNOWN)
+
+static lv_obj_t *create_activity_paused(lv_obj_t *parent, monitor_frame_variant_t variant)
+{ return create_activity_state(parent, variant, MONITOR_TASK_RUNNING, false); }
+
 static const simulator_scene_t SCENES[] = {
+    { .name = "activity-paused", .description = "Music is not playing", .create = create_activity_paused },
+    { .name = "activity", .description = "GitHub, agent and playback second page", .create = create_activity_running },
+    { .name = "activity-idle", .description = "Codex idle", .create = create_activity_idle },
+    { .name = "activity-waiting-input", .description = "Codex waiting for input", .create = create_activity_waiting_input },
+    { .name = "activity-waiting-approval", .description = "Codex waiting for approval", .create = create_activity_waiting_approval },
+    { .name = "activity-completed", .description = "Codex task completed", .create = create_activity_completed },
+    { .name = "activity-failed", .description = "Codex task failed", .create = create_activity_failed },
+    { .name = "activity-cancelled", .description = "Codex task cancelled", .create = create_activity_cancelled },
+    { .name = "activity-unknown", .description = "Codex task state unknown", .create = create_activity_unknown },
     { .name = "profiling", .description = "PM profiling replaces the date for five minutes", .create = create_profiling },
     { .name = "configuring", .description = "Configuration session status", .create = create_configuring },
     { .name = "offline", .description = "Offline retains local data after configuration", .create = create_local_offline },

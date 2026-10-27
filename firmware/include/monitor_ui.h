@@ -95,6 +95,37 @@ void monitor_ui_set_animations_enabled(lv_obj_t *root, bool enabled);
 bool monitor_ui_animation_active(lv_obj_t *root);
 bool monitor_ui_advance(lv_obj_t *root, uint32_t elapsed_ms);
 
+/* 32 columns, Monday through Sunday in each column. Values 0..4 map to
+ * increasing solid-square area. Caller supplies the selected 224 days. */
+#define MONITOR_ACTIVITY_WEEKS 32
+#define MONITOR_ACTIVITY_DAYS 7
+typedef enum {
+    MONITOR_TASK_UNKNOWN = 0,
+    MONITOR_TASK_IDLE,
+    MONITOR_TASK_RUNNING,
+    MONITOR_TASK_WAITING_INPUT,
+    MONITOR_TASK_WAITING_APPROVAL,
+    MONITOR_TASK_COMPLETED,
+    MONITOR_TASK_FAILED,
+    MONITOR_TASK_CANCELLED,
+} monitor_task_state_t;
+
+typedef struct {
+    uint8_t levels[MONITOR_ACTIVITY_WEEKS * MONITOR_ACTIVITY_DAYS];
+    /* Date of the first Monday column; year=0 omits month labels. */
+    int github_start_year, github_start_month, github_start_day;
+    monitor_task_state_t agent_state;
+    /* Usage percentages, or -1 if unavailable. */
+    int usage_5h_percent, usage_week_percent;
+    const char *music_title, *music_artist, *music_source;
+    /* Playback state is valid only when music_available is true. */
+    bool music_available, music_playing;
+    /* Seconds, or -1 if unavailable. */
+    int music_position_seconds, music_duration_seconds;
+} monitor_activity_data_t;
+lv_obj_t *monitor_activity_create(lv_obj_t *parent, const monitor_activity_data_t *data,
+                                  monitor_frame_variant_t variant);
+
 lv_obj_t *monitor_ui_create(lv_obj_t *parent);
 /* Live boot: empty Devices, --:-- clock, -- information; updates animate.
  * Wi-Fi/battery use demo_data as supplied by the firmware before creation. */
