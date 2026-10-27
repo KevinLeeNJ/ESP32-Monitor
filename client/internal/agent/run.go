@@ -43,13 +43,12 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	fs.StringVar(&c.Companion.BindIP, "companion-ip", "", "selected LAN IPv4 address; required with --companion")
 	fs.StringVar(&c.Companion.StateDirectory, "companion-state-dir", "", "private identity/pairing vault; proxy configuration is never persisted")
 	fs.BoolVar(&watch, "watch", false, "emit snapshots as JSONL until interrupted")
-	fs.BoolVar(&c.Collector.Enabled, "collector", false, "enable managed Telegraf and restore the last committed configuration")
-	fs.StringVar(&c.Collector.Executable, "telegraf-executable", "telegraf", "Telegraf 1.40.2 executable path")
+	fs.BoolVar(&c.Collector.Enabled, "collector", false, "enable in-process Core/Native collectors and restore the last committed configuration")
 	fs.StringVar(&c.Collector.StateDirectory, "collector-state-dir", "", "private collector state and native bridge descriptor directory")
 	fs.StringVar(&c.Collector.UploadURL, "collector-upload-url", "", "HTTPS Server ingest URL (HTTP allowed only for IP loopback)")
 	fs.StringVar(&c.Collector.UploadTokenFile, "collector-upload-token-file", "", "private 0600 Server token file; never returned by the GUI API")
 	fs.StringVar(&collectorAPI, "collector-api", "", "authenticated native bridge API at 127.0.0.1:PORT; enables collector")
-	fs.BoolVar(&collectorScan, "collector-scan", false, "print actual Telegraf metric capabilities as JSON and exit")
+	fs.BoolVar(&collectorScan, "collector-scan", false, "print actual Core/Native collector metric capabilities as JSON and exit")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

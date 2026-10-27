@@ -3,17 +3,13 @@ package collector
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 )
@@ -21,7 +17,8 @@ import (
 var errClosed = errors.New("collector_closed")
 
 type Options struct {
-	Executable     string
+	CoreFactory    func() Collector
+	NativeFactory  func() Collector
 	StateDirectory string
 	UploadURL      string
 	UploadToken    func(context.Context) (string, error)
@@ -30,9 +27,8 @@ type Options struct {
 }
 type Manager struct {
 	op         sync.Mutex // serializes scans, configuration changes and shutdown
-	mu         sync.Mutex // snapshot/receiver/queue never wait for a scan or child process
+	mu         sync.Mutex // snapshots/queue never wait for collection
 	delivery   sync.Mutex // drain an in-flight upload before committing a new config
-	exe        executable
 	opts       Options
 	lock       *os.File
 	closed     bool
@@ -47,24 +43,23 @@ type Manager struct {
 	queue      []queued
 }
 type generation struct {
-	config    Config
-	revision  uint64
-	path      string
-	server    *http.Server
-	process   *process
-	ready     chan struct{}
-	mu        sync.Mutex
-	staged    Batch
-	observed  map[string]bool
-	committed bool
+	config       Config
+	revision     uint64
+	staged       Batch
+	core, native Collector
+	cancel       context.CancelFunc
+	done         chan struct{}
 }
 
 func New(opts Options) (*Manager, error) {
 	if opts.StateDirectory == "" {
 		return nil, errors.New("collector_state_directory_required")
 	}
-	if opts.Executable == "" {
-		opts.Executable = "telegraf"
+	if opts.CoreFactory == nil {
+		opts.CoreFactory = func() Collector { return &CoreCollector{} }
+	}
+	if opts.NativeFactory == nil {
+		opts.NativeFactory = func() Collector { return newNativeCollector() }
 	}
 	if opts.ApplyTimeout == 0 {
 		opts.ApplyTimeout = 20 * time.Second
@@ -89,7 +84,7 @@ func New(opts Options) (*Manager, error) {
 		return nil, errors.New("collector_already_owned")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{opts: opts, exe: executable{opts.Executable, opts.StateDirectory}, lock: lock, ctx: ctx, cancel: cancel, workerDone: make(chan struct{}), wake: make(chan struct{}, 1), snapshot: Snapshot{SchemaVersion: SchemaVersion, State: "disabled", Config: DefaultConfig(), Preview: Batch{Metrics: []Metric{}}}}
+	m := &Manager{opts: opts, lock: lock, ctx: ctx, cancel: cancel, workerDone: make(chan struct{}), wake: make(chan struct{}, 1), snapshot: Snapshot{SchemaVersion: SchemaVersion, State: "disabled", Config: DefaultConfig(), Preview: Batch{Metrics: []Metric{}}}}
 	if err := m.initUploader(); err != nil {
 		cancel()
 		unlockFile(lock)
@@ -104,15 +99,7 @@ func (m *Manager) Snapshot() Snapshot {
 	defer m.mu.Unlock()
 	s := detached(m.snapshot)
 	s.QueueDepth = len(m.queue)
-	if m.current != nil && m.current.process != nil {
-		select {
-		case <-m.current.process.done:
-			s.State = "error"
-			s.ErrorCode = "telegraf_exited"
-			s.PID = 0
-		default:
-		}
-	}
+
 	return s
 }
 func (m *Manager) Capabilities() Capabilities {
@@ -134,7 +121,7 @@ func (m *Manager) apply(ctx context.Context, c Config) (Snapshot, error) {
 	if c.IntervalSeconds < 5 || c.IntervalSeconds > 60 || len(c.Selections) > 256 {
 		return m.failure(errors.New("invalid_collector_config"))
 	}
-	// Stopping must work even if the Telegraf binary/dependencies disappeared.
+	// Empty selections stop collection without probing dependencies.
 	if len(c.Selections) == 0 {
 		return m.disable(ctx, c)
 	}
@@ -156,36 +143,17 @@ func (m *Manager) apply(ctx context.Context, c Config) (Snapshot, error) {
 	if ctx.Err() != nil {
 		return m.failure(ctx.Err())
 	}
-	// Discovery has already exercised each input. The candidate must additionally
-	// deliver every requested object/field through its actual HTTP output.
-	m.stopCurrent()
-	m.mu.Lock()
-	m.snapshot.State = "applying"
-	m.mu.Unlock()
+	// Prepare and persist while the previous generation continues collecting.
 	candidate, err := m.start(ctx, c, revision)
 	if err == nil {
 		err = m.persist(c, revision)
 	}
 	if err != nil {
-		m.stopGeneration(candidate)
-		if old.PID > 0 && len(old.Config.Selections) > 0 {
-			rollbackCtx, cancel := context.WithTimeout(m.ctx, m.opts.ApplyTimeout)
-			defer cancel()
-			restored, restoreErr := m.start(rollbackCtx, old.Config, old.Revision)
-			if restoreErr != nil {
-				m.stopGeneration(restored)
-				m.mu.Lock()
-				m.snapshot.State = "error"
-				m.snapshot.PID = 0
-				m.snapshot.ErrorCode = "rollback_failed"
-				m.mu.Unlock()
-				return m.Snapshot(), errors.New("rollback_failed")
-			}
-			m.commit(restored)
-		}
 		return m.failure(err)
 	}
+	m.stopCurrent()
 	m.commit(candidate)
+
 	return m.Snapshot(), nil
 }
 func (m *Manager) failure(err error) (Snapshot, error) {
@@ -227,8 +195,6 @@ func (m *Manager) disable(ctx context.Context, c Config) (Snapshot, error) {
 func (m *Manager) commit(g *generation) {
 	m.delivery.Lock()
 	defer m.delivery.Unlock()
-	g.mu.Lock()
-	defer g.mu.Unlock()
 	m.mu.Lock()
 	m.current = g
 	m.snapshot.Config = g.config
@@ -236,7 +202,7 @@ func (m *Manager) commit(g *generation) {
 	m.snapshot.State = "healthy"
 	m.snapshot.ErrorCode = ""
 	m.snapshot.UploadError = ""
-	m.snapshot.PID = g.process.cmd.Process.Pid
+	m.snapshot.PID = os.Getpid()
 	m.snapshot.Preview = Batch{Metrics: []Metric{}}
 	m.snapshot.LastReceivedAt = nil
 	m.snapshot.LastUploadAt = nil
@@ -244,8 +210,11 @@ func (m *Manager) commit(g *generation) {
 	m.snapshot.DroppedMetrics += uint64(queueMetrics(m.queue))
 	m.queue = nil
 	m.mu.Unlock()
-	g.committed = true
 	m.accept(g, g.staged)
+	ctx, cancel := context.WithCancel(m.ctx)
+	g.cancel = cancel
+	g.done = make(chan struct{})
+	go m.collectLoop(ctx, g)
 }
 func randomToken() string {
 	var b [32]byte
@@ -255,138 +224,47 @@ func randomToken() string {
 	return hex.EncodeToString(b[:])
 }
 func (m *Manager) start(ctx context.Context, c Config, revision uint64) (*generation, error) {
-	token := randomToken()
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		return nil, errors.New("collector_listen_failed")
+	ctx, cancel := context.WithTimeout(ctx, m.opts.ApplyTimeout)
+	defer cancel()
+	g := &generation{config: c, revision: revision, core: m.opts.CoreFactory(), native: m.opts.NativeFactory()}
+	batch, _ := gather(ctx, g.core, g.native, selectedSources(c))
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
-	g := &generation{config: c, revision: revision, ready: make(chan struct{}), observed: map[string]bool{}}
-	g.server = &http.Server{ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second, MaxHeaderBytes: 8192}
-	g.server.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" || r.URL.Path != "/v1/collect" {
-			w.WriteHeader(404)
-			return
-		}
-		if r.Header.Get("Origin") != "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
-			w.WriteHeader(401)
-			return
-		}
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
-		if err != nil {
-			w.WriteHeader(413)
-			return
-		}
-		b, err := parseBatch(body)
-		if err != nil {
-			w.WriteHeader(400)
-			return
-		}
-		b = filter(b, c, false)
-		if len(b.Metrics) == 0 {
-			w.WriteHeader(400)
-			return
-		}
-		g.mu.Lock()
-		defer g.mu.Unlock()
-		if g.committed {
-			m.accept(g, b)
-		} else {
-			// Merge first-gather batches until every selected field/object is observed.
-			g.staged = mergePreview(g.staged, b)
-			for _, sel := range c.Selections {
-				for _, sample := range b.Metrics {
-					p := strings.Split(sel.ID, "/")
-					if sample.Name != p[1] {
-						continue
-					}
-					if _, ok := sample.Fields[p[2]]; !ok {
-						continue
-					}
-					if len(sel.Objects) == 0 {
-						g.observed[sel.ID] = true
-					} else {
-						for _, o := range sel.Objects {
-							if sameTags(o, sample.Tags) {
-								g.observed[sel.ID+tagKey(o)] = true
-							}
-						}
-					}
-				}
-			}
-			complete := true
-			for _, sel := range c.Selections {
-				if len(sel.Objects) == 0 {
-					complete = complete && g.observed[sel.ID]
-				} else {
-					for _, o := range sel.Objects {
-						complete = complete && g.observed[sel.ID+tagKey(o)]
-					}
-				}
-			}
-			if complete {
-				select {
-				case <-g.ready:
-				default:
-					close(g.ready)
-				}
-			}
-		}
-		w.WriteHeader(204)
-	})
-	go func() { _ = g.server.Serve(listener) }()
-	data, err := renderConfig(c, "http://"+listener.Addr().String()+"/v1/collect", token)
-	if err == nil {
-		g.path, err = writeTemp(m.exe.dir, data)
+	if err := validate(c, capabilitiesFrom(batch, nil)); err != nil {
+		return nil, err
 	}
-	if err != nil {
-		g.server.Close()
-		return nil, errors.New("config_write_failed")
-	}
-	g.process, err = m.exe.start(g.path)
-	if err != nil {
-		return g, err
-	}
-	timer := time.NewTimer(m.opts.ApplyTimeout)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return g, ctx.Err()
-	case <-m.ctx.Done():
-		return g, errClosed
-	case <-g.process.done:
-		return g, errors.New("telegraf_exited_before_ready")
-	case <-timer.C:
-		return g, errors.New("telegraf_receive_timeout")
-	case <-g.ready:
-	}
-	select {
-	case <-g.process.done:
-		return g, errors.New("telegraf_exited_before_ready")
-	default:
-		return g, nil
-	}
+	g.staged = filter(batch, c, false)
+	return g, nil
 }
-func mergePreview(old, b Batch) Batch {
-	byKey := map[string]Metric{}
-	for _, list := range [][]Metric{old.Metrics, b.Metrics} {
-		for _, sample := range list {
-			key := sample.Name + "\x00" + tagKey(sample.Tags)
-			prev, ok := byKey[key]
-			if ok && prev.Timestamp == sample.Timestamp {
-				for k, v := range sample.Fields {
-					prev.Fields[k] = v
-				}
-				byKey[key] = prev
-			} else {
-				byKey[key] = sample
+func (m *Manager) collectLoop(ctx context.Context, g *generation) {
+	defer close(g.done)
+	ticker := time.NewTicker(time.Duration(g.config.IntervalSeconds) * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		sampleCtx, cancel := context.WithTimeout(ctx, m.opts.ApplyTimeout)
+		batch, reasons := gather(sampleCtx, g.core, g.native, selectedSources(g.config))
+		cancel()
+		if ctx.Err() != nil {
+			return
+		}
+		m.mu.Lock()
+		if m.current == g {
+			m.snapshot.State = "healthy"
+			m.snapshot.ErrorCode = ""
+			if len(reasons) > 0 || validate(g.config, capabilitiesFrom(batch, reasons)) != nil {
+				m.snapshot.State = "error"
+				m.snapshot.ErrorCode = "collector_gather_failed"
 			}
 		}
+		m.mu.Unlock()
+		m.accept(g, filter(batch, g.config, false))
 	}
-	out := Batch{Metrics: []Metric{}}
-	for _, sample := range byKey {
-		out.Metrics = append(out.Metrics, sample)
-	}
-	return out
 }
 func (m *Manager) accept(g *generation, b Batch) {
 	m.mu.Lock()
@@ -395,8 +273,10 @@ func (m *Manager) accept(g *generation, b Batch) {
 		return
 	}
 	now := time.Now()
-	m.snapshot.LastReceivedAt = &now
-	m.snapshot.Preview = mergePreview(m.snapshot.Preview, b)
+	if len(b.Metrics) > 0 {
+		m.snapshot.LastReceivedAt = &now
+	}
+	m.snapshot.Preview = detached(b)
 	upload := filter(b, g.config, true)
 	if len(upload.Metrics) > 0 {
 		m.enqueueLocked(upload, g.revision, now)
@@ -406,12 +286,9 @@ func (m *Manager) stopGeneration(g *generation) {
 	if g == nil {
 		return
 	}
-	g.process.stop()
-	if g.server != nil {
-		_ = g.server.Close()
-	}
-	if g.path != "" {
-		_ = os.Remove(g.path)
+	if g.cancel != nil {
+		g.cancel()
+		<-g.done
 	}
 }
 func (m *Manager) stopCurrent() {
@@ -455,7 +332,7 @@ func (m *Manager) persist(c Config, rev uint64) error {
 	return nil
 }
 
-// Restore applies the last committed model using a fresh process and fresh local credential.
+// Restore applies the last committed selection using fresh in-process collectors.
 func (m *Manager) Restore(ctx context.Context) error {
 	m.op.Lock()
 	defer m.op.Unlock()

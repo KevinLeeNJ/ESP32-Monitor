@@ -64,7 +64,7 @@ func (m *Manager) trimQueueLocked(now time.Time) {
 	}
 }
 func (m *Manager) enqueueLocked(b Batch, rev uint64, at time.Time) {
-	// Telegraf output accepts immediately; only this bounded Agent queue retries.
+	// Collection never waits for transport; this bounded Agent queue retries.
 	m.queue = append(m.queue, queued{batch: detached(b), revision: rev, at: at})
 	m.trimQueueLocked(at)
 	select {
@@ -103,7 +103,7 @@ func (m *Manager) deliver() {
 	}
 	m.mu.Unlock()
 	body, _ := json.Marshal(q.batch)
-	if len(body) > maxBody {
+	if len(body) > maxBody || len(q.batch.Metrics) > 100 {
 		m.finishDelivery(q, 413, nil)
 		return
 	}

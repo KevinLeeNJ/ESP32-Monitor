@@ -66,7 +66,7 @@ func New(c config.Config, cacheDir string) (*Application, error) {
 			}
 			dir = filepath.Join(base, "ESP32-Monitor", "collector")
 		}
-		manager, e := collector.New(collector.Options{Executable: c.Collector.Executable, StateDirectory: dir, UploadURL: c.Collector.UploadURL, UploadToken: collector.TokenFile(c.Collector.UploadTokenFile)})
+		manager, e := collector.New(collector.Options{StateDirectory: dir, UploadURL: c.Collector.UploadURL, UploadToken: collector.TokenFile(c.Collector.UploadTokenFile)})
 		if e != nil {
 			_ = application.Close()
 			return nil, e
