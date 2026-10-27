@@ -24,9 +24,9 @@ func TestCPUDeltasAndCounterReset(t *testing.T) {
 		t.Fatal("counter reset fabricated CPU sample")
 	}
 }
-func TestNativeStubNeverProducesMetrics(t *testing.T) {
-	batch, reasons := newNativeCollector().Gather(context.Background(), []string{"platform_sensors"})
-	if len(batch.Metrics) != 0 || reasons["platform_sensors"] != "native_collector_stub" {
+func TestNativeUnknownSourceNeverProducesMetrics(t *testing.T) {
+	batch, reasons := newNativeCollector().Gather(context.Background(), []string{"unknown_source"})
+	if len(batch.Metrics) != 0 || reasons["unknown_source"] == "" {
 		t.Fatal("stub fabricated metrics")
 	}
 }
@@ -72,8 +72,26 @@ func TestPersistenceFailureKeepsLiveGeneration(t *testing.T) {
 	if err := os.Mkdir(path, 0700); err != nil {
 		t.Fatal(err)
 	}
-	_, err = m.Apply(context.Background(), cfg("cpu/cpu/usage_idle", false))
+	_, err = m.Apply(context.Background(), cfg("cpu/cpu/usage_active", false))
 	if err == nil || m.current != current || m.Snapshot().Revision != first.Revision || m.Snapshot().State != "healthy" {
 		t.Fatalf("failed persist replaced live config: %v %+v", err, m.Snapshot())
+	}
+}
+
+func TestRatesAndScope(t *testing.T) {
+	c := &CoreCollector{}
+	c.rates = map[string]rateSample{"net" + tagKey(map[string]string{"interface": "en0"}): {at: time.Now().Add(-time.Second), values: map[string]float64{"bytes_sent": 100, "bytes_recv": 200}}}
+	b := c.restrictAndRate(Batch{Metrics: []Metric{
+		{Name: "net", Tags: map[string]string{"interface": "en0"}, Fields: map[string]float64{"bytes_sent": 200, "bytes_recv": 100}},
+		{Name: "cpu", Tags: map[string]string{}, Fields: map[string]float64{"usage_active": 20, "usage_idle": 80}},
+	}})
+	if len(b.Metrics) != 2 || b.Metrics[0].Fields["upload_bytes_per_second"] <= 0 {
+		t.Fatalf("rate: %+v", b)
+	}
+	if _, ok := b.Metrics[0].Fields["download_bytes_per_second"]; ok {
+		t.Fatal("counter reset produced a rate")
+	}
+	if _, ok := b.Metrics[1].Fields["usage_idle"]; ok {
+		t.Fatal("out of scope field retained")
 	}
 }

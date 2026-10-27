@@ -50,7 +50,7 @@ func newHelper(t *testing.T, uploadURL string) *Manager {
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	m, err := New(Options{CoreFactory: func() Collector { return &testCollector{dir} }, StateDirectory: dir, UploadURL: uploadURL, UploadToken: func(context.Context) (string, error) { return strings.Repeat("a", 64), nil }, ApplyTimeout: time.Second, HTTPClient: &http.Client{Timeout: time.Second}})
+	m, err := New(Options{CoreFactory: func() Collector { return &testCollector{dir} }, NativeFactory: func() Collector { return &NativeCollector{} }, StateDirectory: dir, UploadURL: uploadURL, UploadToken: func(context.Context) (string, error) { return strings.Repeat("a", 64), nil }, ApplyTimeout: time.Second, HTTPClient: &http.Client{Timeout: time.Second}})
 	if err != nil {
 		t.Fatal(err)
 	}
