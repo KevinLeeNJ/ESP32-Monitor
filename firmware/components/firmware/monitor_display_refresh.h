@@ -15,6 +15,8 @@ enum {
     MONITOR_REFRESH_DEVICES = 1U << 5,
     MONITOR_REFRESH_RECOVER = 1U << 4,
     MONITOR_REFRESH_LVGL = 1U << 6,
+    MONITOR_REFRESH_PAGE_NEXT = 1U << 7,
+    MONITOR_REFRESH_PAGE_PREVIOUS = 1U << 8,
 };
 
 /* Periodic data stays cached until the next shared clock boundary. Recovery
@@ -22,7 +24,8 @@ enum {
 static inline bool monitor_display_refresh_should_render(uint32_t reasons, bool clock_valid)
 {
     return !clock_valid || (reasons & (MONITOR_REFRESH_CLOCK | MONITOR_REFRESH_WIFI |
-                                      MONITOR_REFRESH_RECOVER | MONITOR_REFRESH_LVGL)) != 0;
+                                      MONITOR_REFRESH_RECOVER | MONITOR_REFRESH_LVGL |
+                                      MONITOR_REFRESH_PAGE_NEXT | MONITOR_REFRESH_PAGE_PREVIOUS)) != 0;
 }
 
 /* Register the current task as the sole owner of display rendering. */

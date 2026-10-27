@@ -55,6 +55,15 @@ static void xTaskNotifyFromISR(void *task, unsigned bit, int, int *wake) {
 static void portYIELD_FROM_ISR() { ++yields; }
 '''
 task_prefix = r'''
+#include "monitor_page_buttons.h"
+#define MONITOR_REFRESH_PAGE_NEXT 128U
+#define MONITOR_REFRESH_PAGE_PREVIOUS 256U
+static unsigned page_next, page_previous;
+static void monitor_display_refresh_request_reason(unsigned reason) {
+    if (reason == MONITOR_REFRESH_PAGE_NEXT) ++page_next;
+    if (reason == MONITOR_REFRESH_PAGE_PREVIOUS) ++page_previous;
+}
+
 #define ESP_OK 0
 #define GPIO_MODE_INPUT 0
 #define GPIO_PULLUP_ENABLE 1
@@ -147,17 +156,24 @@ int main() {
 task_tests = r'''
 static void scenario(std::vector<Event> events, unsigned profiles, unsigned configs,
                      uint64_t start = 0, bool boot = false, bool key = false) {
-    config_actions = profile_actions = 0; elapsed_ms = start; position = 0;
+    config_actions = profile_actions = page_next = page_previous = 0; elapsed_ms = start; position = 0;
     timeline = events; pins[0].level = !boot; pins[18].level = !key;
     if (!setjmp(finished)) button_task(nullptr);
     assert(profile_actions == profiles * CONFIG_MONITOR_PM_PROFILE && config_actions == configs);
 }
 int main() {
     irq_main();
-    scenario({{100,false,true},{1000,false,false}}, 0, 0); // Short press.
+    scenario({{100,false,true},{500,false,false}}, 0, 0); // KEY previous
+    assert(page_previous == 1 && page_next == 0);
+    scenario({{100,true,false},{500,false,false}}, 0, 0); // BOOT next
+    assert(page_next == 1 && page_previous == 0);
+    scenario({{100,false,true},{1000,false,false}}, 0, 0);
+    assert(page_previous == 1);
     scenario({{100,false,true},{10000,false,false}}, 1, 0); // Long hold fires once.
+    assert(page_next == 0 && page_previous == 0);
     scenario({{100,false,true},{4000,false,false},{5000,false,true},{9000,false,false}}, 2, 0);
     scenario({{100,false,true},{1000,true,true},{6000,false,true},{11000,false,false}}, 0, 1);
+    assert(page_next == 0 && page_previous == 0);
     scenario({{100,true,false},{1000,true,true},{6000,false,true},{11000,false,false}}, 0, 1);
     scenario({{100,true,false},{5000,false,false}}, 0, 0);
     scenario({{5000,false,false}}, 1, 0, 0, false, true); // Already held at task startup.
@@ -173,6 +189,6 @@ with tempfile.TemporaryDirectory() as temp:
                                      f'#define CONFIG_MONITOR_PM_PROFILE {enabled}')
         unit.write_text(prefix + config + function('button_gpio_isr') + function('configure_wake_levels') +
                         function('button_task') + tests.replace('int main()', 'static void irq_main()') + task_tests)
-        subprocess.run(['c++', '-std=c++17', '-Wall', '-Wextra', '-Werror', str(unit), '-o', str(Path(temp) / 'test')], check=True)
+        subprocess.run(['c++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-I', str(repo / 'firmware/components/firmware'), str(unit), '-o', str(Path(temp) / 'test')], check=True)
         subprocess.run([str(Path(temp) / 'test')], check=True)
 print('Button IRQ and gesture regression passed with profiling enabled/disabled: bounce, rearm, KEY/chord priority, repeat holds, startup holds and tick wrap')

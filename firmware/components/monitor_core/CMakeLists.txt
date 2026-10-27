@@ -6,6 +6,7 @@ idf_component_register(
         "../../src/display/monitor_render.c"
         "../../app/ui/monitor_ui.c"
         "../../app/ui/monitor_activity.c"
+        "../../app/ui/monitor_pages.c"
         "../../app/ui/activity_assets.c"
         "../../app/ui/weather_assets.c"
         "../../app/ui/fonts/monitor_misans_8.c"

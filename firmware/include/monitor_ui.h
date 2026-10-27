@@ -114,6 +114,7 @@ typedef struct {
     uint8_t levels[MONITOR_ACTIVITY_WEEKS * MONITOR_ACTIVITY_DAYS];
     /* Date of the first Monday column; year=0 omits month labels. */
     int github_start_year, github_start_month, github_start_day;
+    bool github_available;
     monitor_task_state_t agent_state;
     /* Usage percentages, or -1 if unavailable. */
     int usage_5h_percent, usage_week_percent;
@@ -123,6 +124,8 @@ typedef struct {
     /* Seconds, or -1 if unavailable. */
     int music_position_seconds, music_duration_seconds;
 } monitor_activity_data_t;
+/* Fixed sample data shared by the simulator and the hardware preview. */
+monitor_activity_data_t monitor_activity_demo(void);
 lv_obj_t *monitor_activity_create(lv_obj_t *parent, const monitor_activity_data_t *data,
                                   monitor_frame_variant_t variant);
 

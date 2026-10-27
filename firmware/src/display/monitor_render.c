@@ -1,4 +1,5 @@
 #include "monitor_render.h"
+#include "monitor_pages.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -99,6 +100,8 @@ bool monitor_renderer_render(monitor_renderer_t *renderer)
 {
     if(renderer == NULL || renderer->display == NULL) return false;
     lv_display_set_default(renderer->display);
+    monitor_pages_t *pages = monitor_pages_from_first(renderer->root);
+    if(monitor_pages_compose(pages, renderer->packed, &renderer->dirty)) return true;
     lv_display_refr_timer(NULL);
     return true;
 }
@@ -115,7 +118,11 @@ bool monitor_renderer_rebuild(monitor_renderer_t *renderer,
                               monitor_screen_factory_t create_screen)
 {
     if(renderer == NULL || renderer->display == NULL || create_screen == NULL) return false;
-    if(renderer->root != NULL) lv_obj_delete(renderer->root);
+    if(renderer->root != NULL) {
+        /* The page controller owns the first screen's viewport as a sibling. */
+        lv_obj_t *old = monitor_pages_from_first(renderer->root) ? lv_obj_get_parent(renderer->root) : renderer->root;
+        lv_obj_delete(old);
+    }
     renderer->root = create_screen(lv_screen_active());
     renderer->force_full = true;
     return renderer->root != NULL;

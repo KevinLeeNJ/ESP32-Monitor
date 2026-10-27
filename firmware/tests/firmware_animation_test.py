@@ -138,6 +138,14 @@ static int send_data(rlcd_port_t *p,const uint8_t *data,size_t len) {
 }
 static int send_data1(rlcd_port_t *p,uint8_t data) { return send_data(p,&data,1); }
 static lv_obj_t *monitor_lvgl_root(monitor_lvgl_t *r) { return &r->root; }
+typedef struct monitor_pages monitor_pages_t;
+static monitor_pages_t *monitor_pages_from_first(lv_obj_t *r) { (void)r; return NULL; }
+static bool monitor_pages_active(const monitor_pages_t *p) { (void)p; return false; }
+static void monitor_pages_resume(monitor_pages_t *p) { (void)p; }
+typedef struct { int unused; } page_perf_t;
+static int commit_page_timed(monitor_lvgl_t *, monitor_pages_t *, page_perf_t *);
+static void report_page_perf(const page_perf_t *p) { (void)p; }
+static void monitor_pages_settle(monitor_pages_t *p) { (void)p; }
 static bool monitor_ui_animation_active(lv_obj_t *r) { return r->remaining>0; }
 static void monitor_ui_set_animations_enabled(lv_obj_t *r,bool enabled) { if(!enabled) r->remaining=0; }
 static void monitor_ui_advance(lv_obj_t *r,uint32_t elapsed) { assert(elapsed>=31); if(r->remaining) r->remaining--; }
@@ -149,6 +157,9 @@ static int commit_monitor_frame(monitor_lvgl_t *r) {
     if(!draws) first_draw=tick;
     wait_panel_frame(p);
     tick+=7; draws++; return draws==failed_draw ? ESP_FAIL : ESP_OK;
+}
+static int commit_page_timed(monitor_lvgl_t *r, monitor_pages_t *p, page_perf_t *perf) {
+    (void)p; (void)perf; return commit_monitor_frame(r);
 }
 static void monitor_clock_get_text(char *t,size_t n,char *d,size_t dn) {
     snprintf(t,n,"00:%02u",(tick/60000)%60); snprintf(d,dn,"DATE");

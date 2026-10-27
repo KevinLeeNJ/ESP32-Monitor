@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 
 #include "monitor_render.h"
+#include "monitor_pages.h"
 #include "png_writer.h"
 #include "scene_registry.h"
 #include "sha256.h"
@@ -112,11 +113,17 @@ static int export_animation(monitor_renderer_t *renderer, const char *out_dir, c
                                  MONITOR_FRAME_NORMAL, preview);
         if (!monitor_write_rgb565_png(path, preview, MONITOR_DISPLAY_WIDTH, MONITOR_DISPLAY_HEIGHT)) break;
         ++frames;
-        if (!monitor_ui_animation_active(renderer->root)) { free(preview); return frames; }
+        monitor_pages_t *pages = monitor_pages_from_first(renderer->root);
+        if (!monitor_ui_animation_active(renderer->root) && !monitor_pages_active(pages)) { free(preview); return frames; }
         if (frames >= 128) break;
-        monitor_ui_advance(renderer->root,
-            monitor_animation_frame_time((uint32_t)frames, 1000) -
-            monitor_animation_frame_time((uint32_t)frames - 1U, 1000));
+        uint32_t step = monitor_animation_frame_time((uint32_t)frames, 1000) -
+                        monitor_animation_frame_time((uint32_t)frames - 1U, 1000);
+        monitor_ui_advance(renderer->root, step);
+        if(monitor_pages_active(pages)) {
+            lv_tick_inc(step);
+            lv_anim_refr_now();
+            lv_timer_handler();
+        }
     }
     free(preview);
     return -1;
