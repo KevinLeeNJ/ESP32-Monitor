@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"esp32-monitor/client/internal/transport/wire"
 	"fmt"
@@ -167,11 +166,10 @@ func pairCode(dn, hn, d, h, p string) string {
 	return fmt.Sprintf("%06d", binary.BigEndian.Uint32(x.Sum(nil)[:4])%1000000)
 }
 func (p *pairingServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", wire.ContentType)
 	w.Header().Set("Cache-Control", "no-store")
 	fail := func(code string, status int) {
-		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(wire.Failure(code, nil))
+		writeProto(w, status, wire.Failure(code, nil))
 	}
 	size := len(r.Method) + len(r.RequestURI) + len(r.Proto) + 4
 	for k, vs := range r.Header {
@@ -200,11 +198,15 @@ func (p *pairingServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/companion/v1/capabilities" && r.Method == "GET" {
-		_ = json.NewEncoder(w).Encode(p.service.capabilitiesLocked())
+		writeProto(w, http.StatusOK, p.service.capabilitiesLocked())
 		return
 	}
 	if r.URL.Path != "/companion/v1/pair" || r.Method != "POST" {
 		fail("invalid_message", 404)
+		return
+	}
+	if r.Header.Get("Content-Type") != wire.ContentType {
+		fail("invalid_message", 415)
 		return
 	}
 	if r.Header.Get("Content-Encoding") != "" && r.Header.Get("Content-Encoding") != "identity" {
@@ -225,6 +227,7 @@ func (p *pairingServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail("unsupported_version", 426)
 		return
 	}
+	status := http.StatusOK
 	switch req.Step {
 	case "begin":
 		if req.DeviceID != win.deviceID || !wire.Text(req.DeviceName, 64) || req.DeviceName == "" {
@@ -263,7 +266,7 @@ func (p *pairingServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			win.request = req
 			win.response = &wire.PairResponse{ProtocolVersion: 1, PairingID: wire.NewID(), State: "pending", HostID: p.service.store.HostID(), HostName: p.service.opts.HostName, HostNonce: wire.Nonce(), PairingTicket: wire.Nonce()}
 		}
-		w.WriteHeader(201)
+		status = http.StatusCreated
 	case "status", "confirm":
 		if win.response == nil || req.PairingID != win.response.PairingID || subtle.ConstantTimeCompare([]byte(req.PairingTicket), []byte(win.response.PairingTicket)) != 1 {
 			fail("unauthorized", 401)
@@ -276,7 +279,7 @@ func (p *pairingServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			win.lastStatus = time.Now()
-			w.WriteHeader(202)
+			status = http.StatusAccepted
 		} else {
 			if !req.DeviceConfirmed {
 				fail("invalid_message", 400)
@@ -294,8 +297,18 @@ func (p *pairingServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	response := *win.response
 	response.ExpiresInMS = max(0, time.Until(win.expires).Milliseconds())
-	_ = json.NewEncoder(w).Encode(response)
+	writeProto(w, status, response)
+}
+func writeProto(w http.ResponseWriter, status int, value any) {
+	data, err := wire.Marshal(value)
+	if err != nil || len(data) > 4096 {
+		status = http.StatusInternalServerError
+		data, _ = wire.Marshal(wire.Failure("internal_error", nil))
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write(data)
 }
 func (b *Backend) capabilitiesLocked() any {
-	return map[string]any{"protocol_version": 1, "supported_versions": []int{1}, "host_id": b.store.HostID(), "host_name": b.opts.HostName, "app_version": "1.0.0", "pairing_open": true, "transports": []string{"lan", "serial"}, "features": []string{"proxy_config_v1", "mqtt311_lan"}, "max_snapshot_bytes": 16384, "mqtt": map[string]any{"protocol": "3.1.1", "port": b.mqttPort(), "tls": false, "keep_alive_seconds": 60, "idle_heartbeat_ms": 30000, "live_heartbeat_ms": 10000, "disconnect_timeout_ms": 90000}}
+	return wire.Capabilities{ProtocolVersion: 1, SupportedVersions: []int{1}, HostID: b.store.HostID(), HostName: b.opts.HostName, AppVersion: "1.0.0", PairingOpen: true, Transports: []string{"lan", "serial"}, Features: []string{"proxy_config_v1", "mqtt311_lan", "protobuf_v2"}, MaxSnapshotBytes: 16384,
+		MQTT: wire.MQTTCapabilities{Protocol: "3.1.1", Port: b.mqttPort(), KeepAliveSeconds: 60, IdleHeartbeatMS: 30000, LiveHeartbeatMS: 10000, DisconnectTimeoutMS: 90000}}
 }

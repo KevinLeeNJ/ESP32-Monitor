@@ -2,7 +2,6 @@ package transport
 
 import (
 	"context"
-	"encoding/json"
 	"esp32-monitor/client/internal/transport/wire"
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/packets"
@@ -79,7 +78,7 @@ func TestConfigTransactionsNeverPartiallyApply(t *testing.T) {
 		}
 	}()
 	send := func(c wire.Config, seq uint32) error {
-		data, _ := json.Marshal(c)
+		data, _ := wire.Marshal(c)
 		return s.handle(b, incoming{topic: "proxy-config", data: data, seq: seq})
 	}
 	if e := send(cfg, 1); e != nil {

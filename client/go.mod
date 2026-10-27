@@ -7,6 +7,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.3
 	go.bug.st/serial v1.6.4
 	golang.org/x/sys v0.28.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (

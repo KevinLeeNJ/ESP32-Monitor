@@ -1,7 +1,5 @@
 package wire
 
-import "encoding/json"
-
 type Error struct {
 	ProtocolVersion int         `json:"protocol_version"`
 	RequestID       *string     `json:"request_id"`
@@ -77,14 +75,14 @@ type Session struct {
 	ConfigRequired      bool   `json:"config_required"`
 }
 type Control struct {
-	ProtocolVersion int             `json:"protocol_version"`
-	HostID          string          `json:"host_id"`
-	DeviceID        string          `json:"device_id"`
-	SessionID       string          `json:"session_id"`
-	Seq             uint32          `json:"seq"`
-	SentAt          int64           `json:"sent_at"`
-	RequestID       *string         `json:"request_id"`
-	Data            json.RawMessage `json:"data"`
+	ProtocolVersion int     `json:"protocol_version"`
+	HostID          string  `json:"host_id"`
+	DeviceID        string  `json:"device_id"`
+	SessionID       string  `json:"session_id"`
+	Seq             uint32  `json:"seq"`
+	SentAt          int64   `json:"sent_at"`
+	RequestID       *string `json:"request_id"`
+	Data            []byte  `json:"data"`
 }
 type Config struct {
 	ProtocolVersion int           `json:"protocol_version"`
