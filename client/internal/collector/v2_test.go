@@ -51,6 +51,7 @@ func (f *v2Fixture) Gather(_ context.Context, ids []string) (Batch, map[string]s
 		case "cpu":
 			add(id, map[string]string{"cpu": "cpu-total"}, map[string]float64{"usage_active": 12.5})
 			add(id, map[string]string{"cpu": "cpu0"}, map[string]float64{"usage_active": 0})
+			add(id, map[string]string{"cpu": "cpu1"}, map[string]float64{"usage_active": 33})
 		case "mem":
 			if !f.missing.Load() {
 				add(id, map[string]string{}, map[string]float64{"used_percent": 62, "used": 0})
@@ -73,6 +74,8 @@ func (f *v2Fixture) Gather(_ context.Context, ids []string) (Batch, map[string]s
 			add(id, map[string]string{"name": "disk0"}, map[string]float64{"read_bytes_per_second": 0, "write_bytes_per_second": 0})
 		case "darwin_disk":
 			add(id, map[string]string{"device": "disk0"}, map[string]float64{"smart_healthy": 0, "smart_media_errors": 0})
+		case "darwin_disk_usage":
+			add(id, map[string]string{"device": "disk0"}, map[string]float64{"used": 1234})
 		case "disk":
 			add(id, map[string]string{"device": "disk0s1", "path": "/", "fstype": "apfs"}, map[string]float64{"used": 0})
 		case "darwin_battery":
@@ -194,7 +197,7 @@ func TestV2ProfileRetrySelectionAndStartupCache(t *testing.T) {
 		t.Error("profile repeated")
 	}
 	lock.Unlock()
-	c.Upload.Optional = append(c.Upload.Optional, v2.UploadSelection{Metric: "memory.used"})
+	c.Upload.Optional = append(c.Upload.Optional, v2.UploadSelection{Metric: "cpu.load1"})
 	if _, e := m.Apply(context.Background(), c); e != nil {
 		t.Fatal(e)
 	}
@@ -230,13 +233,13 @@ func TestV2SevenCategoriesAndMissingRequired(t *testing.T) {
 		c.Upload.Optional = append(c.Upload.Optional, v2.UploadSelection{Metric: key})
 	}
 	ids := map[string]uint16{}
-	for _, kind := range []string{"core", "gpu", "drive", "volume", "interface", "battery", "fan"} {
+	for _, kind := range []string{"core", "gpu", "drive", "interface", "battery", "fan"} {
 		for id := range m.v2.objectsOfKind(kind) {
 			ids[kind] = id
 			break
 		}
 	}
-	for key, kind := range map[string]string{"gpu.usage": "gpu", "gpu.temperature": "gpu", "drive.read_rate": "drive", "drive.write_rate": "drive", "drive.smart_health": "drive", "drive.smart_attribute": "drive", "volume.used": "volume", "interface.download_rate": "interface", "interface.ipv4": "interface", "battery.level": "battery", "battery.charging": "battery", "fan.rpm": "fan"} {
+	for key, kind := range map[string]string{"gpu.usage": "gpu", "gpu.temperature": "gpu", "drive.read_rate": "drive", "drive.write_rate": "drive", "drive.smart_health": "drive", "drive.smart_attribute": "drive", "drive.used": "drive", "interface.download_rate": "interface", "interface.ipv4": "interface", "battery.level": "battery", "battery.charging": "battery", "fan.rpm": "fan"} {
 		s := v2.UploadSelection{Metric: key, Objects: []uint16{ids[kind]}}
 		if key == "drive.smart_attribute" {
 			s.Detail = []uint16{4}
@@ -260,7 +263,7 @@ func TestV2SevenCategoriesAndMissingRequired(t *testing.T) {
 		}
 	}
 	p := m.profileV2(c)
-	if p.Inventory.CPU != nil || p.Inventory.OS != nil || p.Inventory.MemoryTotal != nil || p.Inventory.Drives[0].Model != nil {
+	if p.Inventory.CPU != nil || p.Inventory.OS != nil || p.Inventory.MemoryTotal == nil || p.Inventory.Drives[0].Model != nil {
 		t.Fatal("unselected fixed info leaked")
 	}
 	for n := range b.Metrics {
@@ -286,7 +289,7 @@ func TestV2MinimalAndPatchDoesNotRepeatMetadata(t *testing.T) {
 	}
 	s.Timestamp = 1793059200
 	body, _ := json.Marshal(v2.SampleBatch{Revision: 12, ID: "0123456789abcdef0123456789abcdef", Samples: []v2.Sample{s}})
-	if len(body) != 99 {
+	if !strings.Contains(string(body), `"mem":{"u":"0"}`) {
 		t.Fatalf("minimum batch grew: %s", body)
 	}
 	before := v2.Profile{Version: 2, IntervalSeconds: 5, Enabled: []v2.UploadSelection{}, Inventory: v2.Inventory{CPU: &v2.CPUInfo{Model: ptr("cpu")}, Drives: []v2.DriveInfo{{ID: 2, Model: ptr("ssd"), TotalBytes: ptr(uint64(100))}}}}
@@ -302,8 +305,8 @@ func TestV2MinimalAndPatchDoesNotRepeatMetadata(t *testing.T) {
 	if len(ops) != 1 || ops[0].Path != "/inventory/drives/-" {
 		t.Fatalf("existing object retransmitted: %+v", ops)
 	}
-	if !reflect.DeepEqual(m.profileV2(c).Inventory, v2.Inventory{}) {
-		t.Fatal("minimum profile has fixed info")
+	if !reflect.DeepEqual(m.profileV2(c).Inventory, v2.Inventory{MemoryTotal: ptr(uint64(8192))}) {
+		t.Fatal("minimum profile should contain only memory total")
 	}
 }
 
@@ -406,7 +409,249 @@ func TestV2OptionalFailureDoesNotSuppressMandatorySample(t *testing.T) {
 		}
 	}
 	sample, err := m.sampleV2(c, batch)
-	if err != nil || sample.CPUUsage == nil || sample.CPU != nil || sample.Memory != nil {
+	if err != nil || sample.CPUUsage == nil || sample.CPU != nil || sample.Memory == nil || sample.Memory.Used == nil || sample.Memory.Pressure != nil {
 		t.Fatalf("optional failure blocked core data: %+v %v", sample, err)
+	}
+}
+
+func TestV2BatteryUploadIsBundled(t *testing.T) {
+	m := newV2Fixture(t, "http://127.0.0.1:1/v2/collector/samples", "", &atomic.Int32{}, &atomic.Bool{})
+	id := m.v2.inventory.Batteries[0].ID
+	for _, key := range []string{"battery.level", "battery.charging"} {
+		t.Run(key, func(t *testing.T) {
+			c, err := m.prepareV2(v2Config(v2.UploadSelection{Metric: key, Objects: []uint16{id}}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []v2.UploadSelection{{Metric: "battery.charging", Objects: []uint16{id}}, {Metric: "battery.level", Objects: []uint16{id}}}
+			if !reflect.DeepEqual(c.Upload.Optional, want) {
+				t.Fatalf("battery upload split: %+v", c.Upload.Optional)
+			}
+			batch, _ := m.opts.CoreFactory().Gather(context.Background(), allSources())
+			sample, err := m.sampleV2(c, batch)
+			if err != nil || len(sample.Batteries) != 1 || sample.Batteries[0].Level == nil || sample.Batteries[0].Charging == nil {
+				t.Fatalf("incomplete battery sample: %+v %v", sample, err)
+			}
+			if *sample.Batteries[0].Level != 0 || *sample.Batteries[0].Charging {
+				t.Fatal("real zero/false changed")
+			}
+			for n := range batch.Metrics {
+				if batch.Metrics[n].Name == "darwin_battery" {
+					delete(batch.Metrics[n].Fields, "charging")
+				}
+			}
+			sample, err = m.sampleV2(c, batch)
+			if err != nil || len(sample.Batteries) != 0 || sample.CPUUsage == nil {
+				t.Fatalf("partial battery must be omitted without suppressing mandatory metrics: %+v %v", sample, err)
+			}
+		})
+	}
+	upload := &v2.UploadConfig{Optional: []v2.UploadSelection{{Metric: "battery.level", Objects: []uint16{2}}, {Metric: "battery.charging", Objects: []uint16{1}}}}
+	bundleBatterySelections(upload)
+	if !reflect.DeepEqual(upload.Optional[0].Objects, []uint16{1, 2}) || !reflect.DeepEqual(upload.Optional[0].Objects, upload.Optional[1].Objects) {
+		t.Fatalf("paired objects differ: %+v", upload.Optional)
+	}
+}
+
+func TestV2MetricBundlesExpandOnlyObservedFields(t *testing.T) {
+	caps := &V2Capabilities{Metrics: []V2Metric{
+		{Metric: "cpu.model", Available: true}, {Metric: "cpu.physical_cores", Available: true}, {Metric: "cpu.logical_cores", Available: true}, {Metric: "cpu.performance_cores", Available: true}, {Metric: "cpu.efficiency_cores", Available: false},
+		{Metric: "cpu.load1", Available: true}, {Metric: "cpu.load5", Available: true}, {Metric: "cpu.load15", Available: true},
+		{Metric: "memory.app", Available: true}, {Metric: "memory.wired", Available: true}, {Metric: "memory.compressed", Available: true},
+		{Metric: "memory.swap_total", Available: true}, {Metric: "memory.swap_used", Available: true},
+		{Metric: "drive.model", Available: true, Objects: []uint16{7}}, {Metric: "drive.total", Available: true, Objects: []uint16{7}}, {Metric: "drive.used", Available: true, Objects: []uint16{7}},
+		{Metric: "drive.read_rate", Available: true}, {Metric: "drive.write_rate", Available: true},
+		{Metric: "interface.medium", Available: true}, {Metric: "interface.up", Available: true}, {Metric: "interface.upload_rate", Available: true}, {Metric: "interface.download_rate", Available: true},
+		{Metric: "interface.ipv4", Available: true}, {Metric: "network.public_ipv4", Available: true},
+		{Metric: "system.os", Available: true}, {Metric: "system.product", Available: true},
+	}}
+	upload := &v2.UploadConfig{Enabled: true, Optional: []v2.UploadSelection{
+		{Metric: "cpu.model"}, {Metric: "cpu.load5"}, {Metric: "memory.app"}, {Metric: "memory.swap_used"},
+		{Metric: "interface.up", Objects: []uint16{4}}, {Metric: "interface.download_rate", Objects: []uint16{4}}, {Metric: "interface.ipv4", Objects: []uint16{4}},
+		{Metric: "drive.used", Objects: []uint16{7}}, {Metric: "drive.write_rate", Objects: []uint16{7}},
+		{Metric: "system.os"},
+	}}
+	bundleAvailableSelections(upload, caps)
+	got := map[string]v2.UploadSelection{}
+	for _, selection := range upload.Optional {
+		if _, ok := got[selection.Metric]; ok {
+			t.Fatalf("duplicate selection: %s", selection.Metric)
+		}
+		got[selection.Metric] = selection
+	}
+	for _, key := range []string{"cpu.model", "cpu.physical_cores", "cpu.logical_cores", "cpu.performance_cores", "cpu.load1", "cpu.load5", "cpu.load15", "memory.app", "memory.wired", "memory.compressed", "memory.swap_total", "memory.swap_used", "drive.model", "drive.total", "drive.used", "drive.read_rate", "drive.write_rate", "interface.medium", "interface.up", "interface.upload_rate", "interface.download_rate", "interface.ipv4", "network.public_ipv4", "system.os", "system.product"} {
+		selection, ok := got[key]
+		if !ok {
+			t.Errorf("missing bundled member %s", key)
+			continue
+		}
+		if strings.HasPrefix(key, "interface.") && !reflect.DeepEqual(selection.Objects, []uint16{4}) {
+			t.Errorf("object mismatch for %s: %v", key, selection.Objects)
+		}
+	}
+	if _, ok := got["cpu.efficiency_cores"]; ok {
+		t.Fatal("unavailable field was invented")
+	}
+	for _, key := range []string{"drive.read_rate", "drive.write_rate"} {
+		if !reflect.DeepEqual(got[key].Objects, []uint16{7}) {
+			t.Errorf("drive object mismatch for %s", key)
+		}
+	}
+	if len(got["network.public_ipv4"].Objects) != 0 {
+		t.Fatal("global public IP was assigned an interface")
+	}
+}
+
+func TestV2ApplyGroupsCPUInfoUsingDiscoveredCapabilities(t *testing.T) {
+	m := newV2Fixture(t, "http://127.0.0.1:1/v2/collector/samples", "", &atomic.Int32{}, &atomic.Bool{})
+	snapshot, err := m.Apply(context.Background(), v2Config(v2.UploadSelection{Metric: "cpu.model"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{}
+	for _, selection := range snapshot.Config.Upload.Optional {
+		names = append(names, selection.Metric)
+	}
+	if !reflect.DeepEqual(names, []string{"cpu.logical_cores", "cpu.model", "cpu.physical_cores"}) {
+		t.Fatalf("group expansion did not use observed capabilities: %v", names)
+	}
+}
+
+func TestV2PerCoreSelectionAlwaysIncludesEveryObservedCore(t *testing.T) {
+	caps := &V2Capabilities{Inventory: v2.Inventory{Cores: []v2.CoreInfo{{ID: 2, Index: 1}, {ID: 1, Index: 0}}}, Metrics: []V2Metric{{Metric: "core.usage", Available: true, Objects: []uint16{1, 2}}}}
+	upload := &v2.UploadConfig{Enabled: true, Optional: []v2.UploadSelection{{Metric: "core.usage", Objects: []uint16{1}}}}
+	if err := selectAllAvailableCores(upload, caps); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(upload.Optional[0].Objects, []uint16{1, 2}) {
+		t.Fatalf("subset selected: %+v", upload.Optional)
+	}
+	caps.Metrics[0].Objects = []uint16{1}
+	if err := selectAllAvailableCores(upload, caps); err == nil {
+		t.Fatal("unavailable core was silently omitted")
+	}
+}
+
+func TestV2PairedRatesOmitPartialReadings(t *testing.T) {
+	m := newV2Fixture(t, "http://127.0.0.1:1/v2/collector/samples", "", &atomic.Int32{}, &atomic.Bool{})
+	drive := m.v2.inventory.Drives[0].ID
+	iface := m.v2.inventory.Interfaces[0].ID
+	c := v2Config(v2.UploadSelection{Metric: "drive.read_rate", Objects: []uint16{drive}}, v2.UploadSelection{Metric: "drive.write_rate", Objects: []uint16{drive}}, v2.UploadSelection{Metric: "interface.upload_rate", Objects: []uint16{iface}}, v2.UploadSelection{Metric: "interface.download_rate", Objects: []uint16{iface}}, v2.UploadSelection{Metric: "interface.ipv4", Objects: []uint16{iface}})
+	batch, _ := m.opts.CoreFactory().Gather(context.Background(), allSources())
+	for n := range batch.Metrics {
+		switch batch.Metrics[n].Name {
+		case "diskio":
+			delete(batch.Metrics[n].Fields, "write_bytes_per_second")
+		case "net":
+			delete(batch.Metrics[n].Fields, "download_bytes_per_second")
+		}
+	}
+	sample, err := m.sampleV2(c, batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sample.Drives) != 0 {
+		t.Fatalf("partial disk pair uploaded: %+v", sample.Drives)
+	}
+	if len(sample.Interfaces) != 1 || sample.Interfaces[0].UploadRate != nil || sample.Interfaces[0].DownloadRate != nil || sample.Interfaces[0].IPv4 == nil {
+		t.Fatalf("network pair or unrelated IP incorrect: %+v", sample.Interfaces)
+	}
+	if sample.CPUUsage == nil || sample.MemoryUsage == nil || sample.Uptime == nil {
+		t.Fatal("partial optional rates suppressed required metrics")
+	}
+}
+
+func TestV2ApplyPerCoreCannotSelectSubset(t *testing.T) {
+	m := newV2Fixture(t, "http://127.0.0.1:1/v2/collector/samples", "", &atomic.Int32{}, &atomic.Bool{})
+	ids := []uint16{m.v2.inventory.Cores[0].ID, m.v2.inventory.Cores[1].ID}
+	snapshot, err := m.Apply(context.Background(), v2Config(v2.UploadSelection{Metric: "core.usage", Objects: ids[:1]}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := snapshot.Config.Upload.Optional[0].Objects; !reflect.DeepEqual(got, ids) {
+		t.Fatalf("partial configuration retained: %v", got)
+	}
+	if snapshot.V2Sample == nil || len(snapshot.V2Sample.Cores) != 2 {
+		t.Fatalf("sample does not include both cores: %+v", snapshot.V2Sample)
+	}
+}
+
+func TestDeviceDependencyValidation(t *testing.T) {
+	cases := []struct {
+		name       string
+		selections []v2.UploadSelection
+		valid      bool
+	}{
+		{"network missing parent", []v2.UploadSelection{{Metric: "interface.ipv4", Objects: []uint16{1}}}, false},
+		{"network wrong object", []v2.UploadSelection{{Metric: "interface.medium", Objects: []uint16{2}}, {Metric: "interface.upload_rate", Objects: []uint16{1}}}, false},
+		{"network selected", []v2.UploadSelection{{Metric: "interface.up", Objects: []uint16{1}}, {Metric: "interface.ipv4", Objects: []uint16{1}}, {Metric: "network.public_ipv4"}}, true},
+		{"public alone", []v2.UploadSelection{{Metric: "network.public_ipv4"}}, false},
+		{"gpu missing parent", []v2.UploadSelection{{Metric: "gpu.temperature", Objects: []uint16{3}}}, false},
+		{"gpu selected", []v2.UploadSelection{{Metric: "gpu.usage", Objects: []uint16{3}}, {Metric: "gpu.temperature", Objects: []uint16{3}}}, true},
+		{"disk missing parent", []v2.UploadSelection{{Metric: "drive.smart_health", Objects: []uint16{4}}}, false},
+		{"disk selected", []v2.UploadSelection{{Metric: "drive.model", Objects: []uint16{4}}, {Metric: "drive.write_rate", Objects: []uint16{4}}}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateDeviceDependencies(&v2.UploadConfig{Enabled: true, Optional: tc.selections})
+			if (err == nil) != tc.valid {
+				t.Fatalf("dependency validation: %v", err)
+			}
+		})
+	}
+}
+
+func TestV2DefaultMemoryAndPartialDiskBundle(t *testing.T) {
+	m := newV2Fixture(t, "http://127.0.0.1:1/v2/collector/samples", "", &atomic.Int32{}, &atomic.Bool{})
+	c, err := m.prepareV2(v2Config(v2.UploadSelection{Metric: "memory.total"}, v2.UploadSelection{Metric: "memory.used"}))
+	if err != nil || len(c.Upload.Optional) != 0 {
+		t.Fatalf("old selections not normalized: %+v %v", c.Upload, err)
+	}
+	profile := m.profileV2(c)
+	if profile.Inventory.MemoryTotal == nil {
+		t.Fatal("default memory total missing from profile")
+	}
+	batch, _ := m.opts.CoreFactory().Gather(context.Background(), []string{"cpu", "mem", "system"})
+	sample, err := m.sampleV2(c, batch)
+	if err != nil || sample.Memory == nil || sample.Memory.Used == nil || *sample.Memory.Used != 0 {
+		t.Fatalf("default memory used missing: %+v %v", sample, err)
+	}
+	for n := range batch.Metrics {
+		if batch.Metrics[n].Name == "mem" {
+			delete(batch.Metrics[n].Fields, "used")
+			delete(batch.Metrics[n].Exact, "used")
+		}
+	}
+	sample, err = m.sampleV2(c, batch)
+	if err != nil || (sample.Memory != nil && sample.Memory.Used != nil) {
+		t.Fatalf("missing memory used must be omitted: %+v %v", sample, err)
+	}
+	upload := &v2.UploadConfig{Enabled: true, Optional: []v2.UploadSelection{{Metric: "drive.total", Objects: []uint16{1, 2}}}}
+	caps := &V2Capabilities{Metrics: []V2Metric{{Metric: "drive.model", Available: true, Objects: []uint16{1}}, {Metric: "drive.total", Available: true, Objects: []uint16{1, 2}}}}
+	bundleAvailableSelections(upload, caps)
+	got := map[string][]uint16{}
+	for _, item := range upload.Optional {
+		got[item.Metric] = item.Objects
+	}
+	if !reflect.DeepEqual(got["drive.model"], []uint16{1}) || !reflect.DeepEqual(got["drive.total"], []uint16{1, 2}) {
+		t.Fatalf("partial disk group: %+v", got)
+	}
+}
+
+func TestV2DiskUsageSelectedAndLegacyVolumeRemoved(t *testing.T) {
+	m := newV2Fixture(t, "http://127.0.0.1:1/v2/collector/samples", "", &atomic.Int32{}, &atomic.Bool{})
+	drive := m.v2.inventory.Drives[0].ID
+	c, err := m.prepareV2(v2Config(v2.UploadSelection{Metric: "drive.used", Objects: []uint16{drive}}, v2.UploadSelection{Metric: "volume.used", Objects: []uint16{123}}))
+	if err != nil || len(c.Upload.Optional) != 1 || c.Upload.Optional[0].Metric != "drive.used" {
+		t.Fatalf("migration: %+v %v", c.Upload, err)
+	}
+	batch, _ := m.opts.CoreFactory().Gather(context.Background(), allSources())
+	sample, err := m.sampleV2(c, batch)
+	if err != nil || len(sample.Drives) != 1 || sample.Drives[0].Used == nil || *sample.Drives[0].Used != 1234 || len(sample.Volumes) != 0 {
+		t.Fatalf("disk usage missing: %+v %v", sample, err)
+	}
+	body, _ := json.Marshal(sample)
+	if !strings.Contains(string(body), `"u":"1234"`) || strings.Contains(string(body), `"vol"`) {
+		t.Fatalf("unexpected encoded disk sample: %s", body)
 	}
 }

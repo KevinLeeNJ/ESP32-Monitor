@@ -65,7 +65,8 @@ func (m *Manager) sampleV2(c Config, b Batch) (v2.Sample, error) {
 			out.Uptime = ptr(uint32(n))
 		}
 	}
-	for _, sel := range c.Upload.Optional {
+	selections := append([]v2.UploadSelection{{Metric: "memory.used"}}, c.Upload.Optional...)
+	for _, sel := range selections {
 		binding, ok := v2Bindings[sel.Metric]
 		if !ok {
 			continue
@@ -211,14 +212,14 @@ func (m *Manager) sampleV2(c Config, b Batch) (v2.Sample, error) {
 				sampleDrive(&out, id).ReadRate = ptr(unsigned)
 			case "drive.write_rate":
 				sampleDrive(&out, id).WriteRate = ptr(unsigned)
+			case "drive.used":
+				sampleDrive(&out, id).Used = ptr(unsigned)
 			case "drive.smart_health":
 				dst := sampleDrive(&out, id)
 				if dst.SMART == nil {
 					dst.SMART = &v2.SMARTSample{Timestamp: v.Timestamp}
 				}
 				dst.SMART.Healthy = ptr(n == 1)
-			case "volume.used":
-				out.Volumes = append(out.Volumes, v2.VolumeSample{ID: id, Used: ptr(unsigned)})
 			case "interface.upload_rate":
 				sampleInterface(&out, id).UploadRate = ptr(unsigned)
 			case "interface.download_rate":
@@ -252,13 +253,34 @@ func (m *Manager) sampleV2(c Config, b Batch) (v2.Sample, error) {
 			}
 		}
 	}
+	// A partial battery reading is unavailable, never an independently uploaded field.
+	out.Batteries = slices.DeleteFunc(out.Batteries, func(b v2.BatterySample) bool { return b.Level == nil || b.Charging == nil })
+	// Paired rates describe one observation interval. If either side is missing,
+	// omit both while retaining other valid fields on that device.
+	for n := range out.Drives {
+		d := &out.Drives[n]
+		if v2ObjectSelected(c, "drive.read_rate", d.ID) && v2ObjectSelected(c, "drive.write_rate", d.ID) && (d.ReadRate == nil || d.WriteRate == nil) {
+			d.ReadRate = nil
+			d.WriteRate = nil
+		}
+	}
+	for n := range out.Interfaces {
+		i := &out.Interfaces[n]
+		if v2ObjectSelected(c, "interface.upload_rate", i.ID) && v2ObjectSelected(c, "interface.download_rate", i.ID) && (i.UploadRate == nil || i.DownloadRate == nil) {
+			i.UploadRate = nil
+			i.DownloadRate = nil
+		}
+	}
+	out.Interfaces = slices.DeleteFunc(out.Interfaces, func(i v2.InterfaceSample) bool {
+		return i.Up == nil && i.UploadRate == nil && i.DownloadRate == nil && i.IPv4 == nil
+	})
 	// Failed SMART reads must not create an object containing only an ID/time.
 	for n := len(out.Drives) - 1; n >= 0; n-- {
 		d := &out.Drives[n]
 		if d.SMART != nil && d.SMART.Healthy == nil && len(d.SMART.Values) == 0 {
 			d.SMART = nil
 		}
-		if d.SMART == nil && d.ReadRate == nil && d.WriteRate == nil {
+		if d.SMART == nil && d.Used == nil && d.ReadRate == nil && d.WriteRate == nil {
 			out.Drives = append(out.Drives[:n], out.Drives[n+1:]...)
 		}
 	}
@@ -269,6 +291,18 @@ func (m *Manager) sampleV2(c Config, b Batch) (v2.Sample, error) {
 		out.Memory = nil
 	}
 	return out, nil
+}
+
+func v2ObjectSelected(c Config, key string, id uint16) bool {
+	if c.Upload == nil {
+		return false
+	}
+	for _, selection := range c.Upload.Optional {
+		if selection.Metric == key && slices.Contains(selection.Objects, id) {
+			return true
+		}
+	}
+	return false
 }
 func sampleDrive(s *v2.Sample, id uint16) *v2.DriveSample {
 	for n := range s.Drives {
@@ -309,7 +343,7 @@ func sampleBattery(s *v2.Sample, id uint16) *v2.BatterySample {
 
 func byteMetric(key string) bool {
 	switch key {
-	case "memory.used", "memory.app", "memory.wired", "memory.compressed", "memory.swap_total", "memory.swap_used", "volume.used", "drive.read_rate", "drive.write_rate", "interface.upload_rate", "interface.download_rate":
+	case "memory.used", "memory.app", "memory.wired", "memory.compressed", "memory.swap_total", "memory.swap_used", "drive.used", "drive.read_rate", "drive.write_rate", "interface.upload_rate", "interface.download_rate":
 		return true
 	}
 	return false

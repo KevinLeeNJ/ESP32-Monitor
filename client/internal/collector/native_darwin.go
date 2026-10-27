@@ -111,6 +111,29 @@ func (d *darwinCollector) Gather(ctx context.Context, ids []string) (Batch, map[
 				reasons[id] = "unavailable"
 			}
 			out.Metrics = append(out.Metrics, detached(d.smart)...)
+		case "darwin_disk_usage":
+			value, err := darwinCommand(ctx, "/usr/sbin/diskutil", "apfs", "list", "-plist")
+			if err != nil {
+				reasons[id] = gatherReason(err)
+				continue
+			}
+			parsed, err := decodePlist(value)
+			if err != nil {
+				reasons[id] = "invalid_data"
+				continue
+			}
+			count := 0
+			for device, used := range apfsDiskUsage(parsed, fixed.partitions) {
+				total := number(fixedMetric(fixed.batch, "darwin_disk", "device", device), "total")
+				if total == nil || used > *total {
+					continue
+				}
+				out.Metrics = append(out.Metrics, Metric{Name: id, Tags: map[string]string{"device": device}, Fields: map[string]float64{"used": float64(used)}, Exact: map[string]string{"used": strconv.FormatUint(used, 10)}, Timestamp: time.Now().Unix()})
+				count++
+			}
+			if count == 0 {
+				reasons[id] = "unavailable"
+			}
 
 		case "darwin_public_ip":
 			if d.publicIP == "" || time.Since(d.publicIPAt) > 5*time.Minute {

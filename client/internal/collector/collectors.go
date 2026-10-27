@@ -21,7 +21,7 @@ var sources = []source{
 	{"cpu", "cpu", "core"}, {"mem", "memory", "core"}, {"swap", "memory", "core"},
 	{"disk", "disk", "core"}, {"diskio", "disk", "core"}, {"net", "network", "core"},
 	{"system", "system", "core"},
-	{"darwin_cpu", "cpu", "native"}, {"darwin_memory", "memory", "native"}, {"darwin_gpu", "gpu", "native"}, {"darwin_disk", "disk", "native"}, {"darwin_network", "network", "native"}, {"darwin_battery", "battery", "native"}, {"darwin_fan", "cpu", "native"}, {"darwin_public_ip", "network", "native"}, {"darwin_system", "system", "native"},
+	{"darwin_cpu", "cpu", "native"}, {"darwin_memory", "memory", "native"}, {"darwin_gpu", "gpu", "native"}, {"darwin_disk", "disk", "native"}, {"darwin_disk_usage", "disk", "native"}, {"darwin_network", "network", "native"}, {"darwin_battery", "battery", "native"}, {"darwin_fan", "cpu", "native"}, {"darwin_public_ip", "network", "native"}, {"darwin_system", "system", "native"},
 }
 
 func allSources() []string {

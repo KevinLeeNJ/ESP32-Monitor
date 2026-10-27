@@ -141,3 +141,34 @@ func TestPlistLargeSMARTIntegerRemainsExact(t *testing.T) {
 		t.Fatalf("rounded SMART counter: %#v", value)
 	}
 }
+
+func TestPhysicalAPFSDiskUsage(t *testing.T) {
+	disk := func(name string, parts ...any) any {
+		return map[string]any{"DeviceIdentifier": name, "Partitions": parts}
+	}
+	part := func(name, kind string) any { return map[string]any{"DeviceIdentifier": name, "Content": kind} }
+	store := func(name string) any { return map[string]any{"DeviceIdentifier": name} }
+	container := func(total, free any, stores ...any) any {
+		return map[string]any{"CapacityCeiling": total, "CapacityFree": free, "PhysicalStores": stores}
+	}
+	physical := map[string]any{"AllDisksAndPartitions": []any{
+		disk("disk0", part("disk0s1", "Apple_APFS_ISC"), part("disk0s2", "Apple_APFS")),
+		disk("disk1", part("disk1s1", "Apple_APFS")),
+		disk("disk2", part("disk2s1", "Apple_APFS"), part("disk2s2", "Microsoft Basic Data")),
+		disk("disk3", part("disk3s1", "Apple_APFS")),
+	}}
+	partitions := physicalAPFSPartitions(physical)
+	apfs := map[string]any{"Containers": []any{
+		container(float64(100), float64(20), store("disk0s1")), container(float64(400), float64(100), store("disk0s2")),
+		container(float64(500), float64(250), store("disk1s1"), store("disk3s1")),
+		container(float64(50), float64(60), store("disk2s1")),
+	}}
+	used := apfsDiskUsage(apfs, partitions)
+	if len(used) != 1 || used["disk0"] != 380 {
+		t.Fatalf("shared or invalid data accepted: %#v", used)
+	}
+	apfs["Containers"] = append(apfs["Containers"].([]any), container(float64(100), float64(50), store("disk0s1")))
+	if _, ok := apfsDiskUsage(apfs, partitions)["disk0"]; ok {
+		t.Fatal("duplicate physical store accepted")
+	}
+}

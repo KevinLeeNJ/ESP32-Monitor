@@ -1,5 +1,6 @@
 import { collectorService, type CollectorBridge } from "./collector.js";
 import type { CollectorCapabilities, CollectorConfig, CollectorSnapshot } from "../types/collector.js";
+import { prepareMetricDraft, validateMetricDraft } from "./collector-metrics.js";
 
 /** Keeps editing state separate from live snapshots. A failed apply preserves
  * the draft for repair and the previous committed config shown by the Agent. */
@@ -57,9 +58,11 @@ export class CollectorController {
   }
   async apply() {
     if (this.busy || !this.draft) return;
+    const error = validateMetricDraft(this.draft, this.capabilities);
+    if (error) { this.error = error; this.emit(); return; }
     this.busy = true; this.error = ""; this.emit();
     try {
-      this.snapshot = await this.service.apply(structuredClone(this.draft));
+      this.snapshot = await this.service.apply(prepareMetricDraft(this.draft, this.capabilities));
       this.draft = structuredClone(this.snapshot.config);
     } catch (error) { this.error = String(error); }
     finally { this.busy = false; this.emit(); }

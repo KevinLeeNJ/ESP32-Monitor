@@ -3,7 +3,6 @@ package collector
 import (
 	"context"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -22,9 +21,8 @@ type fixedCollector interface {
 }
 
 type coreFixed struct {
-	once       sync.Once
-	batch      Batch
-	partitions []disk.PartitionStat
+	once  sync.Once
+	batch Batch
 }
 
 func (c *CoreCollector) Fixed(ctx context.Context) Batch {
@@ -88,24 +86,6 @@ func (f *coreFixed) collect(ctx context.Context) {
 	if v, err := mem.VirtualMemoryWithContext(ctx); err == nil {
 		add("mem", map[string]string{}, map[string]float64{"total": float64(v.Total)})
 		f.batch.Metrics[len(f.batch.Metrics)-1].Exact = map[string]string{"total": strconv.FormatUint(v.Total, 10)}
-	}
-	f.partitions, _ = disk.PartitionsWithContext(ctx, false)
-	seen := map[string]bool{}
-	for _, p := range f.partitions {
-		if seen[p.Mountpoint] {
-			continue
-		}
-		seen[p.Mountpoint] = true
-		if v, err := disk.UsageWithContext(ctx, p.Mountpoint); err == nil {
-			mode := "rw"
-			for _, o := range p.Opts {
-				if o == "ro" {
-					mode = "ro"
-				}
-			}
-			add("disk", map[string]string{"path": p.Mountpoint, "device": strings.TrimPrefix(p.Device, "/dev/"), "fstype": p.Fstype, "mode": mode}, map[string]float64{"total": float64(v.Total)})
-			f.batch.Metrics[len(f.batch.Metrics)-1].Exact = map[string]string{"total": strconv.FormatUint(v.Total, 10)}
-		}
 	}
 }
 

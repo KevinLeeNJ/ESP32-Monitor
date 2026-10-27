@@ -37,6 +37,11 @@ func (m *Manager) prepareV2(c Config) (Config, error) {
 	if !c.Upload.Enabled {
 		return c, nil
 	}
+	// These fields accompany the required memory percentage whenever available.
+	c.Upload.Optional = slices.DeleteFunc(c.Upload.Optional, func(sel v2.UploadSelection) bool {
+		return sel.Metric == "memory.total" || sel.Metric == "memory.used" || strings.HasPrefix(sel.Metric, "volume.")
+	})
+	bundleBatterySelections(c.Upload)
 	if len(c.Upload.Optional) > 256 {
 		return c, errors.New("too_many_v2_selections")
 	}
@@ -102,6 +107,180 @@ func (m *Manager) prepareV2(c Config) (Config, error) {
 	}
 	return c, nil
 }
+
+// A battery is selected as a unit: both values use the same explicit object set.
+func bundleBatterySelections(upload *v2.UploadConfig) {
+	var level, charging *v2.UploadSelection
+	objects := []uint16{}
+	for n := range upload.Optional {
+		selection := &upload.Optional[n]
+		switch selection.Metric {
+		case "battery.level":
+			level = selection
+		case "battery.charging":
+			charging = selection
+		default:
+			continue
+		}
+		objects = append(objects, selection.Objects...)
+	}
+	if level == nil && charging == nil {
+		return
+	}
+	slices.Sort(objects)
+	objects = slices.Compact(objects)
+	if level != nil {
+		level.Objects = slices.Clone(objects)
+	}
+	if charging != nil {
+		charging.Objects = slices.Clone(objects)
+	}
+	if level == nil {
+		upload.Optional = append(upload.Optional, v2.UploadSelection{Metric: "battery.level", Objects: slices.Clone(objects)})
+	}
+	if charging == nil {
+		upload.Optional = append(upload.Optional, v2.UploadSelection{Metric: "battery.charging", Objects: slices.Clone(objects)})
+	}
+}
+
+// Expand an enabled group only to capabilities actually observed on this host.
+// Object-scoped fields share the explicitly selected object IDs; newly detected
+// objects are never selected automatically. Missing selections remain errors.
+var bundledV2Metrics = [][]string{
+	{"cpu.model", "cpu.physical_cores", "cpu.logical_cores", "cpu.performance_cores", "cpu.efficiency_cores"},
+	{"cpu.load1", "cpu.load5", "cpu.load15"},
+	{"memory.app", "memory.wired", "memory.compressed"},
+	{"memory.swap_total", "memory.swap_used"},
+	{"drive.model", "drive.total", "drive.used"},
+	{"drive.read_rate", "drive.write_rate"},
+	{"interface.medium", "interface.up"},
+	{"interface.upload_rate", "interface.download_rate"},
+	{"interface.ipv4", "network.public_ipv4"},
+	{"battery.level", "battery.charging"},
+	{"system.os", "system.product"},
+}
+
+// Object-scoped dependent metrics may only be uploaded for enabled devices.
+func validateDeviceDependencies(upload *v2.UploadConfig) error {
+	if upload == nil || !upload.Enabled {
+		return nil
+	}
+	parents := map[string][]string{
+		"interface.upload_rate": {"interface.medium", "interface.up"}, "interface.download_rate": {"interface.medium", "interface.up"}, "interface.ipv4": {"interface.medium", "interface.up"},
+		"gpu.temperature": {"gpu.usage"}, "drive.read_rate": {"drive.model", "drive.total", "drive.used"}, "drive.write_rate": {"drive.model", "drive.total", "drive.used"}, "drive.smart_health": {"drive.model", "drive.total", "drive.used"}, "drive.smart_attribute": {"drive.model", "drive.total", "drive.used"},
+	}
+	selected := map[string]map[uint16]bool{}
+	for _, selection := range upload.Optional {
+		selected[selection.Metric] = map[uint16]bool{}
+		for _, id := range selection.Objects {
+			selected[selection.Metric][id] = true
+		}
+	}
+	for _, selection := range upload.Optional {
+		if selection.Metric == "network.public_ipv4" && len(selected["interface.ipv4"]) == 0 {
+			return errors.New("v2_device_dependency_required")
+		}
+		for _, id := range selection.Objects {
+			if keys, dependent := parents[selection.Metric]; dependent {
+				found := false
+				for _, key := range keys {
+					found = found || selected[key][id]
+				}
+				if !found {
+					return errors.New("v2_device_dependency_required")
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func selectAllAvailableCores(upload *v2.UploadConfig, caps *V2Capabilities) error {
+	if upload == nil || caps == nil {
+		return nil
+	}
+	for n := range upload.Optional {
+		if upload.Optional[n].Metric != "core.usage" {
+			continue
+		}
+		var observed []uint16
+		for _, metric := range caps.Metrics {
+			if metric.Metric == "core.usage" && metric.Available {
+				observed = metric.Objects
+				break
+			}
+		}
+		if len(caps.Inventory.Cores) == 0 {
+			return errors.New("v2_metric_object_unavailable")
+		}
+		all := make([]uint16, 0, len(caps.Inventory.Cores))
+		for _, core := range caps.Inventory.Cores {
+			if !slices.Contains(observed, core.ID) {
+				return errors.New("v2_metric_object_unavailable")
+			}
+			all = append(all, core.ID)
+		}
+		slices.Sort(all)
+		upload.Optional[n].Objects = all
+	}
+	return nil
+}
+
+func bundleAvailableSelections(upload *v2.UploadConfig, caps *V2Capabilities) {
+	if upload == nil || caps == nil {
+		return
+	}
+	available := map[string]bool{}
+	objectsByMetric := map[string][]uint16{}
+	for _, metric := range caps.Metrics {
+		available[metric.Metric] = metric.Available
+		objectsByMetric[metric.Metric] = metric.Objects
+	}
+	for _, group := range bundledV2Metrics {
+		selected := false
+		var objects []uint16
+		for _, selection := range upload.Optional {
+			if slices.Contains(group, selection.Metric) {
+				selected = true
+				objects = append(objects, selection.Objects...)
+			}
+		}
+		if !selected {
+			continue
+		}
+		slices.Sort(objects)
+		objects = slices.Compact(objects)
+		for _, key := range group {
+			if !available[key] {
+				continue
+			}
+			kind := v2Bindings[key].kind
+			if fixedKind, ok := v2Static[key]; ok {
+				kind = fixedKind
+			}
+			index := -1
+			for n := range upload.Optional {
+				if upload.Optional[n].Metric == key {
+					index = n
+					break
+				}
+			}
+			if index < 0 {
+				upload.Optional = append(upload.Optional, v2.UploadSelection{Metric: key})
+				index = len(upload.Optional) - 1
+			}
+			if kind != "" {
+				upload.Optional[index].Objects = slices.Clone(objects)
+				if group[0] == "drive.model" {
+					upload.Optional[index].Objects = slices.DeleteFunc(upload.Optional[index].Objects, func(id uint16) bool { return !slices.Contains(objectsByMetric[key], id) })
+					if len(upload.Optional[index].Objects) == 0 {
+						upload.Optional = slices.Delete(upload.Optional, index, index+1)
+					}
+				}
+			}
+		}
+	}
+}
 func v2CollectConfig(c Config) Config {
 	out := detached(c)
 	if c.Upload == nil || !c.Upload.Enabled {
@@ -123,6 +302,7 @@ func (m *Manager) profileV2(c Config) v2.Profile {
 	if c.Upload == nil || !c.Upload.Enabled {
 		return p
 	}
+	p.Inventory.MemoryTotal = m.v2.inventory.MemoryTotal
 	p.Enabled = append([]v2.UploadSelection{}, detached(c.Upload.Optional)...)
 	for _, sel := range p.Enabled {
 		switch sel.Metric {

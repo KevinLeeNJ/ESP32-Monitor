@@ -4,6 +4,15 @@ export type CapabilityState = "available" | "partial" | "missing_dependency" | "
 export interface CollectorSelection { id: string; objects?: Tags[]; upload: boolean }
 export interface CollectorUploadSelection { metric: string; objects?: number[]; detail?: number[] }
 export interface CollectorUploadConfig { enabled: boolean; interval_seconds?: number; optional: CollectorUploadSelection[] }
+export interface CollectorV2Metric {
+  metric: string; objects?: number[]; detail?: number[];
+  fixed: boolean; available: boolean; required: boolean; reason?: string;
+}
+export interface CollectorV2Capabilities {
+  inventory: Record<string, unknown>;
+  metrics: CollectorV2Metric[];
+  objects: Array<{ id: number; kind: string; name: string }>;
+}
 export interface CollectorConfig { interval_seconds: number; selections: CollectorSelection[]; upload?: CollectorUploadConfig }
 export interface CollectorMetric {
   id: string; measurement: string; field: string; unit: string;
@@ -14,11 +23,7 @@ export interface CollectorCapabilities {
   categories: Array<{ id: string; name: string; sources: Array<{
     id: string; collector: "core" | "native"; state: CapabilityState; reason?: string; metrics: CollectorMetric[];
   }> }>;
-  v2?: {
-    inventory: Record<string, unknown>;
-    metrics: Array<{ metric: string; objects?: number[]; detail?: number[]; fixed: boolean; available: boolean; required: boolean; reason?: string }>;
-    objects: Array<{ id: number; kind: string; name: string }>;
-  };
+  v2?: CollectorV2Capabilities;
 }
 export interface CollectorBatch {
   metrics: Array<{ name: string; tags: Tags; fields: Record<string, number>; exact?: Record<string, string>; timestamp: number }>;

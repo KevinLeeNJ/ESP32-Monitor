@@ -9,7 +9,6 @@ import (
 	"slices"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -129,35 +128,7 @@ func (c *CoreCollector) Gather(ctx context.Context, ids []string) (Batch, map[st
 			add(id, map[string]string{}, f)
 			out.Metrics[len(out.Metrics)-1].Exact = map[string]string{"total": strconv.FormatUint(v.Total, 10), "used": strconv.FormatUint(v.Used, 10)}
 		case "disk":
-			partitions := fixed.partitions
-			seen := map[string]bool{}
-			for _, p := range partitions {
-				if seen[p.Mountpoint] {
-					continue
-				}
-				seen[p.Mountpoint] = true
-				v, err := disk.UsageWithContext(ctx, p.Mountpoint)
-				if err != nil {
-					reasons[id] = gatherReason(err)
-					continue
-				}
-				f := map[string]float64{"free": float64(v.Free), "used": float64(v.Used), "used_percent": v.UsedPercent}
-				if total, ok := fixedMetric(fixed.batch, "disk", "path", p.Mountpoint).Fields["total"]; ok {
-					f["total"] = total
-				}
-				if runtime.GOOS != "windows" {
-					f["inodes_total"] = float64(v.InodesTotal)
-					f["inodes_free"] = float64(v.InodesFree)
-					f["inodes_used"] = float64(v.InodesUsed)
-					f["inodes_used_percent"] = v.InodesUsedPercent
-				}
-				mode := "rw"
-				if slices.Contains(p.Opts, "ro") {
-					mode = "ro"
-				}
-				add(id, map[string]string{"path": p.Mountpoint, "device": strings.TrimPrefix(p.Device, "/dev/"), "fstype": p.Fstype, "mode": mode}, f)
-				out.Metrics[len(out.Metrics)-1].Exact = map[string]string{"used": strconv.FormatUint(v.Used, 10)}
-			}
+			reasons[id] = "unsupported"
 		case "diskio":
 			counters, err := disk.IOCountersWithContext(ctx)
 			if err != nil {

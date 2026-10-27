@@ -164,6 +164,19 @@ func (m *Manager) apply(ctx context.Context, c Config) (Snapshot, error) {
 	if err != nil {
 		return m.failure(err)
 	}
+	if c.Upload != nil && c.Upload.Enabled && caps.V2 != nil {
+		bundleAvailableSelections(c.Upload, caps.V2)
+		if err = validateDeviceDependencies(c.Upload); err != nil {
+			return m.failure(err)
+		}
+		if err = selectAllAvailableCores(c.Upload, caps.V2); err != nil {
+			return m.failure(err)
+		}
+		c, err = m.prepareV2(c)
+		if err != nil {
+			return m.failure(err)
+		}
+	}
 	if err = validate(c, caps); err != nil {
 		return m.failure(err)
 	}
