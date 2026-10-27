@@ -10,11 +10,12 @@ import (
 )
 
 type darwinFixed struct {
-	once    sync.Once
-	batch   Batch
-	brand   string
-	kinds   map[string]string
-	devices []string
+	once       sync.Once
+	batch      Batch
+	brand      string
+	kinds      map[string]string
+	devices    []string
+	partitions map[string][]string
 }
 
 func (d *darwinCollector) Fixed(ctx context.Context) Batch {
@@ -75,6 +76,11 @@ func (d *darwinCollector) fixedLocked(ctx context.Context) *darwinFixed {
 			fields["present"] = 1
 			add("darwin_disk", m.Tags, fields)
 			f.batch.Metrics[len(f.batch.Metrics)-1].Exact = detached(m.Exact)
+		}
+		if listing, err := darwinCommand(ctx, "/usr/sbin/diskutil", "list", "-plist", "physical"); err == nil {
+			if parsed, err := decodePlist(listing); err == nil {
+				f.partitions = physicalAPFSPartitions(parsed)
+			}
 		}
 		tags = map[string]string{}
 		if s := sysctlValue(ctx, "hw.model"); s != "" {

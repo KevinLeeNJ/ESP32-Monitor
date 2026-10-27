@@ -159,6 +159,7 @@ type GPUSample struct {
 
 type DriveSample struct {
 	ID        uint16       `json:"i"`
+	Used      *uint64      `json:"u,omitempty,string"` // allocated bytes on this disk
 	ReadRate  *uint64      `json:"r,omitempty,string"` // B/s
 	WriteRate *uint64      `json:"w,omitempty,string"`
 	SMART     *SMARTSample `json:"sm,omitempty"`
@@ -190,8 +191,8 @@ type IPv4Observation struct {
 
 type BatterySample struct {
 	ID       uint16  `json:"i"`
-	Level    *uint16 `json:"l,omitempty"`
-	Charging *bool   `json:"c,omitempty"`
+	Level    *uint16 `json:"l"`
+	Charging *bool   `json:"c"`
 }
 
 type FanSample struct {

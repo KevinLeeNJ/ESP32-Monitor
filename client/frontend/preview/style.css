@@ -91,3 +91,20 @@ button,button:hover,button:active,button:focus,button:focus-visible{box-shadow:n
 
 /* Matches Monitor's 320 ms cubic ease-out upward value roll. */
 .text-rolling{position:relative;display:inline-grid;vertical-align:bottom;overflow:hidden}.text-rolling .roll-old,.text-rolling .roll-current{grid-area:1/1;display:block;white-space:nowrap;animation-duration:320ms;animation-timing-function:cubic-bezier(.33,1,.68,1);animation-fill-mode:both}.text-rolling .roll-old{animation-name:text-roll-old}.text-rolling .roll-current{animation-name:text-roll-new}@keyframes text-roll-old{from{transform:translateY(0)}to{transform:translateY(-100%)}}@keyframes text-roll-new{from{transform:translateY(100%)}to{transform:translateY(0)}}@media(prefers-reduced-motion:reduce){.text-rolling .roll-old,.text-rolling .roll-current{animation:none}.text-rolling .roll-old{display:none}}
+
+/* Required metric status replaces the optional upload control. */
+.required-metric{white-space:nowrap;font-size:10px}.metric-row .value{overflow-wrap:anywhere}.metric-row>div:last-child{justify-self:start}
+
+@media(max-width:650px){.required-metric{white-space:normal;line-height:1.5;max-width:85px;text-align:center}}
+.metric-row.object-row{grid-template-columns:minmax(0,1fr) 220px}.metric-objects{display:grid;gap:10px}.metric-object{display:grid;grid-template-columns:110px 110px;align-items:center}.metric-object .value small{margin:0 0 4px;overflow-wrap:anywhere}.metric-object label{justify-self:start}
+@media(max-width:650px){.metric-row.object-row{grid-template-columns:minmax(0,1fr) 150px}.metric-object{grid-template-columns:65px 85px;gap:0}.metric-object .value{overflow-wrap:anywhere}}
+
+/* Keep each object, its value, and its switch aligned even in a narrow window. */
+.metric-row.object-row{display:block}.metric-objects{margin-top:10px;gap:10px}.metric-object{grid-template-columns:minmax(0,1fr) 110px 110px}.metric-object-name{padding-left:12px;overflow-wrap:anywhere;color:#666;font-size:11px}
+@media(max-width:650px){.table-head,.metric-row:not(.object-row){grid-template-columns:minmax(0,1fr) 90px 55px}.metric-object{grid-template-columns:minmax(0,1fr) 90px 55px}.required-metric{max-width:55px}}
+.metric-row.object-row > .metric-objects{justify-self:stretch;width:100%}
+.metric-title{display:flex;align-items:center;justify-content:space-between}
+
+/* Reserve more room for long values while keeping every upload control aligned. */
+.table-head,.metric-row:not(.object-row),.metric-object{grid-template-columns:minmax(0,1fr) minmax(0,240px) 110px;column-gap:5px}
+@media(max-width:650px){.table-head,.metric-row:not(.object-row),.metric-object{grid-template-columns:minmax(0,1fr) minmax(0,45%) 55px}}

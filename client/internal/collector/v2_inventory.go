@@ -58,8 +58,6 @@ func (s *v2State) buildInventory(b Batch) error {
 		switch m.Name {
 		case "net", "darwin_network":
 			kind = "interface"
-		case "disk":
-			kind = "volume"
 		case "diskio", "darwin_disk":
 			kind = "drive"
 		case "darwin_gpu":

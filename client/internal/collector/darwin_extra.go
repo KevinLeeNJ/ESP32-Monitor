@@ -103,8 +103,9 @@ func readDisksFor(ctx context.Context, devices []string, fixed bool) ([]Metric, 
 		fields := map[string]float64{}
 		exact := map[string]string{}
 		if fixed {
-			if n, ok := info["TotalSize"].(float64); ok {
-				fields["total"] = n
+			if n, ok := plistUint(info["TotalSize"]); ok {
+				fields["total"] = float64(n)
+				exact["total"] = strconv.FormatUint(n, 10)
 			}
 		}
 		if status, ok := info["SMARTStatus"].(string); ok {

@@ -40,7 +40,7 @@ test("frontend edits fields, objects, local-only and interval; applies through A
     [...s.root.querySelectorAll("button")].find(node => node.textContent === "立即应用").click();
     await tick();
     assert.deepEqual(s.applied[0], { interval_seconds: 5, selections: [{ id: "mem/mem/used", upload: true, objects: [{ interface: "en0" }] }, { id: "net/net/bytes_recv", upload: false }] });
-    assert.match(s.root.textContent, /native_collector_stub/);
+    assert.doesNotMatch(s.root.textContent, /native_collector_stub/);
     assert.equal(s.panel.controller.snapshot.revision, 1);
   } finally { s.panel.dispose(); }
 });

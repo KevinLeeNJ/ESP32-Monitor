@@ -40,15 +40,15 @@ var v2Bindings = map[string]v2Binding{
 	"memory.used": {"mem", "used", ""}, "memory.app": {"darwin_memory", "app_bytes", ""}, "memory.wired": {"darwin_memory", "wired_bytes", ""}, "memory.compressed": {"darwin_memory", "compressed_bytes", ""},
 	"memory.swap_total": {"swap", "total", ""}, "memory.swap_used": {"swap", "used", ""}, "memory.pressure": {"darwin_memory", "pressure_level", ""},
 	"gpu.usage": {"darwin_gpu", "usage_percent", "gpu"}, "gpu.temperature": {"darwin_gpu", "temperature_celsius", "gpu"},
-	"drive.read_rate": {"diskio", "read_bytes_per_second", "drive"}, "drive.write_rate": {"diskio", "write_bytes_per_second", "drive"},
+	"drive.read_rate": {"diskio", "read_bytes_per_second", "drive"}, "drive.write_rate": {"diskio", "write_bytes_per_second", "drive"}, "drive.used": {"darwin_disk_usage", "used", "drive"},
 	"drive.smart_health": {"darwin_disk", "smart_healthy", "drive"}, "drive.smart_attribute": {"darwin_disk", "", "drive"},
-	"volume.used": {"disk", "used", "volume"}, "interface.upload_rate": {"net", "upload_bytes_per_second", "interface"}, "interface.download_rate": {"net", "download_bytes_per_second", "interface"},
+	"interface.upload_rate": {"net", "upload_bytes_per_second", "interface"}, "interface.download_rate": {"net", "download_bytes_per_second", "interface"},
 	"interface.up": {"darwin_network", "connected", "interface"}, "interface.ipv4": {"darwin_network", "connected", "interface"}, "network.public_ipv4": {"darwin_public_ip", "present", ""},
 	"battery.level": {"darwin_battery", "charge_percent", "battery"}, "battery.charging": {"darwin_battery", "charging", "battery"}, "fan.rpm": {"darwin_fan", "speed_rpm", "fan"},
 }
 var v2Static = map[string]string{
 	"cpu.model": "", "cpu.physical_cores": "", "cpu.logical_cores": "", "cpu.performance_cores": "", "cpu.efficiency_cores": "", "memory.total": "", "system.os": "", "system.product": "",
-	"drive.model": "drive", "drive.total": "drive", "volume.filesystem": "volume", "volume.total": "volume", "interface.medium": "interface",
+	"drive.model": "drive", "drive.total": "drive", "interface.medium": "interface",
 }
 var smartFields = []string{"smart_percent_used", "smart_available_spare_percent", "smart_spare_threshold_percent", "smart_media_errors", "smart_power_on_hours", "smart_unsafe_shutdowns"}
 
