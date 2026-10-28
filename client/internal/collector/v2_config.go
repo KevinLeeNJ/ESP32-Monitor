@@ -14,18 +14,11 @@ func (m *Manager) prepareV2(c Config) (Config, error) {
 	if c.IntervalSeconds != 0 && (c.IntervalSeconds < 5 || c.IntervalSeconds > 60) {
 		return c, errors.New("invalid_collector_config")
 	}
-	if m.isV2() {
-		for _, sel := range c.Selections {
-			if sel.Upload {
-				return c, errors.New("v2_use_upload_optional")
-			}
-		}
-	}
 	if c.Upload == nil {
 		return c, nil
 	}
-	if !m.isV2() {
-		return c, errors.New("v2_upload_requires_v2_endpoint")
+	if c.Upload.Enabled && m.opts.UploadURL == "" {
+		return c, errors.New("upload_not_configured")
 	}
 	if c.Upload.IntervalSeconds == 0 {
 		c.Upload.IntervalSeconds = uint16(c.IntervalSeconds)
@@ -293,6 +286,37 @@ func v2CollectConfig(c Config) Config {
 		}
 	}
 	for _, source := range sources {
+		out.Selections = append(out.Selections, Selection{ID: source + "/" + source + "/__v2"})
+	}
+	return out
+}
+
+// v2PreviewConfig keeps every cheap local source running so the GUI can show
+// live values for available metrics the user has not selected. SMART reads can
+// wake sleeping disks and public IPv4 needs an external query; both stay
+// selection-gated and only enter the batch when explicitly chosen.
+func v2PreviewConfig(c Config) Config {
+	out := detached(c)
+	selected := []string{"cpu", "mem", "system"}
+	if c.Upload != nil && c.Upload.Enabled {
+		for _, sel := range c.Upload.Optional {
+			if b, ok := v2Bindings[sel.Metric]; ok && !slices.Contains(selected, b.source) {
+				selected = append(selected, b.source)
+			}
+		}
+	}
+	for key, binding := range v2Bindings {
+		switch key {
+		case "drive.smart_health", "drive.smart_attribute", "network.public_ipv4":
+			continue
+		}
+		if !slices.Contains(selected, binding.source) {
+			selected = append(selected, binding.source)
+		}
+	}
+	sort.Strings(selected)
+	out.Selections = make([]Selection, 0, len(selected))
+	for _, source := range selected {
 		out.Selections = append(out.Selections, Selection{ID: source + "/" + source + "/__v2"})
 	}
 	return out

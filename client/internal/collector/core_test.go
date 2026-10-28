@@ -30,7 +30,7 @@ func TestNativeUnknownSourceNeverProducesMetrics(t *testing.T) {
 		t.Fatal("stub fabricated metrics")
 	}
 }
-func TestRealCoreSamplesUseTelegrafJSON(t *testing.T) {
+func TestRealCoreSamples(t *testing.T) {
 	core := &CoreCollector{}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -41,7 +41,7 @@ func TestRealCoreSamplesUseTelegrafJSON(t *testing.T) {
 	found := map[string]bool{}
 	for _, m := range b.Metrics {
 		if m.Timestamp < time.Now().Unix()-10 || m.Tags == nil || len(m.Fields) == 0 {
-			t.Fatalf("invalid Telegraf sample: %+v", m)
+			t.Fatalf("invalid core sample: %+v", m)
 		}
 		found[m.Name] = true
 	}
@@ -50,17 +50,13 @@ func TestRealCoreSamplesUseTelegrafJSON(t *testing.T) {
 			t.Fatalf("missing %s", name)
 		}
 	}
-	encoded, err := json.Marshal(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = parseBatch(encoded); err != nil {
+	if _, err := json.Marshal(b); err != nil {
 		t.Fatal(err)
 	}
 }
 func TestPersistenceFailureKeepsLiveGeneration(t *testing.T) {
 	m := newHelper(t, "")
-	first, err := m.Apply(context.Background(), cfg("mem/mem/used", false))
+	first, err := m.Apply(context.Background(), cfg("mem/mem/used"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +68,7 @@ func TestPersistenceFailureKeepsLiveGeneration(t *testing.T) {
 	if err := os.Mkdir(path, 0700); err != nil {
 		t.Fatal(err)
 	}
-	_, err = m.Apply(context.Background(), cfg("cpu/cpu/usage_active", false))
+	_, err = m.Apply(context.Background(), cfg("cpu/cpu/usage_active"))
 	if err == nil || m.current != current || m.Snapshot().Revision != first.Revision || m.Snapshot().State != "healthy" {
 		t.Fatalf("failed persist replaced live config: %v %+v", err, m.Snapshot())
 	}

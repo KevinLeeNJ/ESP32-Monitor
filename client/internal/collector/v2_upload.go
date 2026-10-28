@@ -52,7 +52,7 @@ func (m *Manager) enqueueV2Locked(g *generation, s v2.Sample, at time.Time) {
 				g.slow[key] = d.SMART.Timestamp
 			}
 		}
-		if d.SMART == nil && d.ReadRate == nil && d.WriteRate == nil {
+		if d.SMART == nil && d.Used == nil && d.ReadRate == nil && d.WriteRate == nil {
 			s.Drives = append(s.Drives[:n], s.Drives[n+1:]...)
 		}
 	}
@@ -264,13 +264,19 @@ func (m *Manager) deliverV2(q queued) {
 	m.finishDelivery(q, status, headers)
 }
 func profileDiff(old, next v2.Profile) v2.ProfilePatch {
-	a, _ := json.Marshal(old)
-	b, _ := json.Marshal(next)
-	var x, y any
+	patch := v2.ProfilePatch{}
+	if old.IntervalSeconds != next.IntervalSeconds {
+		patchOp(&patch, "replace", "/interval_seconds", next.IntervalSeconds)
+	}
+	if !reflect.DeepEqual(old.Enabled, next.Enabled) {
+		patchOp(&patch, "replace", "/enabled", next.Enabled)
+	}
+	a, _ := json.Marshal(old.Inventory)
+	b, _ := json.Marshal(next.Inventory)
+	var x, y map[string]any
 	_ = json.Unmarshal(a, &x)
 	_ = json.Unmarshal(b, &y)
-	patch := v2.ProfilePatch{}
-	diffValue(&patch, "", x, y)
+	diffInventory(&patch, x, y)
 	return patch
 }
 func patchOp(p *v2.ProfilePatch, op, path string, value any) {
@@ -283,6 +289,84 @@ func patchOp(p *v2.ProfilePatch, op, path string, value any) {
 func pointerPath(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "~", "~0"), "/", "~1")
 }
+
+// The patch grammar forbids replacing /inventory or the cpu/os information
+// groups wholesale. Missing object groups are created leaf by leaf, arrays are
+// changed member by member, and scalar fields use replace so an absent value
+// can be added without a group-level operation.
+var inventoryArrays = map[string]bool{"cores": true, "gpus": true, "drives": true, "volumes": true, "interfaces": true, "batteries": true, "fans": true}
+
+func diffInventory(p *v2.ProfilePatch, old, next map[string]any) {
+	keys := []string{}
+	for key := range old {
+		keys = append(keys, key)
+	}
+	for key := range next {
+		if _, ok := old[key]; !ok {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		x, hasOld := old[key]
+		y, hasNext := next[key]
+		path := "/inventory/" + pointerPath(key)
+		switch {
+		case key == "cpu" || key == "os":
+			var a, b map[string]any
+			if hasOld {
+				a, _ = x.(map[string]any)
+			}
+			if hasNext {
+				b, _ = y.(map[string]any)
+			}
+			diffObjectGroup(p, path, a, b)
+		case inventoryArrays[key]:
+			var a, b []any
+			if hasOld {
+				a, _ = x.([]any)
+			}
+			if hasNext {
+				b, _ = y.([]any)
+			}
+			mergeObjects(p, path, a, b)
+		case !hasNext:
+			patchOp(p, "remove", path, nil)
+		case !hasOld || !reflect.DeepEqual(x, y):
+			patchOp(p, "replace", path, y)
+		}
+	}
+}
+
+func diffObjectGroup(p *v2.ProfilePatch, path string, old, next map[string]any) {
+	keys := []string{}
+	for key := range old {
+		keys = append(keys, key)
+	}
+	for key := range next {
+		if _, ok := old[key]; !ok {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		x, hasOld := old[key]
+		y, hasNext := next[key]
+		child := path + "/" + pointerPath(key)
+		switch {
+		case !hasNext:
+			if hasOld {
+				patchOp(p, "remove", child, nil)
+			}
+		case !hasOld:
+			patchOp(p, "add", child, y)
+		case !reflect.DeepEqual(x, y):
+			patchOp(p, "replace", child, y)
+		}
+	}
+}
+
+// diffValue handles fields inside an inventory object member.
 func diffValue(p *v2.ProfilePatch, path string, old, next any) {
 	if reflect.DeepEqual(old, next) {
 		return
@@ -318,34 +402,38 @@ func diffValue(p *v2.ProfilePatch, path string, old, next any) {
 	aa, as := old.([]any)
 	bb, bs := next.([]any)
 	if as && bs && strings.HasPrefix(path, "/inventory/") && objectArray(aa) && objectArray(bb) {
-		wanted := map[any]bool{}
-		for _, x := range bb {
-			wanted[x.(map[string]any)["id"]] = true
-		}
-		kept := append([]any{}, aa...)
-		for n := len(kept) - 1; n >= 0; n-- {
-			if !wanted[kept[n].(map[string]any)["id"]] {
-				patchOp(p, "remove", path+"/"+strconv.Itoa(n), nil)
-				kept = append(kept[:n], kept[n+1:]...)
-			}
-		}
-		for _, v := range bb {
-			id := v.(map[string]any)["id"]
-			found := false
-			for n, x := range kept {
-				if x.(map[string]any)["id"] == id {
-					diffValue(p, path+"/"+strconv.Itoa(n), x, v)
-					found = true
-					break
-				}
-			}
-			if !found {
-				patchOp(p, "add", path+"/-", v)
-			}
-		}
+		mergeObjects(p, path, aa, bb)
 		return
 	}
 	patchOp(p, "replace", path, next)
+}
+
+func mergeObjects(p *v2.ProfilePatch, path string, aa, bb []any) {
+	wanted := map[any]bool{}
+	for _, x := range bb {
+		wanted[x.(map[string]any)["id"]] = true
+	}
+	kept := append([]any{}, aa...)
+	for n := len(kept) - 1; n >= 0; n-- {
+		if !wanted[kept[n].(map[string]any)["id"]] {
+			patchOp(p, "remove", path+"/"+strconv.Itoa(n), nil)
+			kept = append(kept[:n], kept[n+1:]...)
+		}
+	}
+	for _, v := range bb {
+		id := v.(map[string]any)["id"]
+		found := false
+		for n, x := range kept {
+			if x.(map[string]any)["id"] == id {
+				diffValue(p, path+"/"+strconv.Itoa(n), x, v)
+				found = true
+				break
+			}
+		}
+		if !found {
+			patchOp(p, "add", path+"/-", v)
+		}
+	}
 }
 func objectArray(a []any) bool {
 	for _, v := range a {

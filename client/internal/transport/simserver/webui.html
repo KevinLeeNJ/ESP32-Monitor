@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32 Monitor Server</title>
+<style>
+:root {
+  color-scheme: light;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+  color: #243c35;
+  background: #edf1e9;
+  --ink: #243c35;
+  --muted: #7d8f85;
+  --line: #cdd8cc;
+  --panel: #fbfcf9;
+  --deep: #203d35;
+  --accent: #2f6b52;
+  --accent-soft: #e4efe0;
+  --amber: #9a6814;
+  --amber-soft: #f7edd8;
+  --red: #a33a2c;
+  --red-soft: #f7e4e0;
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; }
+button, input { font: inherit; }
+button { cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 3px solid #a9c9a8; outline-offset: 2px; }
+.shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 100vh; }
+.sidebar { background: var(--deep); color: #dbe9df; padding: 28px 18px; display: flex; flex-direction: column; }
+.brand { display: flex; gap: 12px; align-items: center; padding: 0 8px 30px; }
+.logo { background: #d0e4bd; color: #244337; font-weight: 800; border-radius: 8px; padding: 9px 11px; }
+.brand strong { display: block; font-size: 14px; letter-spacing: .03em; }
+.brand small { color: #a9c2b2; font-size: 11px; }
+.nav-label { color: #86a597; font-size: 10px; letter-spacing: .14em; margin: 17px 10px 8px; }
+.nav { border: 0; background: #436158; color: #fff; padding: 11px 12px; border-radius: 6px; font-size: 13px; font-weight: 700; text-align: left; }
+.foot { margin-top: auto; padding: 20px 10px 0; color: #a9c2b2; font-size: 11px; line-height: 1.7; }
+.main { min-width: 0; display: flex; flex-direction: column; }
+.topbar { min-height: 72px; border-bottom: 1px solid var(--line); background: #f8faf6; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 16px 32px; }
+.topbar h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -.02em; }
+.topbar p { margin: 0; color: var(--muted); font-size: 12px; }
+.content { padding: 28px 32px 48px; }
+.card { background: var(--panel); border: 2px solid var(--line); border-radius: 4px; box-shadow: 5px 5px 0 rgba(32, 61, 53, .08); }
+.card-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--line); }
+.card-head h2 { font-size: 14px; margin: 0; letter-spacing: .02em; }
+.card-head span { color: var(--muted); font-size: 12px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 13px 18px; border-bottom: 1px solid #e2e8df; font-size: 13px; vertical-align: middle; }
+th { font-size: 10px; letter-spacing: .12em; color: var(--muted); text-transform: uppercase; font-weight: 700; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover { background: #f4f7f1; }
+.name { font-weight: 700; }
+.sub { color: var(--muted); font-size: 11px; margin-top: 3px; }
+.code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px; letter-spacing: .18em; font-weight: 700; }
+.pill { display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; border: 1px solid transparent; white-space: nowrap; }
+th:nth-child(2), td:nth-child(2) { width: 84px; }
+th:nth-child(3), td:nth-child(3) { width: 118px; white-space: nowrap; }
+.pill.pending { background: var(--amber-soft); color: var(--amber); border-color: #ead8b3; }
+.pill.registered { background: var(--accent-soft); color: var(--accent); border-color: #cadfca; }
+.pill.expired { background: var(--red-soft); color: var(--red); border-color: #eccdc6; }
+.row-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.btn { border: 2px solid var(--line); background: #fff; color: var(--ink); padding: 8px 14px; border-radius: 3px; font-size: 13px; font-weight: 600; transition: transform .05s ease, box-shadow .05s ease; white-space: nowrap; }
+.btn:hover { background: #f2f6ef; }
+.btn:active { transform: translate(1px, 1px); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { background: #275c46; }
+.btn.ghost { border-color: transparent; background: transparent; color: var(--accent); }
+.btn.danger { border-color: transparent; background: transparent; color: var(--red); }
+.btn.small { padding: 5px 10px; font-size: 12px; }
+.empty { padding: 46px 20px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.8; }
+.empty strong { display: block; color: var(--ink); font-size: 15px; margin-bottom: 6px; }
+.modal { position: fixed; inset: 0; display: none; place-items: center; background: rgba(18, 32, 27, .48); padding: 24px; z-index: 10; }
+.modal.open { display: grid; }
+.dialog { width: min(420px, 100%); background: var(--panel); border: 2px solid var(--deep); border-radius: 4px; box-shadow: 8px 8px 0 rgba(15, 28, 23, .25); padding: 24px; }
+.dialog h3 { margin: 0 0 6px; font-size: 18px; letter-spacing: -.02em; }
+.dialog p { margin: 0 0 18px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.dialog label { display: block; font-size: 12px; font-weight: 700; margin-bottom: 7px; }
+.dialog input { width: 100%; padding: 10px 12px; border: 2px solid var(--line); border-radius: 3px; background: #fff; }
+.dialog input:focus { border-color: var(--accent); outline: none; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+.error { color: var(--red); font-size: 12px; min-height: 18px; margin-top: 8px; }
+.code-box { text-align: center; padding: 8px 0 4px; }
+.code-box .digits { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 44px; font-weight: 800; letter-spacing: .16em; color: var(--deep); padding: 14px 0; border: 2px dashed #b8c9b4; border-radius: 4px; background: #f4f8f0; margin: 6px 0 10px; }
+.code-box .ttl { color: var(--muted); font-size: 12px; }
+.hint { color: var(--muted); font-size: 12px; line-height: 1.7; margin: 14px 0 0; }
+@media (max-width: 760px) {
+  .shell { grid-template-columns: 1fr; }
+  .sidebar { flex-direction: row; align-items: center; padding: 12px 16px; }
+  .brand { padding: 0; }
+  .brand small, .nav-label, .foot { display: none; }
+  .topbar { padding: 14px 18px; }
+  .content { padding: 18px; }
+  th, td { padding: 11px 10px; }
+  th:nth-child(2), td:nth-child(2) { width: 72px; }
+  th:nth-child(3), td:nth-child(3) { width: 98px; }
+  th:nth-child(4), td:nth-child(4) { display: none; }
+  .row-actions { flex-direction: column; align-items: flex-end; gap: 4px; }
+  .name { overflow-wrap: anywhere; }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">M</div>
+      <div><strong>ESP32 Monitor</strong><small>Server 模拟器</small></div>
+    </div>
+    <div class="nav-label">管理</div>
+    <div class="nav">设备</div>
+    <div class="foot">仅用于本机开发。<br>设备注册数据保存在内存中，<br>重启模拟器后需重新添加。</div>
+  </aside>
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h1>设备</h1>
+        <p>添加设备后在 Client 输入验证码，Client 会自动换取上传令牌。</p>
+      </div>
+      <button class="btn primary" id="add-button">添加设备</button>
+    </header>
+    <div class="content">
+      <section class="card">
+        <div class="card-head"><h2>已登记设备</h2><span id="count">—</span></div>
+        <table>
+          <thead><tr><th>设备</th><th>状态</th><th>验证码</th><th>最近在线</th><th></th></tr></thead>
+          <tbody id="device-rows"></tbody>
+        </table>
+        <div class="empty" id="empty" hidden>
+          <strong>还没有设备</strong>
+          点击右上角「添加设备」，输入名称获取 6 位验证码。
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="dialog">
+    <div id="form-view">
+      <h3 id="modal-title">添加设备</h3>
+      <p>输入一个便于识别的名称，例如「Kevin 的 MacBook」。</p>
+      <label for="device-name">设备名称</label>
+      <input id="device-name" maxlength="64" placeholder="Kevin 的 MacBook" autocomplete="off">
+      <div class="error" id="form-error"></div>
+      <div class="dialog-actions">
+        <button class="btn" id="cancel-button">取消</button>
+        <button class="btn primary" id="create-button">创建</button>
+      </div>
+    </div>
+    <div id="code-view" hidden>
+      <h3 id="code-title">设备已添加</h3>
+      <p id="code-device"></p>
+      <div class="code-box" id="code-box">
+        <div class="digits" id="code-digits">------</div>
+        <div class="ttl" id="code-ttl">10 分钟内有效</div>
+      </div>
+      <p class="hint" id="code-hint">打开 Client 的「Server 连接」页，填写 Server 地址并输入此验证码。注册成功后验证码立即失效。</p>
+      <div class="dialog-actions">
+        <button class="btn" id="copy-button">复制验证码</button>
+        <button class="btn primary" id="done-button">完成</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const state = { devices: [], modal: null, mode: null, codeDeviceId: null, shownCode: "", timer: null };
+const $ = (id) => document.getElementById(id);
+
+function statusPill(device) {
+  if (device.status === "pending") {
+    return device.registered
+      ? '<span class="pill pending">已注册 · 待重新绑定</span>'
+      : '<span class="pill pending">等待验证</span>';
+  }
+  if (device.status === "registered") return '<span class="pill registered">已注册</span>';
+  return '<span class="pill expired">验证码过期</span>';
+}
+
+function formatSeen(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  const seconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000));
+  if (seconds < 60) return `${seconds} 秒前`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
+  return date.toLocaleTimeString("zh-CN");
+}
+
+function render() {
+  const rows = $("device-rows");
+  rows.innerHTML = "";
+  $("count").textContent = state.devices.length ? `${state.devices.length} 台` : "—";
+  $("empty").hidden = state.devices.length > 0;
+  for (const device of state.devices) {
+    const tr = document.createElement("tr");
+    const status = statusPill(device);
+    const code = device.status === "pending"
+      ? `<span class="code">${device.code.slice(0, 3)} ${device.code.slice(3)}</span>`
+      : '<span class="sub">—</span>';
+    tr.innerHTML = `
+      <td><div class="name"></div><div class="sub"></div></td>
+      <td>${status}</td>
+      <td>${code}</td>
+      <td><span class="sub">${formatSeen(device.last_seen_at)}</span></td>
+      <td><div class="row-actions">
+        <button class="btn ghost small" data-action="code">${device.status === "pending" ? "新验证码" : "重新绑定"}</button>
+        <button class="btn danger small" data-action="delete">删除</button>
+      </div></td>`;
+    tr.querySelector(".name").textContent = device.name;
+    tr.querySelector(".sub").textContent = device.id;
+    tr.querySelector('[data-action="code"]').addEventListener("click", () => issueCode(device));
+    tr.querySelector('[data-action="delete"]').addEventListener("click", () => removeDevice(device));
+    rows.appendChild(tr);
+  }
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  if (response.status === 204) return null;
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+  return body;
+}
+
+async function refresh() {
+  try {
+    const body = await api("/api/devices");
+    state.devices = body.devices || [];
+    render();
+    syncCodeModal();
+  } catch (error) {
+    $("count").textContent = "连接失败";
+  }
+}
+
+function syncCodeModal() {
+  if (state.modal !== "code" || !state.codeDeviceId) return;
+  const device = state.devices.find(entry => entry.id === state.codeDeviceId);
+  if (!device) return;
+  if (device.status === "registered") {
+    if (state.mode !== "registered") showRegistered(device);
+    return;
+  }
+  if (state.mode === "registered" && device.status === "pending") {
+    showCode(device);
+  } else if (device.status === "pending" && device.code && device.code !== state.shownCode) {
+    showCode(device);
+  } else if (device.status === "expired") {
+    state.mode = "expired";
+    clearInterval(state.timer);
+    $("code-ttl").textContent = "验证码已过期，请在列表中重新生成";
+  }
+}
+
+function openModal(view) {
+  $("modal").classList.add("open");
+  $("form-view").hidden = view !== "form";
+  $("code-view").hidden = view !== "code";
+  state.modal = view;
+  if (view === "form") {
+    $("device-name").value = "";
+    $("form-error").textContent = "";
+    setTimeout(() => $("device-name").focus(), 30);
+  }
+}
+
+function closeModal() {
+  $("modal").classList.remove("open");
+  state.modal = null;
+  clearInterval(state.timer);
+  refresh();
+}
+
+function showCode(device) {
+  state.modal = "code";
+  state.mode = "code";
+  state.codeDeviceId = device.id;
+  state.shownCode = device.code;
+  $("form-view").hidden = true;
+  $("code-view").hidden = false;
+  $("modal").classList.add("open");
+  $("code-title").textContent = "设备已添加";
+  $("code-device").textContent = `「${device.name}」的验证码`;
+  $("code-box").hidden = false;
+  $("copy-button").hidden = false;
+  $("code-hint").textContent = "打开 Client 的「Server 连接」页，填写 Server 地址并输入此验证码。注册成功后验证码立即失效。";
+  $("code-digits").textContent = `${device.code.slice(0, 3)} ${device.code.slice(3)}`;
+  const expiry = device.code_expires_at ? new Date(device.code_expires_at).getTime() : Date.now() + 600000;
+  clearInterval(state.timer);
+  const tick = () => {
+    const left = Math.max(0, Math.round((expiry - Date.now()) / 1000));
+    $("code-ttl").textContent = left > 0
+      ? `${Math.floor(left / 60)} 分 ${String(left % 60).padStart(2, "0")} 秒内有效`
+      : "验证码已过期，请在列表中重新生成";
+    if (left === 0) clearInterval(state.timer);
+  };
+  tick();
+  state.timer = setInterval(tick, 1000);
+}
+
+function showRegistered(device) {
+  state.mode = "registered";
+  clearInterval(state.timer);
+  $("code-title").textContent = "设备已注册";
+  $("code-device").textContent = `「${device.name}」已完成验证码换取`;
+  $("code-box").hidden = true;
+  $("copy-button").hidden = true;
+  $("code-hint").textContent = "Client 已安全保存上传令牌，验证码随即失效。可以关闭此窗口。";
+}
+
+async function createDevice() {
+  const name = $("device-name").value.trim();
+  if (!name) {
+    $("form-error").textContent = "请输入设备名称";
+    return;
+  }
+  $("create-button").disabled = true;
+  try {
+    const device = await api("/api/devices", { method: "POST", body: JSON.stringify({ name }) });
+    showCode(device);
+    await refresh();
+  } catch (error) {
+    $("form-error").textContent = `创建失败：${error.message}`;
+  } finally {
+    $("create-button").disabled = false;
+  }
+}
+
+async function issueCode(device) {
+  try {
+    const updated = await api(`/api/devices/${device.id}/code`, { method: "POST" });
+    showCode(updated);
+    await refresh();
+  } catch (error) {
+    alert(`生成验证码失败：${error.message}`);
+  }
+}
+
+async function removeDevice(device) {
+  if (!confirm(`删除「${device.name}」？该设备的上传令牌会立即失效。`)) return;
+  try {
+    await api(`/api/devices/${device.id}`, { method: "DELETE" });
+    await refresh();
+  } catch (error) {
+    alert(`删除失败：${error.message}`);
+  }
+}
+
+async function copyCode() {
+  const code = $("code-digits").textContent.replace(/\s/g, "");
+  try {
+    await navigator.clipboard.writeText(code);
+    $("copy-button").textContent = "已复制";
+    setTimeout(() => { $("copy-button").textContent = "复制验证码"; }, 1600);
+  } catch {
+    const range = document.createRange();
+    range.selectNodeContents($("code-digits"));
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+}
+
+$("add-button").addEventListener("click", () => openModal("form"));
+$("cancel-button").addEventListener("click", closeModal);
+$("done-button").addEventListener("click", closeModal);
+$("create-button").addEventListener("click", createDevice);
+$("copy-button").addEventListener("click", copyCode);
+$("device-name").addEventListener("keydown", (event) => { if (event.key === "Enter") createDevice(); });
+document.addEventListener("keydown", (event) => { if (event.key === "Escape" && state.modal) closeModal(); });
+$("modal").addEventListener("click", (event) => { if (event.target === $("modal")) closeModal(); });
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

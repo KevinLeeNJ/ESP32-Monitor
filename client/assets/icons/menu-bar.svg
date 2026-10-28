@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">
+  <title>ESP32 Monitor menu bar template icon</title>
+  <path fill="#000" fill-rule="evenodd" d="M3 4H19L20 5V17L19 18H3L2 17V5Z M4 6V16H18V6Z"/>
+  <rect x="6" y="8" width="2" height="6" fill="#000"/>
+  <rect x="8" y="8" width="2" height="4" fill="#000"/>
+  <rect x="10" y="10" width="2" height="2" fill="#000"/>
+  <rect x="12" y="8" width="2" height="4" fill="#000"/>
+  <rect x="14" y="8" width="2" height="6" fill="#000"/>
+</svg>

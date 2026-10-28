@@ -166,7 +166,7 @@ func Start(ctx context.Context, executable string) (*Connection, error) {
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, executable, "app-server", "--listen", "stdio://")
+	cmd := exec.CommandContext(ctx, resolveExecutable(executable), "app-server", "--listen", "stdio://")
 	cmd.Env = env
 	cmd.Stderr = io.Discard // Never forward raw account/config diagnostics to snapshots.
 	in, err := cmd.StdinPipe()

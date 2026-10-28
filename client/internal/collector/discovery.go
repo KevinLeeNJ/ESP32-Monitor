@@ -49,10 +49,7 @@ func capabilitiesFor(plugin string, b Batch) []MetricCapability {
 			id := metricID(plugin, sample.Name, field)
 			c := byID[id]
 			if c == nil {
-				c = &MetricCapability{ID: id, Measurement: sample.Name, Field: field, Unit: unit(sample.Name, field), UploadSupported: uploadSupported(sample.Name, field), Objects: []map[string]string{}}
-				if !c.UploadSupported {
-					c.UploadReason = "server_schema_not_supported"
-				}
+				c = &MetricCapability{ID: id, Measurement: sample.Name, Field: field, Unit: unit(sample.Name, field), Objects: []map[string]string{}}
 				byID[id] = c
 			}
 			found := false

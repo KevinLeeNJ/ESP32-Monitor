@@ -1,4 +1,4 @@
-// Package collector owns Telegraf discovery, configuration transactions,
-// supervised processes, local previews and allowlisted uploads. Telegraf only
-// receives a random loopback credential; Server credentials remain in the Agent.
+// Package collector owns in-process gopsutil Core Collector and platform Native
+// Collector adapters, transactional live selections, local previews and bounded
+// v2 uploads, with one fixed inventory per Manager lifetime.
 package collector

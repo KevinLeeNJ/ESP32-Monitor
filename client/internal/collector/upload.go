@@ -1,12 +1,9 @@
 package collector
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"io"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -20,7 +17,6 @@ import (
 )
 
 type queued struct {
-	batch    Batch
 	revision uint64
 	at       time.Time
 	attempt  int
@@ -32,7 +28,7 @@ type queued struct {
 func (m *Manager) initUploader() error {
 	if m.opts.UploadURL != "" {
 		u, err := url.Parse(m.opts.UploadURL)
-		if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Hostname() == "" || (u.Path != "/v1/ingest/telegraf" && u.Path != "/v2/collector/samples") {
+		if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Hostname() == "" || u.Path != "/v2/collector/samples" {
 			return errors.New("invalid_upload_url")
 		}
 		ip := net.ParseIP(u.Hostname())
@@ -58,25 +54,14 @@ func queueMetrics(q []queued) int {
 	for _, b := range q {
 		if b.v2 != nil {
 			n += len(b.v2.Samples)
-		} else {
-			n += len(b.batch.Metrics)
 		}
 	}
 	return n
 }
 func (m *Manager) trimQueueLocked(now time.Time) {
-	for len(m.queue) > 0 && (now.Sub(m.queue[0].at) > 5*time.Minute || queueMetrics(m.queue) > 1000 || m.isV2() && queueBytes(m.queue) > maxBody) {
+	for len(m.queue) > 0 && (now.Sub(m.queue[0].at) > 5*time.Minute || queueMetrics(m.queue) > 1000 || queueBytes(m.queue) > maxBody) {
 		m.snapshot.DroppedMetrics += uint64(queueMetrics(m.queue[:1]))
 		m.queue = m.queue[1:]
-	}
-}
-func (m *Manager) enqueueLocked(b Batch, rev uint64, at time.Time) {
-	// Collection never waits for transport; this bounded Agent queue retries.
-	m.queue = append(m.queue, queued{batch: detached(b), revision: rev, at: at})
-	m.trimQueueLocked(at)
-	select {
-	case m.wake <- struct{}{}:
-	default:
 	}
 }
 func (m *Manager) uploadLoop() {
@@ -109,37 +94,7 @@ func (m *Manager) deliver() {
 		return
 	}
 	m.mu.Unlock()
-	if q.v2 != nil {
-		m.deliverV2(q)
-		return
-	}
-	body, _ := json.Marshal(q.batch)
-	if len(body) > maxBody || len(q.batch.Metrics) > 100 {
-		m.finishDelivery(q, 413, nil)
-		return
-	}
-	ctx, cancel := context.WithTimeout(m.ctx, 8*time.Second)
-	defer cancel()
-	token, err := m.opts.UploadToken(ctx)
-	if err != nil || token == "" {
-		m.finishDelivery(q, 401, nil)
-		return
-	}
-	req, err := http.NewRequestWithContext(ctx, "POST", m.opts.UploadURL, bytes.NewReader(body))
-	if err != nil {
-		m.finishDelivery(q, 400, nil)
-		return
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := m.opts.HTTPClient.Do(req)
-	if err != nil {
-		m.finishDelivery(q, 0, nil)
-		return
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-	m.finishDelivery(q, resp.StatusCode, resp.Header)
+	m.deliverV2(q)
 }
 func (m *Manager) finishDelivery(q queued, status int, headers http.Header) {
 	m.mu.Lock()
@@ -151,21 +106,13 @@ func (m *Manager) finishDelivery(q queued, status int, headers http.Header) {
 	switch {
 	case status >= 200 && status < 300:
 		now := time.Now()
-		if q.v2 == nil || len(q.v2.Samples) > 0 {
+		if q.v2 != nil && len(q.v2.Samples) > 0 {
 			m.snapshot.LastUploadAt = &now
 		}
 		m.snapshot.UploadError = ""
 		m.queue = m.queue[1:]
 	case status == 401 || status == 403:
 		m.snapshot.UploadError = "upload_auth_required"
-	case status == 413 && q.v2 == nil && len(q.batch.Metrics) > 1:
-		half := len(q.batch.Metrics) / 2
-		a, b := q, q
-		a.batch = Batch{q.batch.Metrics[:half]}
-		b.batch = Batch{q.batch.Metrics[half:]}
-		b.at = b.at.Add(time.Nanosecond)
-		m.queue = append([]queued{a, b}, m.queue[1:]...)
-		m.snapshot.UploadError = "upload_batch_split"
 	case status == 0 || status == 429 || status >= 500:
 		m.queue[0].attempt++
 		attempt := min(m.queue[0].attempt, 6)

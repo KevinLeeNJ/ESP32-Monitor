@@ -1,3 +1,6 @@
 /bin/
+/build/
 /frontend/node_modules/
 /frontend/dist/
+/frontend/dist-web/
+/internal/guiassets/assets/

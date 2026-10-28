@@ -9,14 +9,29 @@ import (
 	"esp32-monitor/client/internal/collector"
 	"esp32-monitor/client/internal/companion"
 	"esp32-monitor/client/internal/config"
+	"esp32-monitor/client/internal/ipc"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"time"
 )
 
-// Run emits one JSON snapshot by default. --watch, --collector and --companion
-// stay in the background and emit JSONL while services own their own schedules.
+func defaultRouteIPv4() string {
+	conn, err := net.Dial("udp4", "8.8.8.8:80")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+		return addr.IP.String()
+	}
+	return ""
+}
+
+// Run emits one JSON snapshot by default. --watch, --collector, --companion
+// and --ipc-socket stay in the background and emit JSONL while services own
+// their own schedules.
 func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	fs := flag.NewFlagSet("monitor-agent", flag.ContinueOnError)
 	fs.SetOutput(errOut)
@@ -26,6 +41,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	var login bool
 	var collectorAPI string
 	var collectorScan bool
+	var ipcSocket string
 	fs.StringVar(&c.GitHub.Login, "github-user", "", "GitHub login; enables contribution calendar using the application credential store")
 	fs.StringVar(&c.GitHub.ClientID, "github-client-id", "", "public GitHub OAuth App client ID (device flow must be enabled)")
 	fs.BoolVar(&login, "github-login", false, "open the OS default browser for GitHub login, then read the authorized user's calendar")
@@ -45,10 +61,11 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	fs.BoolVar(&watch, "watch", false, "emit snapshots as JSONL until interrupted")
 	fs.BoolVar(&c.Collector.Enabled, "collector", false, "enable in-process Core/Native collectors and restore the last committed configuration")
 	fs.StringVar(&c.Collector.StateDirectory, "collector-state-dir", "", "private collector state and native bridge descriptor directory")
-	fs.StringVar(&c.Collector.UploadURL, "collector-upload-url", "", "HTTPS Server ingest URL (HTTP allowed only for IP loopback)")
+	fs.StringVar(&c.Collector.UploadURL, "collector-upload-url", "", "Server v2 samples URL (.../v2/collector/samples); HTTP allowed only for IP loopback")
 	fs.StringVar(&c.Collector.UploadTokenFile, "collector-upload-token-file", "", "private 0600 Server token file; never returned by the GUI API")
 	fs.StringVar(&collectorAPI, "collector-api", "", "authenticated native bridge API at 127.0.0.1:PORT; enables collector")
 	fs.BoolVar(&collectorScan, "collector-scan", false, "print actual Core/Native collector metric capabilities as JSON and exit")
+	fs.StringVar(&ipcSocket, "ipc-socket", "", "user-authenticated Unix socket for the GUI host; implies persistent mode")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -57,6 +74,16 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	}
 	c.GitHub.Enabled = c.GitHub.Login != ""
 	c.Collector.Enabled = c.Collector.Enabled || collectorAPI != "" || collectorScan
+	if c.Companion.Enabled && c.Companion.BindIP == "" {
+		// The GUI has no interface picker; without an IP transport.New would
+		// reject the whole agent. Pick the default-route IPv4 locally — a UDP
+		// "connect" consults the routing table and sends no packets.
+		ip := defaultRouteIPv4()
+		if ip == "" {
+			return errors.New("select_lan_interface")
+		}
+		c.Companion.BindIP = ip
+	}
 	application, err := app.New(c, cacheDir)
 	if err != nil {
 		return err
@@ -156,7 +183,22 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		}
 	}()
 	defer func() { cancel(); <-done; <-tasksDone; <-musicDone }()
-	if !watch && !c.Companion.Enabled && collectorAPI == "" && !c.Collector.Enabled {
+	var ipcServer *ipc.Server
+	if ipcSocket != "" {
+		ipcServer, err = ipc.NewServer(application, ipc.Options{SocketPath: ipcSocket, Shutdown: cancel})
+		if err != nil {
+			return err
+		}
+		if err := ipcServer.Listen(); err != nil {
+			return err
+		}
+		defer func() {
+			_ = ipcServer.Close()
+			_, _ = fmt.Fprintln(errOut, "ipc_closed")
+		}()
+		_, _ = fmt.Fprintln(errOut, "ipc_listening:", ipcSocket)
+	}
+	if !watch && !c.Companion.Enabled && collectorAPI == "" && !c.Collector.Enabled && ipcServer == nil {
 		// A one-shot must wait for its requested reads rather than return starting.
 		service.Refresh(ctx)
 		taskCtx, taskCancel := context.WithTimeout(ctx, 8*time.Second)

@@ -1,0 +1,12 @@
+<?xml version='1.0' encoding='utf-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>ESP32 Monitor application icon</title>
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="#F3F3ED" />
+  <polygon points="260,302 764,302 792,330 792,694 764,722 260,722 232,694 232,330" fill="#252525" />
+  <polygon points="280,342 744,342 752,350 752,674 744,682 280,682 272,674 272,350" fill="#F3F3ED" />
+  <rect x="352" y="424" width="48" height="176" rx="0" fill="#252525" />
+  <rect x="400" y="424" width="64" height="104" rx="0" fill="#252525" />
+  <rect x="464" y="480" width="96" height="48" rx="0" fill="#252525" />
+  <rect x="560" y="424" width="64" height="104" rx="0" fill="#252525" />
+  <rect x="624" y="424" width="48" height="176" rx="0" fill="#252525" />
+</svg>
