@@ -227,6 +227,20 @@ func (b *Backend) beginLANPairing(device string) error {
 	b.mu.Lock()
 	c, ok := b.candidates[device]
 	b.mu.Unlock()
+	if ok && time.Since(c.Seen) > 10*time.Second {
+		// Risk-confirmation outlives the discovery TTL at human pace. Re-verify
+		// the cached address before rejecting; a fresh announce also refreshes
+		// the candidate, keeping the unicast identity check authoritative.
+		ctx, cancel := context.WithTimeout(b.ctx, 3*time.Second)
+		defer cancel()
+		out, e := b.query(ctx, c.Addr.String(), nil, 2*time.Second, false)
+		if e != nil || len(out) == 0 {
+			return errors.New("device_not_observed")
+		}
+		b.mu.Lock()
+		c, ok = b.candidates[device]
+		b.mu.Unlock()
+	}
 	if !ok || time.Since(c.Seen) > 10*time.Second {
 		return errors.New("device_not_observed")
 	}
@@ -289,6 +303,10 @@ func (b *Backend) Devices() ([]DeviceStatus, bool) {
 		if x := b.sessions[p.DeviceID]; x != nil {
 			s.SessionID = x.id
 			s.ConnectionState = x.state
+			// maintain() stops probing once a session exists, so candidate.Seen
+			// goes stale; a live session (self-expiring on lost receipts) is the
+			// authoritative presence signal.
+			s.ConfirmedOnline = true
 		}
 		out = append(out, s)
 		seen[p.DeviceID] = true

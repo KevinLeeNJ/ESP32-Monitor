@@ -112,7 +112,7 @@ func New(opts Options) (*Manager, error) {
 			*factory = fixed.Fork
 		}
 	}
-	if m.isV2() {
+	if m.opts.UploadURL != "" {
 		if err := m.initV2(); err != nil {
 			cancel()
 			unlockFile(lock)
@@ -180,11 +180,6 @@ func (m *Manager) apply(ctx context.Context, c Config) (Snapshot, error) {
 	if err = validate(c, caps); err != nil {
 		return m.failure(err)
 	}
-	for _, s := range c.Selections {
-		if s.Upload && m.opts.UploadURL == "" {
-			return m.failure(errors.New("upload_not_configured"))
-		}
-	}
 	old := m.Snapshot()
 	revision := old.Revision + 1
 	if ctx.Err() != nil {
@@ -236,7 +231,7 @@ func (m *Manager) disable(ctx context.Context, c Config) (Snapshot, error) {
 	m.snapshot.LastReceivedAt = nil
 	m.snapshot.LastUploadAt = nil
 	m.snapshot.V2Sample = nil
-	if m.isV2() {
+	if m.v2 != nil {
 		m.enqueueV2ProfileLocked(c, revision)
 	}
 	m.mu.Unlock()
@@ -261,7 +256,7 @@ func (m *Manager) commit(g *generation) {
 	// Pending samples belong to the previous config and must not escape after a switch.
 	m.snapshot.DroppedMetrics += uint64(queueMetrics(m.queue))
 	m.queue = nil
-	if m.isV2() && (g.config.Upload == nil || !g.config.Upload.Enabled) {
+	if m.v2 != nil && (g.config.Upload == nil || !g.config.Upload.Enabled) {
 		m.enqueueV2ProfileLocked(g.config, g.revision)
 	}
 	m.mu.Unlock()
@@ -278,10 +273,17 @@ func randomToken() string {
 	}
 	return hex.EncodeToString(b[:])
 }
+
+// collectConfig keeps every cheap local source running so the GUI can show live
+// values for available metrics the user has not selected.
+func (m *Manager) collectConfig(c Config) Config {
+	return v2PreviewConfig(c)
+}
+
 func (m *Manager) start(ctx context.Context, c Config, revision uint64) (*generation, error) {
 	ctx, cancel := context.WithTimeout(ctx, m.opts.ApplyTimeout)
 	defer cancel()
-	g := &generation{config: c, collect: v2CollectConfig(c), revision: revision, core: m.opts.CoreFactory(), native: m.opts.NativeFactory(), slow: map[string]int64{}}
+	g := &generation{config: c, collect: m.collectConfig(c), revision: revision, core: m.opts.CoreFactory(), native: m.opts.NativeFactory(), slow: map[string]int64{}}
 	if core, ok := g.core.(*CoreCollector); ok && c.Upload != nil && c.Upload.Enabled {
 		core.maxRateGap = time.Duration(c.IntervalSeconds) * 2 * time.Second
 	}
@@ -324,6 +326,17 @@ func (m *Manager) collectLoop(ctx context.Context, g *generation) {
 		if ctx.Err() != nil {
 			return
 		}
+		// Preview-only sources may legitimately be unavailable; the collector
+		// state tracks the upload selections, not every previewed source.
+		upload := map[string]bool{}
+		for _, id := range selectedSources(v2CollectConfig(g.config)) {
+			upload[id] = true
+		}
+		for id := range reasons {
+			if !upload[id] {
+				delete(reasons, id)
+			}
+		}
 		m.mu.Lock()
 		if m.current == g {
 			m.snapshot.State = "healthy"
@@ -347,7 +360,7 @@ func (m *Manager) accept(g *generation, b Batch) {
 	if len(b.Metrics) > 0 {
 		m.snapshot.LastReceivedAt = &now
 	}
-	m.snapshot.Preview = filter(b, g.config, false)
+	m.snapshot.Preview = filter(b, g.config)
 	if g.config.Upload != nil && g.config.Upload.Enabled {
 		sample, err := m.sampleV2(g.config, b)
 		if err != nil {
@@ -356,12 +369,11 @@ func (m *Manager) accept(g *generation, b Batch) {
 			return
 		}
 		m.enqueueV2Locked(g, sample, now)
-		m.snapshot.V2Sample = ptr(detached(sample))
-		return
 	}
-	upload := filter(b, g.config, true)
-	if len(upload.Metrics) > 0 {
-		m.enqueueLocked(upload, g.revision, now)
+	// The GUI shows every gathered metric, not only the upload choices;
+	// uploaded samples stay restricted to the user's selections.
+	if sample, err := m.previewSampleV2(b); err == nil {
+		m.snapshot.V2Sample = ptr(detached(sample))
 	}
 }
 func (m *Manager) stopGeneration(g *generation) {

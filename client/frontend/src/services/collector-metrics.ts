@@ -1,7 +1,7 @@
-import type { CollectorCapabilities, CollectorConfig, CollectorMetric, CollectorSnapshot, CollectorUploadConfig, CollectorUploadSelection, CollectorV2Capabilities, CollectorV2Metric } from "../types/collector.js";
+import type { CollectorCapabilities, CollectorConfig, CollectorSnapshot, CollectorUploadConfig, CollectorUploadSelection, CollectorV2Capabilities, CollectorV2Metric } from "../types/collector.js";
 
 export const requiredMetrics = new Set(["cpu.usage", "memory.usage", "memory.total", "memory.used", "system.uptime"]);
-export const metricGroups = ["CPU", "内存（Swap）", "GPU", "磁盘", "网络", "电池", "系统"];
+export const metricGroups = ["CPU", "内存（Swap）", "GPU", "磁盘", "网络", "电池", "系统指标"];
 export const metricNames: Record<string, string> = {
   "cpu.usage": "总体 CPU 占用率", "core.usage": "逐核 CPU 占用率", "cpu.model": "CPU 型号",
   "cpu.physical_cores": "物理核心数", "cpu.logical_cores": "逻辑核心数", "cpu.performance_cores": "性能核心数", "cpu.efficiency_cores": "能效核心数",
@@ -27,7 +27,7 @@ export function metricGroup(key: string, caps?: CollectorV2Capabilities): string
     if (fans.length && fans.every(fan => fan.scope === "cpu")) return "CPU";
     if (fans.length && fans.every(fan => fan.scope === "gpu")) return "GPU";
   }
-  return "系统";
+  return "系统指标";
 }
 export const isRequired = (metric: CollectorV2Metric) => metric.required || requiredMetrics.has(metric.metric);
 export const metricBundles = [
@@ -80,6 +80,15 @@ export function displayMetrics(caps: CollectorV2Capabilities): MetricRow[] {
   }
   for (const metric of available) if (!bundleFor(metric.metric)) rows.push({ ...metric, members: [metric] });
   return rows;
+}
+// Row order mirrors the preview page so the GUI reads identically.
+export const displayOrder = ["cpu.usage", "cpu.model", "core.usage", "cpu.load1", "cpu.temperature",
+  "memory.usage", "memory.app", "memory.swap_total", "memory.pressure",
+  "gpu.usage", "gpu.temperature", "drive.model", "drive.read_rate", "drive.smart_health", "drive.smart_attribute",
+  "interface.medium", "interface.upload_rate", "interface.ipv4", "battery.level", "system.uptime", "system.os", "fan.rpm"];
+const orderIndex = (key: string) => { const index = displayOrder.indexOf(key); return index === -1 ? displayOrder.length : index; };
+export function orderedRows(caps: CollectorV2Capabilities): MetricRow[] {
+  return displayMetrics(caps).sort((a, b) => orderIndex(a.metric) - orderIndex(b.metric));
 }
 // Existing drafts are kept when a member becomes unavailable; the user can repair them.
 export function bundleUploads(upload: CollectorUploadConfig, caps: CollectorV2Capabilities) {
@@ -152,26 +161,11 @@ export function prepareMetricDraft(config: CollectorConfig, caps?: CollectorCapa
   if (caps?.v2) {
     next.upload ??= { enabled: false, optional: [] };
     next.upload.interval_seconds = next.interval_seconds;
-    // V2 upload choices live in upload.optional; preserve extra local previews.
-    next.selections.forEach(selection => { selection.upload = false; });
+    // V2 upload choices live in upload.optional; keep local previews separate.
     next.upload.optional = next.upload.optional.filter(selection => !requiredMetrics.has(selection.metric));
     bundleUploads(next.upload, caps.v2);
-  } else {
-    for (const category of caps?.categories ?? []) for (const source of category.sources) {
-      if (source.state !== "available" && source.state !== "partial") continue;
-      for (const metric of source.metrics) if (legacyRequired(metric)) {
-        const objects = metric.measurement === "cpu" ? metric.objects.filter(tags => tags.cpu === "cpu-total") : undefined;
-        const old = next.selections.find(selection => selection.id === metric.id);
-        if (old) { old.upload = true; if (objects) old.objects = objects; }
-        else next.selections.push({ id: metric.id, upload: true, ...(objects ? { objects } : {}) });
-      }
-    }
   }
   return next;
-}
-export function legacyRequired(metric: CollectorMetric): boolean {
-  return (metric.measurement === "cpu" && metric.field === "usage_active" && metric.objects.some(tags => tags.cpu === "cpu-total")) ||
-    (metric.measurement === "mem" && metric.field === "used_percent") || (metric.measurement === "system" && metric.field === "uptime");
 }
 export function record(value: unknown): Record<string, unknown> { return value && typeof value === "object" ? value as Record<string, unknown> : {}; }
 function array(value: unknown): Record<string, unknown>[] { return Array.isArray(value) ? value.map(record) : []; }
@@ -183,14 +177,12 @@ function formatBytes(value: unknown): string {
   } catch { return "—"; }
 }
 function formatMemoryPart(value: unknown, total: unknown): string {
-  const bytes = formatBytes(value);
-  if (bytes === "—") return bytes;
   try {
     const used = BigInt(String(value)), capacity = BigInt(String(total));
-    if (used < 0n || capacity <= 0n) return bytes;
+    if (used < 0n || capacity <= 0n) return "—";
     const hundredths = (used * 10000n + capacity / 2n) / capacity;
-    return `${bytes}（${hundredths / 100n}.${String(hundredths % 100n).padStart(2, "0")}%）`;
-  } catch { return bytes; }
+    return `${hundredths / 100n}.${String(hundredths % 100n).padStart(2, "0")}%`;
+  } catch { return "—"; }
 }
 function formatValue(key: string, value: unknown): string {
   if (value === undefined || value === null) return "—";
@@ -235,12 +227,11 @@ export function metricValue(metric: CollectorV2Metric, caps: CollectorV2Capabili
       const id = Number(item[metric.fixed ? "id" : "i"]);
       const name = caps.objects?.find(object => object.id === id)?.name ?? `对象 ${id}`;
       const formatted = key === "interface.medium" ? ({ wifi: "Wi-Fi", ethernet: "有线网络", other: "其他" }[String(value)] ?? "—") : formatValue(key, value);
-      return objectID === undefined ? `${name}：${formatted}` : formatted;
+      return objectID === undefined ? `${name}: ${formatted}` : formatted;
     }).join("；") || "—";
 }
 
 const memberLabels: Record<string, string> = {
- "cpu.model":"型号", "cpu.physical_cores":"物理核", "cpu.logical_cores":"逻辑核", "cpu.performance_cores":"性能核", "cpu.efficiency_cores":"能效核",
  "cpu.load1":"1 分钟", "cpu.load5":"5 分钟", "cpu.load15":"15 分钟", "memory.app":"App", "memory.wired":"Wired", "memory.compressed":"压缩",
  "memory.swap_total":"总量", "memory.swap_used":"已用", "interface.medium":"类型", "interface.up":"状态", "interface.upload_rate":"上传", "interface.download_rate":"下载",
  "memory.usage":"占用率", "memory.used":"已用", "memory.total":"总量", "drive.model":"型号", "drive.total":"容量", "drive.used":"已用",
@@ -248,8 +239,25 @@ const memberLabels: Record<string, string> = {
  "interface.ipv4":"本地", "network.public_ipv4":"公网", "battery.level":"电量", "battery.charging":"充电状态",
  "system.os":"系统", "system.product":"设备",
 };
+// Bond tokens with non-breaking spaces so a unit never splits between its
+// label and number; units are newline-separated and rendered with pre-line.
+const bond = (value: string) => value.replaceAll(" ", "\u00A0");
+
+// CPU 信息 compacts to "型号\nxC/xT"（核数/线程数）。
+function cpuInfoValue(row: MetricRow, caps: CollectorV2Capabilities): string {
+  const raw = (key: string) => { const metric = row.members.find(member => member.metric === key); return metric ? metricValue(metric, caps) : "—"; };
+  const cores = raw("cpu.physical_cores"), threads = raw("cpu.logical_cores");
+  const parts = [raw("cpu.model")];
+  if (cores !== "—") parts.push(threads === "—" ? `${cores}C` : `${cores}C/${threads}T`);
+  else if (threads !== "—") parts.push(`${threads}T`);
+  return parts.filter(part => part !== "—").join("\n") || "—";
+}
+
+// 每个 "·" 分隔的指标独占一行：WebKit 在 keep-all 下会在小数点/斜杠处断行，
+// 预先分行可完全避开该行为。
 export function rowValue(row: MetricRow, caps: CollectorV2Capabilities, snapshot?: CollectorSnapshot, objectID?: number): string {
-  if (!row.bundle) return metricValue(row.members[0], caps, snapshot, objectID);
+  if (row.bundle?.key === "cpu.model") return cpuInfoValue(row, caps);
+  if (!row.bundle) return bond(metricValue(row.members[0], caps, snapshot, objectID));
   const values = row.members.map(metric => ({ key: metric.metric, value: metricValue(metric, caps, snapshot, objectID) })).filter(entry => entry.value !== "—");
-  return values.length ? values.map(entry => `${memberLabels[entry.key] ?? entry.key} ${entry.value}`).join(" · ") : "—";
+  return values.length ? values.map(entry => `${bond(memberLabels[entry.key] ?? entry.key)}\u00A0${bond(entry.value)}`).join("\n") : "—";
 }

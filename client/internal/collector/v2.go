@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 )
 
 type V2Metric struct {
@@ -62,8 +61,7 @@ type v2State struct {
 	// confirmed wire state is used only under delivery; IDs/inventory freeze at startup.
 }
 
-func ptr[T any](v T) *T       { return &v }
-func (m *Manager) isV2() bool { return strings.HasSuffix(m.opts.UploadURL, "/v2/collector/samples") }
+func ptr[T any](v T) *T { return &v }
 func (m *Manager) initV2() error {
 	s := &v2State{IDs: map[string]uint16{}, Next: 1, Endpoint: m.opts.UploadURL}
 	path := filepath.Join(m.opts.StateDirectory, "collector-v2.json")

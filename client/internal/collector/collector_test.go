@@ -4,17 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	v2 "esp32-monitor/client/internal/collector/uploadv2"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// Deterministic collectors exercise transactions, scheduling and the real uploader.
+// Deterministic collectors exercise transactions, scheduling and previews.
 type testCollector struct{ dir string }
 
 func (c *testCollector) Gather(ctx context.Context, ids []string) (Batch, map[string]string) {
@@ -57,8 +57,8 @@ func newHelper(t *testing.T, uploadURL string) *Manager {
 	t.Cleanup(func() { _ = m.Close() })
 	return m
 }
-func cfg(id string, upload bool) Config {
-	return Config{IntervalSeconds: 5, Selections: []Selection{{ID: id, Upload: upload}}}
+func cfg(id string) Config {
+	return Config{IntervalSeconds: 5, Selections: []Selection{{ID: id}}}
 }
 func TestConfigurationTransactionAndRestore(t *testing.T) {
 	m := newHelper(t, "")
@@ -67,20 +67,20 @@ func TestConfigurationTransactionAndRestore(t *testing.T) {
 	if err != nil || len(caps.Categories) != 7 {
 		t.Fatalf("scan: %v %+v", err, caps)
 	}
-	first, err := m.Apply(ctx, cfg("mem/mem/used", false))
+	first, err := m.Apply(ctx, cfg("mem/mem/used"))
 	if err != nil || first.State != "healthy" || first.PID == 0 || first.Revision != 1 {
 		t.Fatalf("first: %+v %v", first, err)
 	}
 	snapshotPath := filepath.Join(m.opts.StateDirectory, "collector.json")
 	before, _ := os.ReadFile(snapshotPath)
-	_, err = m.Apply(ctx, cfg("net/net/value", true))
+	_, err = m.Apply(ctx, cfg("net/net/missing"))
 	if err == nil || m.Snapshot().PID != first.PID {
-		t.Fatal("invalid upload changed running configuration")
+		t.Fatal("invalid selection changed running configuration")
 	}
 	if err = os.WriteFile(filepath.Join(m.opts.StateDirectory, "fail-system"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	rolled, err := m.Apply(ctx, cfg("system/system/uptime", false))
+	rolled, err := m.Apply(ctx, cfg("system/system/uptime"))
 	if err == nil || rolled.State != "healthy" || rolled.Revision != 1 || rolled.PID != first.PID || rolled.Config.Selections[0].ID != "mem/mem/used" {
 		t.Fatalf("rollback: %+v %v", rolled, err)
 	}
@@ -88,7 +88,7 @@ func TestConfigurationTransactionAndRestore(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Fatal("failed candidate committed")
 	}
-	second, err := m.Apply(ctx, cfg("cpu/cpu/usage_idle", false))
+	second, err := m.Apply(ctx, cfg("cpu/cpu/usage_idle"))
 	if err != nil || second.Revision != 2 || second.PID != rolled.PID || len(second.Preview.Metrics) != 1 || second.Preview.Metrics[0].Name != "cpu" {
 		t.Fatalf("second: %+v %v", second, err)
 	}
@@ -144,7 +144,7 @@ func TestFrontendAPIContainsProbedMetrics(t *testing.T) {
 	for _, cat := range caps.Categories {
 		for _, src := range cat.Sources {
 			for _, metric := range src.Metrics {
-				if metric.ID == "mem/mem/used" && len(metric.Objects) == 1 && metric.UploadSupported {
+				if metric.ID == "mem/mem/used" && len(metric.Objects) == 1 {
 					found = true
 				}
 			}
@@ -153,7 +153,7 @@ func TestFrontendAPIContainsProbedMetrics(t *testing.T) {
 	if !found {
 		t.Fatal("front-end API omits actual probe objects and fields")
 	}
-	res = request("PUT", "/v1/collector/config", `{"interval_seconds":5,"selections":[{"id":"mem/mem/used","upload":false}]}`, "Bearer "+token, "")
+	res = request("PUT", "/v1/collector/config", `{"interval_seconds":5,"selections":[{"id":"mem/mem/used"}]}`, "Bearer "+token, "")
 	if res.Code != 200 {
 		t.Fatal(res.Body.String())
 	}
@@ -163,6 +163,9 @@ func TestFrontendAPIContainsProbedMetrics(t *testing.T) {
 	if request("PUT", "/v1/collector/config", `{"interval_seconds":5,"selections":[],"shell":"bad"}`, "Bearer "+token, "").Code != 400 {
 		t.Fatal("unknown fields accepted")
 	}
+	if request("PUT", "/v1/collector/config", `{"interval_seconds":5,"selections":[{"id":"mem/mem/used","upload":false}]}`, "Bearer "+token, "").Code != 400 {
+		t.Fatal("removed v1 upload selection accepted")
+	}
 	if request("PUT", "/v1/collector/config", `{} {}`, "Bearer "+token, "").Code != 400 {
 		t.Fatal("trailing JSON accepted")
 	}
@@ -171,64 +174,33 @@ func TestFrontendAPIContainsProbedMetrics(t *testing.T) {
 	}
 }
 func TestFilteringAndObjectValidation(t *testing.T) {
-	raw := []byte(`{"metrics":[{"name":"cpu","tags":{"cpu":"cpu-total","host":"private"},"fields":{"usage_idle":90,"usage_user":10,"label":"ignored"},"timestamp":100}]}`)
-	b, err := parseBatch(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := b.Metrics[0].Tags["host"]; ok {
-		t.Fatal("hostname leaked")
-	}
-	c := cfg("cpu/cpu/usage_idle", true)
+	b := Batch{Metrics: []Metric{{Name: "cpu", Tags: map[string]string{"cpu": "cpu-total"}, Fields: map[string]float64{"usage_idle": 90, "usage_user": 10}, Timestamp: time.Now().Unix()}}}
+	c := cfg("cpu/cpu/usage_idle")
 	c.Selections[0].Objects = []map[string]string{{"cpu": "cpu-total"}}
-	filtered := filter(b, c, true)
+	filtered := filter(b, c)
 	if len(filtered.Metrics) != 1 || len(filtered.Metrics[0].Fields) != 1 {
 		t.Fatalf("extra fields: %+v", filtered)
 	}
 	c.Selections[0].Objects[0]["cpu"] = "cpu0"
-	if len(filter(b, c, false).Metrics) != 0 {
+	if len(filter(b, c).Metrics) != 0 {
 		t.Fatal("unselected object leaked")
 	}
+	c.Selections[0].Objects[0]["cpu"] = "cpu-total"
 	caps := Capabilities{Categories: []Category{{Sources: []Capability{{Metrics: capabilitiesFor("cpu", b)}}}}}
+	if validate(c, caps) != nil {
+		t.Fatal("observed object rejected")
+	}
+	c.Selections[0].ID = "cpu/cpu/usage_guest"
 	if validate(c, caps) == nil {
 		t.Fatal("unavailable core accepted")
 	}
-	if _, err = parseBatch([]byte(`{"metrics":[{"name":"x","tags":{},"fields":{"v":1e400},"timestamp":1}]}`)); err == nil {
-		t.Fatal("invalid number accepted")
-	}
 }
-func TestUploaderRetriesAndPermanentErrors(t *testing.T) {
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := requests.Add(1)
-		if r.Header.Get("Authorization") != "Bearer "+strings.Repeat("a", 64) {
-			t.Error("bad upstream auth")
-		}
-		if n == 1 {
-			w.Header().Set("Retry-After", "0")
-			w.WriteHeader(429)
-		} else {
-			w.WriteHeader(204)
-		}
-	}))
-	defer server.Close()
-	m := newHelper(t, server.URL+"/v1/ingest/telegraf")
-	if _, err := m.Apply(context.Background(), cfg("mem/mem/used", true)); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if m.Snapshot().LastUploadAt != nil {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if m.Snapshot().LastUploadAt == nil || requests.Load() < 2 {
-		t.Fatalf("no successful retry: %+v", m.Snapshot())
-	}
+func TestDeliveryRetriesAndPermanentErrors(t *testing.T) {
+	m := newHelper(t, "")
 	m.delivery.Lock()
+	defer m.delivery.Unlock()
+	q := queued{v2: &v2.SampleBatch{ID: strings.Repeat("a", 32), Samples: []v2.Sample{{}}}, revision: m.snapshot.Revision, at: time.Now()}
 	m.mu.Lock()
-	q := queued{batch: Batch{[]Metric{{Name: "mem", Fields: map[string]float64{"used": 1}, Tags: map[string]string{}, Timestamp: time.Now().Unix()}}}, revision: m.snapshot.Revision, at: time.Now()}
 	m.queue = []queued{q}
 	m.mu.Unlock()
 	m.finishDelivery(q, 422, nil)
@@ -239,10 +211,20 @@ func TestUploaderRetriesAndPermanentErrors(t *testing.T) {
 	m.queue = []queued{q}
 	m.mu.Unlock()
 	m.finishDelivery(q, 401, nil)
-	if m.Snapshot().UploadError != "upload_auth_required" {
-		t.Fatal("auth error not surfaced")
+	if m.Snapshot().UploadError != "upload_auth_required" || m.Snapshot().QueueDepth != 1 {
+		t.Fatal("auth error not surfaced or batch dropped")
 	}
-	m.delivery.Unlock()
+	m.mu.Lock()
+	m.snapshot.UploadError = ""
+	m.queue[0].next = time.Time{}
+	m.mu.Unlock()
+	m.finishDelivery(q, 429, http.Header{"Retry-After": []string{"0"}})
+	if m.Snapshot().UploadError != "upload_retrying" || m.Snapshot().QueueDepth != 1 {
+		t.Fatal("retryable error not retained")
+	}
+	if m.Snapshot().LastUploadAt != nil {
+		t.Fatal("retry marked upload success")
+	}
 }
 func TestQueueBoundAndExpiry(t *testing.T) {
 	m := newHelper(t, "")
@@ -251,8 +233,9 @@ func TestQueueBoundAndExpiry(t *testing.T) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := 0; i < 1002; i++ {
-		m.enqueueLocked(Batch{Metrics: []Metric{{Name: "mem"}}}, 0, time.Now())
+		m.queue = append(m.queue, queued{v2: &v2.SampleBatch{Samples: []v2.Sample{{}}}, at: time.Now()})
 	}
+	m.trimQueueLocked(time.Now())
 	if queueMetrics(m.queue) != 1000 || m.snapshot.DroppedMetrics != 2 {
 		t.Fatal("queue not bounded")
 	}
@@ -264,45 +247,34 @@ func TestQueueBoundAndExpiry(t *testing.T) {
 
 func TestCancellationPreservesRunningSelection(t *testing.T) {
 	m := newHelper(t, "")
-	if _, err := m.Apply(context.Background(), cfg("mem/mem/used", false)); err != nil {
+	if _, err := m.Apply(context.Background(), cfg("mem/mem/used")); err != nil {
 		t.Fatal(err)
 	}
 	before := m.Snapshot()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := m.Apply(ctx, cfg("cpu/cpu/usage_idle", false)); err == nil || m.Snapshot().Revision != before.Revision {
+	if _, err := m.Apply(ctx, cfg("cpu/cpu/usage_idle")); err == nil || m.Snapshot().Revision != before.Revision {
 		t.Fatal("cancellation changed configuration")
-	}
-	paths, _ := filepath.Glob(filepath.Join(m.opts.StateDirectory, "telegraf-*"))
-	if len(paths) > 0 {
-		t.Fatal("legacy config created")
 	}
 }
 
-func TestSplitOversizedBatchAndPauseAuthentication(t *testing.T) {
+func TestOversizedV2BatchIsDropped(t *testing.T) {
 	m := newHelper(t, "")
 	m.delivery.Lock()
 	defer m.delivery.Unlock()
-	q := queued{batch: Batch{Metrics: []Metric{{Name: "mem"}, {Name: "cpu"}}}, at: time.Now()}
+	q := queued{v2: &v2.SampleBatch{ID: strings.Repeat("b", 32), Samples: []v2.Sample{{}}}, at: time.Now()}
 	m.mu.Lock()
 	m.queue = []queued{q}
 	m.mu.Unlock()
 	m.finishDelivery(q, 413, nil)
-	m.mu.Lock()
-	if len(m.queue) != 2 || len(m.queue[0].batch.Metrics) != 1 || len(m.queue[1].batch.Metrics) != 1 {
-		t.Fatal("413 did not split batch")
-	}
-	q = m.queue[0]
-	m.mu.Unlock()
-	m.finishDelivery(q, 413, nil)
-	if m.Snapshot().QueueDepth != 1 || m.Snapshot().DroppedMetrics != 1 {
-		t.Fatal("oversized single metric was not isolated")
+	if m.Snapshot().QueueDepth != 0 || m.Snapshot().DroppedMetrics != 1 {
+		t.Fatal("oversized v2 batch was not dropped")
 	}
 }
 
 func TestRestoreUnavailableSelectionRemainsRepairable(t *testing.T) {
 	m := newHelper(t, "")
-	missing := cfg("mem/mem/removed_field", false)
+	missing := cfg("mem/mem/removed_field")
 	if err := m.persist(missing, 4); err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +297,7 @@ func TestRestoreUnavailableSelectionRemainsRepairable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer api.Close()
-	repaired, err := restored.Apply(context.Background(), cfg("mem/mem/used", false))
+	repaired, err := restored.Apply(context.Background(), cfg("mem/mem/used"))
 	if err != nil || repaired.State != "healthy" || repaired.Revision != 5 {
 		t.Fatalf("cannot repair: %+v %v", repaired, err)
 	}

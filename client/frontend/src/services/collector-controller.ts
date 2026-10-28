@@ -28,7 +28,13 @@ export class CollectorController {
   private emit() { this.listeners.forEach(listener => listener()); }
   async start() {
     this.stopped = false;
-    await this.rescan();
+    // The agent creates its IPC socket slightly after the window appears; a
+    // failed first rescan would otherwise leave the error pill stuck.
+    for (let attempt = 0; attempt < 10 && !this.stopped; attempt++) {
+      await this.rescan();
+      if (!this.error) break;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
     if (this.stopped) return;
     await this.refresh();
     this.schedule();

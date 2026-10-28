@@ -1,4 +1,4 @@
-.PHONY: test check build
+.PHONY: test check build build-app
 
 test:
 	go test -race ./...
@@ -9,6 +9,10 @@ check:
 build:
 	go build -o bin/monitor-agent ./cmd/monitor-agent
 	@if [ "$$(uname -s)" = "Darwin" ]; then ./scripts/build-nowplaying-macos.sh; fi
+
+.PHONY: build-app-darwin
+build-app-darwin:
+	./scripts/build-darwin-app.sh
 
 .PHONY: build-nowplaying-macos
 build-nowplaying-macos:

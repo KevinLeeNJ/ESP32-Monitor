@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -310,6 +311,52 @@ func TestV2MinimalAndPatchDoesNotRepeatMetadata(t *testing.T) {
 	}
 }
 
+// omitempty groups are absent on a fresh profile; the patch grammar only
+// allows member-wise /-/ adds and indexed removes, never a whole-group op.
+func TestV2ProfileDiffAbsentInventoryGroup(t *testing.T) {
+	before := v2.Profile{Version: 2, IntervalSeconds: 5, Enabled: []v2.UploadSelection{}}
+	after := detached(before)
+	after.Inventory.GPUs = []v2.ObjectInfo{{ID: 7}}
+	ops := profileDiff(before, after)
+	if len(ops) != 1 || ops[0].Op != "add" || ops[0].Path != "/inventory/gpus/-" || string(ops[0].Value) != `{"id":7}` {
+		t.Fatalf("absent group must add members: %+v", ops)
+	}
+	ops = profileDiff(after, before)
+	if len(ops) != 1 || ops[0].Op != "remove" || ops[0].Path != "/inventory/gpus/0" {
+		t.Fatalf("emptied group must remove members: %+v", ops)
+	}
+}
+
+func TestV2ProfileDiffScalarGroupsUseLeaves(t *testing.T) {
+	before := v2.Profile{Version: 2, IntervalSeconds: 5, Enabled: []v2.UploadSelection{}}
+	after := detached(before)
+	after.Inventory.OS = &v2.OSInfo{Family: "darwin", Name: "macOS", Version: "15"}
+	after.Inventory.CPU = &v2.CPUInfo{Model: ptr("M4")}
+	after.Inventory.Product = ptr("MacBook")
+	ops := profileDiff(before, after)
+	got := map[string]string{}
+	for _, op := range ops {
+		got[op.Path] = op.Op
+	}
+	for path, op := range map[string]string{
+		"/inventory/os/family": "add", "/inventory/os/name": "add", "/inventory/os/version": "add",
+		"/inventory/cpu/model": "add", "/inventory/product": "replace",
+	} {
+		if got[path] != op {
+			t.Errorf("%s = %q, want %q (%+v)", path, got[path], op, ops)
+		}
+	}
+	if _, ok := got["/inventory/os"]; ok {
+		t.Fatal("whole OS group patched")
+	}
+	ops = profileDiff(after, before)
+	for _, op := range ops {
+		if op.Path == "/inventory/os" || op.Path == "/inventory/cpu" {
+			t.Fatalf("whole scalar group removed: %+v", ops)
+		}
+	}
+}
+
 func TestV2ExactValuesAndAddressRemoval(t *testing.T) {
 	m := newV2Fixture(t, "http://127.0.0.1:1/v2/collector/samples", "", &atomic.Int32{}, &atomic.Bool{})
 	drive := m.v2.inventory.Drives[0].ID
@@ -571,8 +618,52 @@ func TestV2ApplyPerCoreCannotSelectSubset(t *testing.T) {
 	if got := snapshot.Config.Upload.Optional[0].Objects; !reflect.DeepEqual(got, ids) {
 		t.Fatalf("partial configuration retained: %v", got)
 	}
-	if snapshot.V2Sample == nil || len(snapshot.V2Sample.Cores) != 2 {
-		t.Fatalf("sample does not include both cores: %+v", snapshot.V2Sample)
+	// V2Sample is the GUI preview sample and covers every gathered core,
+	// independent of the corrected upload selection asserted above.
+	if snapshot.V2Sample == nil || len(snapshot.V2Sample.Cores) < len(m.v2.inventory.Cores) {
+		t.Fatalf("sample does not include every inventory core: %+v", snapshot.V2Sample)
+	}
+}
+
+func TestV2PreviewSampleCoversUnselectedMetrics(t *testing.T) {
+	m := newV2Fixture(t, "http://127.0.0.1:1/v2/collector/samples", "", &atomic.Int32{}, &atomic.Bool{})
+	preview := selectedSources(v2PreviewConfig(v2Config()))
+	for _, src := range []string{"cpu", "mem", "swap", "system", "darwin_cpu", "darwin_memory", "darwin_gpu", "darwin_disk_usage", "diskio", "net", "darwin_network", "darwin_battery", "darwin_fan"} {
+		if !slices.Contains(preview, src) {
+			t.Fatalf("unselected source not previewed: %s", src)
+		}
+	}
+	if slices.Contains(preview, "darwin_disk") || slices.Contains(preview, "darwin_public_ip") {
+		t.Fatal("gated source gathered without selection")
+	}
+	batch, _ := m.opts.CoreFactory().Gather(context.Background(), preview)
+	previewSample, err := m.previewSampleV2(batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(previewSample.Drives) == 0 || len(previewSample.Interfaces) == 0 || len(previewSample.GPUs) == 0 || len(previewSample.Batteries) == 0 || len(previewSample.Fans) == 0 {
+		t.Fatalf("unselected devices missing from preview: %+v", previewSample)
+	}
+	if previewSample.CPU == nil || previewSample.CPU.Load1 == nil || previewSample.CPU.Temperature == nil {
+		t.Fatalf("unselected cpu metrics missing from preview: %+v", previewSample.CPU)
+	}
+	if previewSample.Memory == nil || previewSample.Memory.Pressure == nil {
+		t.Fatalf("unselected memory metrics missing from preview: %+v", previewSample.Memory)
+	}
+	for _, drive := range previewSample.Drives {
+		if drive.SMART != nil {
+			t.Fatalf("SMART must stay selection-gated: %+v", drive)
+		}
+	}
+	if previewSample.PublicIPv4 != nil {
+		t.Fatal("public IPv4 must stay selection-gated")
+	}
+	uploadSample, err := m.sampleV2(v2Config(), batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(uploadSample.Drives) != 0 || len(uploadSample.Interfaces) != 0 || len(uploadSample.GPUs) != 0 || len(uploadSample.Fans) != 0 || len(uploadSample.Batteries) != 0 {
+		t.Fatalf("unselected metrics uploaded: %+v", uploadSample)
 	}
 }
 
