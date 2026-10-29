@@ -33,6 +33,9 @@ func TestResolveExecutableUsesPATH(t *testing.T) {
 }
 
 func TestBundledPathsIncludeDesktopApps(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("macOS bundle layout")
+	}
 	paths := codexBundledPaths("/Users/example")
 	want := map[string]bool{
 		"/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex":               false,

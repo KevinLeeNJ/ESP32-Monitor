@@ -109,7 +109,7 @@ Snapshot 包含版本、host/device/session、seq、sent_at、config_epoch/revis
 | music | adapter、coverage、可选 current；current 为 playing/not_playing，以及可选 title/artist/source/duration/position/position_observed_at |
 | proxy | config_epoch/revision、time、weather、aqi、devices 子分区，各有独立健康/时效 |
 
-task state：unknown、idle、running、waiting_input、waiting_approval、completed、failed、cancelled。终态的短期展示不能永久当实时状态；当前投影在终态超过60秒后将任务状态降为 unknown 并移除 selected_task。
+task state：unknown、idle、running、waiting_input、waiting_approval、completed、failed、cancelled。终态的短期展示不能永久当实时状态；桌面任务适配器在终态超过60秒后改为 `idle` 上报，若上游仍报终态，投影在60秒后降为 `unknown` 并移除 `selected_task`。`last_completed_at` 仅在选中的任务处于 `completed` 时携带。
 
 播放业务只区分 playing/not_playing。健康暂停允许保留歌曲信息；播放器退出/无当前项时 current 缺席。Provider 错误应显示健康异常，不能伪装为正常 not_playing。播放位置可按观测点在本地插值，不为进度每秒重传整个快照。
 

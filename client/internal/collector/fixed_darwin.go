@@ -4,7 +4,6 @@ package collector
 
 import (
 	"context"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -61,10 +60,6 @@ func (d *darwinCollector) fixedLocked(ctx context.Context) *darwinFixed {
 		gpu, _ := readGPU(ctx)
 		for _, m := range gpu {
 			add("darwin_gpu", m.Tags, map[string]float64{"present": 1})
-		}
-		_, _, fans := readSMC(f.brand)
-		for i := range fans {
-			add("darwin_fan", map[string]string{"fan": strconv.Itoa(i)}, map[string]float64{"present": 1})
 		}
 		if value, e := darwinCommand(ctx, "/usr/bin/pmset", "-g", "batt"); e == nil && len(parseBattery(value)) > 0 {
 			add("darwin_battery", map[string]string{}, map[string]float64{"present": 1})

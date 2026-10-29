@@ -5,11 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -17,21 +15,20 @@ import (
 	"esp32-monitor/client/internal/config"
 )
 
-func newTestServer(t *testing.T, shutdown func()) (*Server, string) {
+func newTestApplication(t *testing.T) *app.Application {
 	t.Helper()
 	application, err := app.New(config.Config{}, "")
 	if err != nil {
 		t.Fatalf("app.New: %v", err)
 	}
 	t.Cleanup(func() { _ = application.Close() })
-	// t.TempDir() embeds the test name and would exceed the darwin 104-byte
-	// unix socket path limit for long test names.
-	dir, err := os.MkdirTemp("", "ipc-")
-	if err != nil {
-		t.Fatalf("tempdir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	socket := filepath.Join(dir, "agent.sock")
+	return application
+}
+
+func newTestServer(t *testing.T, shutdown func()) (*Server, string) {
+	t.Helper()
+	application := newTestApplication(t)
+	socket := testSocketPath(t)
 	server, err := NewServer(application, Options{SocketPath: socket, Shutdown: shutdown})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -76,7 +73,7 @@ func TestStatusRoundTrip(t *testing.T) {
 
 func TestRejectsBrowserOrigin(t *testing.T) {
 	_, socket := newTestServer(t, nil)
-	conn, err := net.Dial("unix", socket)
+	conn, err := dialIPC(context.Background(), socket)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -182,18 +179,11 @@ func TestInvalidBodyRejected(t *testing.T) {
 	}
 }
 
-func TestListenTwiceFailsAndStaleSocketRebinds(t *testing.T) {
+func TestListenTwiceFailsAndSecondServerRejected(t *testing.T) {
 	server, socket := newTestServer(t, nil)
 	if err := server.Listen(); !errors.Is(err, ErrAlreadyRunning) {
 		t.Fatalf("second Listen = %v, want ErrAlreadyRunning", err)
 	}
-	_ = server.Close()
-	// Simulate an unclean shutdown leaving a socket file behind.
-	file, err := os.Create(socket)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	_ = file.Close()
 	application, err := app.New(config.Config{}, "")
 	if err != nil {
 		t.Fatalf("app.New: %v", err)
@@ -204,8 +194,8 @@ func TestListenTwiceFailsAndStaleSocketRebinds(t *testing.T) {
 		t.Fatalf("NewServer: %v", err)
 	}
 	defer func() { _ = second.Close() }()
-	if err := second.Listen(); err != nil {
-		t.Fatalf("rebind after stale socket: %v", err)
+	if err := second.Listen(); !errors.Is(err, ErrAlreadyRunning) {
+		t.Fatalf("second server Listen = %v, want ErrAlreadyRunning", err)
 	}
 }
 

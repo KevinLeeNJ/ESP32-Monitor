@@ -7,13 +7,17 @@ import { connectionLabel, connectionTypeLabel } from "../services/device-labels.
 
 const discovering = ref(false);
 const discovery = ref<{ devices: DiscoveredDevice[]; lan_error?: string; serial_error?: string; overflow: boolean } | null>(null);
-const serialPorts = ref<DiscoveredDevice[]>([]);
 const localPairing = ref<PairingStatus | null>(null);
 const pairTarget = ref<DiscoveredDevice | null>(null);
 const riskConfirmed = ref(false);
 
 const paired = computed(() => store.devices.filter(device => device.paired));
 const companionOn = computed(() => Boolean(store.status?.companion_enabled));
+// One combined list: network results first, serial ports after.
+const discoveredDevices = computed(() => {
+  const devices = [...(discovery.value?.devices ?? [])];
+  return devices.sort((a, b) => (a.connection_type === "lan" ? 0 : 1) - (b.connection_type === "lan" ? 0 : 1));
+});
 const enabling = ref(false);
 async function enableCompanion() {
   if (!store.settings) { toast("Agent 设置尚未加载"); return; }
@@ -51,8 +55,7 @@ async function discover() {
   discovering.value = true;
   try {
     discovery.value = await monitorService.discover(10000);
-    serialPorts.value = await monitorService.serialPorts().catch(() => []);
-    if (discovery.value.devices.length) toast(`发现 ${discovery.value.devices.length} 台设备`);
+    if (discovery.value.devices.length) toast(`发现 ${discovery.value.devices.length} 个连接`);
     else toast("未发现新设备");
   } catch (error) {
     toast(`发现失败：${String(error)}`);
@@ -164,41 +167,61 @@ onUnmounted(stopPairingPoll);
         <div v-if="discovery?.lan_error" class="section-note">局域网扫描失败：{{ discovery.lan_error }}</div>
         <div v-if="discovery?.serial_error" class="section-note">串口扫描失败：{{ discovery.serial_error }}</div>
         <div v-if="discovery?.overflow" class="section-note">设备数量过多，仅显示前若干台。</div>
-        <div v-if="!discovery?.devices.length" class="muted">点击「发现设备」扫描局域网与串口。</div>
-        <div v-for="device in discovery?.devices ?? []" :key="device.device_id + device.port" class="row">
-          <div><strong>{{ device.name || device.device_id }}</strong><small>{{ connectionTypeLabel(device.connection_type) }} · {{ device.address || device.port }}{{ device.identity_verified ? " · 身份已验证" : "" }}</small></div>
+        <div v-if="!discoveredDevices.length" class="muted">点击「发现设备」扫描局域网与串口。</div>
+        <div v-for="device in discoveredDevices" :key="device.connection_type + ':' + (device.device_id || device.port)" class="row">
+          <div v-if="device.connection_type === 'serial'">
+            <strong>{{ device.port }}</strong>
+            <small>串口 · {{ device.name || "串口设备" }}{{ device.vid ? ` · VID ${device.vid}` : "" }}{{ device.pid ? ` PID ${device.pid}` : "" }}{{ device.paired ? " · 已配对" : "" }}</small>
+          </div>
+          <div v-else>
+            <strong>{{ device.name || device.device_id }}</strong>
+            <small>{{ connectionTypeLabel(device.connection_type) }} · {{ device.address || device.port }}{{ device.identity_verified ? " · 身份已验证" : "" }}</small>
+          </div>
           <div class="row-right">
-            <button v-if="!device.paired" class="btn" @click="requestPairing(device)">配对</button>
-            <span v-else class="pill">已配对</span>
+            <button v-if="device.connection_type === 'serial'" class="btn" @click="probeAndConnect(device)">探测并连接</button>
+            <template v-else>
+              <button v-if="!device.paired" class="btn" @click="requestPairing(device)">配对</button>
+              <span v-else class="pill">已配对</span>
+            </template>
           </div>
-        </div>
-        <template v-if="serialPorts.length">
-          <div class="card-title" style="margin-top:16px"><h2>可用串口</h2></div>
-          <div v-for="port in serialPorts" :key="port.port" class="row">
-            <div><strong>{{ port.port }}</strong><small>{{ port.name || "串口设备" }}</small></div>
-            <div class="row-right"><button class="btn" @click="probeAndConnect(port)">探测并连接</button></div>
-          </div>
-        </template>
-      </section>
-      <section v-if="pairTarget && !localPairing" class="card span12">
-        <div class="card-title"><h2>配对风险确认</h2></div>
-        <div class="row">
-          <div><strong>局域网明文传输警告</strong><small>配对会在局域网内明文传输密钥，请仅在可信网络中操作。勾选表示你已了解该风险，并确认配对 {{ pairTarget.name || pairTarget.device_id }}。</small></div>
-          <input class="switch" type="checkbox" v-model="riskConfirmed" aria-label="确认局域网明文传输风险">
-        </div>
-        <div class="actions">
-          <button class="btn primary" :disabled="!riskConfirmed" @click="beginPairing">开始配对</button>
-          <button class="btn" @click="cancelPairingRequest">取消</button>
-        </div>
-      </section>
-      <section v-if="localPairing" class="card span12">
-        <div class="card-title"><h2>进行中的配对</h2><span class="pill">{{ connectionLabel(localPairing.state) }}</span></div>
-        <p class="muted">设备短码：<strong class="code-big">{{ localPairing.code || "…" }}</strong>　{{ localPairing.code ? "请核对设备屏幕上的短码后确认。" : "等待设备发起配对…" }}</p>
-        <div class="actions">
-          <button class="btn primary" :disabled="!localPairing.pairing_id" @click="confirmPairing(true)">确认配对</button>
-          <button class="btn" :disabled="!localPairing.pairing_id" @click="confirmPairing(false)">拒绝</button>
         </div>
       </section>
     </div>
+    <Teleport to="body">
+      <div v-if="pairTarget && !localPairing" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="pair-risk-title">
+        <section class="card modal-card">
+          <div class="card-title"><h2 id="pair-risk-title">配对风险确认</h2><span class="pill amber">{{ pairTarget.name || pairTarget.device_id }}</span></div>
+          <p class="muted">配对会在局域网内明文传输密钥，请仅在可信网络中操作。勾选表示你已了解该风险，并确认与这台设备配对。</p>
+          <label class="row modal-check">
+            <span><strong>我已了解局域网明文传输风险</strong></span>
+            <input class="switch" type="checkbox" v-model="riskConfirmed" aria-label="确认局域网明文传输风险">
+          </label>
+          <div class="actions modal-actions">
+            <button class="btn danger" :disabled="!riskConfirmed" @click="beginPairing">确认并开始配对</button>
+            <button class="btn" @click="cancelPairingRequest">取消</button>
+          </div>
+        </section>
+      </div>
+      <div v-if="localPairing" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="pairing-title">
+        <section class="card modal-card">
+          <div class="card-title"><h2 id="pairing-title">进行中的配对</h2><span class="pill">{{ connectionLabel(localPairing.state) }}</span></div>
+          <p class="muted">设备短码：<strong class="code-big">{{ localPairing.code || "…" }}</strong>　{{ localPairing.code ? "请核对设备屏幕上的短码后确认。" : "等待设备发起配对…" }}</p>
+          <div class="actions modal-actions">
+            <button class="btn danger" :disabled="!localPairing.pairing_id" @click="confirmPairing(true)">确认配对</button>
+            <button class="btn" :disabled="!localPairing.pairing_id" @click="confirmPairing(false)">拒绝</button>
+          </div>
+        </section>
+      </div>
+    </Teleport>
   </div>
 </template>
+
+<style scoped>
+.modal-backdrop{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:24px;background:#11191599}
+.modal-card{width:min(560px,100%);max-height:calc(100vh - 48px);overflow:auto;padding:24px;box-shadow:0 24px 70px #0006}
+.modal-check{border-bottom:0;padding:8px 0 18px}
+.modal-actions{justify-content:flex-end;margin-top:8px}
+.btn.danger{background:#8f3327;border-color:#6f241b;border-bottom-color:#571b14;color:#fff;box-shadow:inset 0 1px #c46a5d}
+.btn.danger:hover{background:#a13c2e}
+.btn.danger:disabled{opacity:.5;cursor:not-allowed}
+</style>

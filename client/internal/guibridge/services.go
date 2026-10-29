@@ -92,7 +92,12 @@ func (s *AppService) GetSettings() Settings { return s.sup.CurrentSettings() }
 func (s *AppService) SaveSettings(ctx context.Context, settings Settings) (Settings, error) {
 	current := s.sup.CurrentSettings()
 	if settings.Launch.LaunchAtLogin != current.Launch.LaunchAtLogin {
-		if err := setLaunchAtLogin(settings.Launch.LaunchAtLogin); err != nil {
+		configureTask := func(enabled bool) error {
+			taskCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			return s.sup.SetLoginTask(taskCtx, enabled)
+		}
+		if err := setLaunchAtLogin(settings.Launch.LaunchAtLogin, configureTask); err != nil {
 			return current, err
 		}
 	}

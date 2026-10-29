@@ -25,7 +25,7 @@ var (
 		"core.usage": true, "gpu.usage": true, "gpu.temperature": true,
 		"drive.model": true, "drive.total": true, "drive.used": true,
 		"drive.read_rate": true, "drive.write_rate": true,
-		"drive.smart_health": true, "drive.smart_attribute": true,
+		"drive.smart_health": true,
 		"interface.medium": true, "interface.up": true,
 		"interface.upload_rate": true, "interface.download_rate": true,
 		"interface.ipv4": true, "battery.level": true, "fan.rpm": true,
@@ -60,9 +60,6 @@ func validateProfile(p *v2.Profile) error {
 			if len(sel.Objects) > 0 {
 				return errf(422, "objects_not_allowed:"+sel.Metric)
 			}
-			if len(sel.Detail) > 0 {
-				return errf(422, "details_not_allowed:"+sel.Metric)
-			}
 		case objectMetrics[sel.Metric]:
 			if len(sel.Objects) == 0 {
 				return errf(422, "objects_required:"+sel.Metric)
@@ -73,22 +70,6 @@ func validateProfile(p *v2.Profile) error {
 				}
 			}
 			expanded += len(sel.Objects)
-			if sel.Metric == "drive.smart_attribute" {
-				if len(sel.Detail) == 0 {
-					return errf(422, "details_required:drive.smart_attribute")
-				}
-				details := map[uint16]bool{}
-				for _, id := range sel.Detail {
-					if id == 0 || details[id] {
-						return errf(422, "invalid_detail_id:drive.smart_attribute")
-					}
-					details[id] = true
-				}
-				if len(sel.Detail) > 128 {
-					return errf(422, "too_many_details:drive.smart_attribute")
-				}
-				expanded += len(sel.Detail) * len(sel.Objects)
-			}
 		default:
 			return errf(422, "unknown_metric:"+sel.Metric)
 		}

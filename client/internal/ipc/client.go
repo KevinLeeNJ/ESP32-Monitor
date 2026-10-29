@@ -9,13 +9,12 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"time"
 
+	githubauth "esp32-monitor/client/internal/auth/github"
 	"esp32-monitor/client/internal/collector"
 	"esp32-monitor/client/internal/companion"
 	"esp32-monitor/client/internal/diagnostics"
-	githubauth "esp32-monitor/client/internal/auth/github"
 	"esp32-monitor/client/internal/nowplaying"
 	"esp32-monitor/client/internal/transport"
 )
@@ -29,37 +28,47 @@ type APIError struct {
 
 func (e *APIError) Error() string { return e.Code }
 
-// Client talks to the Agent IPC socket. Every call opens its own connection
+// Client talks to the Agent IPC endpoint. Every call opens its own connection
 // and validates that the Agent runs as the same OS user.
 type Client struct {
 	socketPath string
 	http       *http.Client
 }
 
-// Dial validates the socket and returns a client.
+// Dial validates the endpoint and returns a client.
 func Dial(socketPath string) (*Client, error) {
-	conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	conn, err := dialValidatedIPC(ctx, socketPath)
 	if err != nil {
 		return nil, fmt.Errorf("ipc_dial_failed: %w", err)
 	}
-	defer conn.Close()
-	uid, ok := unixPeerUID(conn)
-	if !ok || uid != int32(os.Getuid()) {
-		return nil, ErrPeerCheckRequired
-	}
+	_ = conn.Close()
 	return &Client{
 		socketPath: socketPath,
 		http: &http.Client{
 			Transport: &http.Transport{
-				// One request per connection: the peer check runs per conn.
+				// One request per connection: the server-side peer check and
+				// the client-side endpoint check both run per connection.
 				DisableKeepAlives: true,
 				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-					var dialer net.Dialer
-					return dialer.DialContext(ctx, "unix", socketPath)
+					return dialValidatedIPC(ctx, socketPath)
 				},
 			},
 		},
 	}, nil
+}
+
+func dialValidatedIPC(ctx context.Context, path string) (net.Conn, error) {
+	conn, err := dialIPC(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	if !ipcServerPeerOK(conn) {
+		_ = conn.Close()
+		return nil, ErrPeerCheckRequired
+	}
+	return conn, nil
 }
 
 // Close is present for symmetry; per-call connections are closed after use.
@@ -125,6 +134,16 @@ func (c *Client) Status(ctx context.Context) (Status, error) {
 // Quit asks the Agent to exit gracefully.
 func (c *Client) Quit(ctx context.Context) error {
 	return c.post(ctx, "/v1/app/quit", map[string]bool{}, nil)
+}
+
+// Restart asks the elevated Agent to relaunch itself with new arguments.
+func (c *Client) Restart(ctx context.Context, args []string) error {
+	return c.post(ctx, "/v1/app/restart", restartRequest{Args: args}, nil)
+}
+
+// SetLoginTask creates or removes the highest-privilege logon task.
+func (c *Client) SetLoginTask(ctx context.Context, enabled bool) error {
+	return c.post(ctx, "/v1/app/login-task", loginTaskRequest{Enabled: enabled}, nil)
 }
 
 // ServerTest probes the Server health endpoint from the Agent process.

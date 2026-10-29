@@ -74,21 +74,7 @@ func (m *Manager) prepareV2(c Config) (Config, error) {
 				}
 			}
 		}
-		if sel.Metric == "drive.smart_attribute" {
-			if len(sel.Detail) == 0 {
-				return c, errors.New("smart_detail_required")
-			}
-			details := map[uint16]bool{}
-			for _, id := range sel.Detail {
-				if id == 0 || int(id) > len(smartFields) || details[id] {
-					return c, errors.New("invalid_smart_detail")
-				}
-				details[id] = true
-			}
-		} else if len(sel.Detail) > 0 {
-			return c, errors.New("unexpected_smart_detail")
-		}
-		expanded += max(1, len(sel.Objects)) * max(1, len(sel.Detail))
+		expanded += max(1, len(sel.Objects))
 		if expanded > 1024 {
 			return c, errors.New("too_many_v2_selections")
 		}
@@ -96,7 +82,6 @@ func (m *Manager) prepareV2(c Config) (Config, error) {
 	sort.Slice(c.Upload.Optional, func(a, b int) bool { return c.Upload.Optional[a].Metric < c.Upload.Optional[b].Metric })
 	for n := range c.Upload.Optional {
 		sort.Slice(c.Upload.Optional[n].Objects, func(a, b int) bool { return c.Upload.Optional[n].Objects[a] < c.Upload.Optional[n].Objects[b] })
-		slices.Sort(c.Upload.Optional[n].Detail)
 	}
 	return c, nil
 }
@@ -160,7 +145,7 @@ func validateDeviceDependencies(upload *v2.UploadConfig) error {
 	}
 	parents := map[string][]string{
 		"interface.upload_rate": {"interface.medium", "interface.up"}, "interface.download_rate": {"interface.medium", "interface.up"}, "interface.ipv4": {"interface.medium", "interface.up"},
-		"gpu.temperature": {"gpu.usage"}, "drive.read_rate": {"drive.model", "drive.total", "drive.used"}, "drive.write_rate": {"drive.model", "drive.total", "drive.used"}, "drive.smart_health": {"drive.model", "drive.total", "drive.used"}, "drive.smart_attribute": {"drive.model", "drive.total", "drive.used"},
+		"gpu.temperature": {"gpu.usage"}, "drive.read_rate": {"drive.model", "drive.total", "drive.used"}, "drive.write_rate": {"drive.model", "drive.total", "drive.used"}, "drive.smart_health": {"drive.model", "drive.total", "drive.used"},
 	}
 	selected := map[string]map[uint16]bool{}
 	for _, selection := range upload.Optional {
@@ -281,7 +266,7 @@ func v2CollectConfig(c Config) Config {
 	}
 	sources := []string{"cpu", "mem", "system"}
 	for _, sel := range c.Upload.Optional {
-		if b, ok := v2Bindings[sel.Metric]; ok {
+		if b, ok := v2Bindings[sel.Metric]; ok && b.source != "" {
 			sources = append(sources, b.source)
 		}
 	}
@@ -291,26 +276,21 @@ func v2CollectConfig(c Config) Config {
 	return out
 }
 
-// v2PreviewConfig keeps every cheap local source running so the GUI can show
-// live values for available metrics the user has not selected. SMART reads can
-// wake sleeping disks and public IPv4 needs an external query; both stay
-// selection-gated and only enter the batch when explicitly chosen.
+// v2PreviewConfig keeps every local source running so the GUI can show live
+// values for metrics the user has not selected, including SMART health and the
+// cached public IPv4 observation. It is only used while a GUI is polling.
 func v2PreviewConfig(c Config) Config {
 	out := detached(c)
 	selected := []string{"cpu", "mem", "system"}
 	if c.Upload != nil && c.Upload.Enabled {
 		for _, sel := range c.Upload.Optional {
-			if b, ok := v2Bindings[sel.Metric]; ok && !slices.Contains(selected, b.source) {
+			if b, ok := v2Bindings[sel.Metric]; ok && b.source != "" && !slices.Contains(selected, b.source) {
 				selected = append(selected, b.source)
 			}
 		}
 	}
-	for key, binding := range v2Bindings {
-		switch key {
-		case "drive.smart_health", "drive.smart_attribute", "network.public_ipv4":
-			continue
-		}
-		if !slices.Contains(selected, binding.source) {
+	for _, binding := range v2Bindings {
+		if binding.source != "" && !slices.Contains(selected, binding.source) {
 			selected = append(selected, binding.source)
 		}
 	}
@@ -379,12 +359,6 @@ func (m *Manager) profileV2(c Config) v2.Profile {
 				if !hasObject(p.Inventory.Batteries, id) {
 					p.Inventory.Batteries = append(p.Inventory.Batteries, v2.ObjectInfo{ID: id})
 				}
-			case "fan":
-				for _, v := range m.v2.inventory.Fans {
-					if v.ID == id && !hasObject(p.Inventory.Fans, id) {
-						p.Inventory.Fans = append(p.Inventory.Fans, v)
-					}
-				}
 			case "interface":
 				dst := findInterface(&p.Inventory, id)
 				if sel.Metric == "interface.medium" {
@@ -405,12 +379,6 @@ func (m *Manager) profileV2(c Config) v2.Profile {
 						dst.Model = v.Model
 					case "drive.total":
 						dst.TotalBytes = v.TotalBytes
-					case "drive.smart_attribute":
-						for _, a := range v.SMART {
-							if slices.Contains(sel.Detail, a.ID) {
-								dst.SMART = append(dst.SMART, a)
-							}
-						}
 					}
 				}
 			case "volume":

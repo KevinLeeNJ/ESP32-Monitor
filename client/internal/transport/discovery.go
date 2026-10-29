@@ -107,6 +107,11 @@ func (b *Backend) query(ctx context.Context, target string, pair *Pairing, durat
 	if _, e = conn.WriteToUDP(data, a); e != nil {
 		return nil, errors.New("network_unreachable")
 	}
+	// A monitor simulator running on this host cannot receive the subnet
+	// broadcast reliably (Windows firewall may drop it); probe loopback too.
+	if a.Port == 18444 && !a.IP.IsLoopback() {
+		_, _ = conn.WriteToUDP(data, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 18444})
+	}
 	deadline := time.Now().Add(duration)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d

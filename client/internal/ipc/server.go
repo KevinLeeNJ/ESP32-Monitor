@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -21,16 +20,25 @@ import (
 
 // Options configures the IPC listener.
 type Options struct {
-	// SocketPath is the Unix socket path; the parent directory is created if missing.
+	// SocketPath is a Unix socket path or a Windows named pipe path; the
+	// transport decides which validation and ownership rules apply.
 	SocketPath string
 	// Shutdown asks the Agent to exit gracefully; called at most once after
 	// the quit response has been written.
 	Shutdown func()
+	// Restart asks the elevated Agent to relaunch itself with validated
+	// arguments. The callback spawns the replacement before the old process
+	// exits, so settings changes never need another UAC prompt.
+	Restart func(args []string) error
+	// ConfigureLoginTask creates or removes the highest-privilege logon task.
+	// The Agent already runs elevated, so the GUI never needs to elevate.
+	ConfigureLoginTask func(enabled bool) error
 	// Now is injectable for tests.
 	Now func() time.Time
 }
 
-// Server serves the GUI↔Agent management surface over a private Unix socket.
+// Server serves the GUI↔Agent management surface over a private local
+// endpoint: a Unix socket on macOS/Linux, a per-user named pipe on Windows.
 type Server struct {
 	app      *app.Application
 	opts     Options
@@ -100,6 +108,14 @@ type githubLogoutRequest struct {
 	Login string `json:"login"`
 }
 
+type restartRequest struct {
+	Args []string `json:"args"`
+}
+
+type loginTaskRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
 type serverTestRequest struct {
 	BaseURL string `json:"base_url"`
 }
@@ -119,12 +135,8 @@ func NewServer(application *app.Application, opts Options) (*Server, error) {
 	if opts.SocketPath == "" {
 		return nil, errors.New("ipc_socket_path_required")
 	}
-	if !filepath.IsAbs(opts.SocketPath) {
-		return nil, errors.New("ipc_socket_path_must_be_absolute")
-	}
-	// darwin truncates sun_path at 104 bytes; keep margin for the file name.
-	if len(opts.SocketPath) > 100 {
-		return nil, errors.New("ipc_socket_path_too_long")
+	if err := validateIPCPath(opts.SocketPath); err != nil {
+		return nil, err
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
@@ -132,35 +144,23 @@ func NewServer(application *app.Application, opts Options) (*Server, error) {
 	return &Server{app: application, opts: opts}, nil
 }
 
-// Listen removes a stale socket file, binds the socket and starts serving in
-// the background. Only one listener is allowed per process.
+// Listen binds the local endpoint and starts serving in the background. Only
+// one listener is allowed per process and per endpoint.
 func (s *Server) Listen() error {
 	if s.listener != nil {
 		return ErrAlreadyRunning
 	}
-	if err := os.MkdirAll(filepath.Dir(s.opts.SocketPath), 0o700); err != nil {
-		return err
-	}
-	if conn, err := net.Dial("unix", s.opts.SocketPath); err == nil {
-		_ = conn.Close()
-		return ErrAlreadyRunning
-	}
-	if err := os.Remove(s.opts.SocketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	listener, err := net.Listen("unix", s.opts.SocketPath)
+	listener, err := listenIPC(s.opts.SocketPath)
 	if err != nil {
-		return err
-	}
-	if err := os.Chmod(s.opts.SocketPath, 0o600); err != nil {
-		_ = listener.Close()
 		return err
 	}
 	s.listener = listener
 	s.startAt = s.opts.Now()
 	s.server = &http.Server{
-		Handler:           http.HandlerFunc(s.serveHTTP),
-		ConnContext:       func(ctx context.Context, c net.Conn) context.Context { return context.WithValue(ctx, connContextKey{}, c) },
+		Handler: http.HandlerFunc(s.serveHTTP),
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			return context.WithValue(ctx, connContextKey{}, c)
+		},
 		ReadHeaderTimeout: 3 * time.Second,
 		ReadTimeout:       5 * time.Minute,
 		WriteTimeout:      5 * time.Minute,
@@ -170,7 +170,7 @@ func (s *Server) Listen() error {
 	return nil
 }
 
-// Close stops serving and removes the socket file.
+// Close stops serving and releases the endpoint.
 func (s *Server) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
@@ -178,10 +178,7 @@ func (s *Server) Close() error {
 			err = s.server.Close()
 		}
 		if s.listener != nil {
-			err = errors.Join(err, s.listener.Close())
-			if rmErr := os.Remove(s.opts.SocketPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-				err = errors.Join(err, rmErr)
-			}
+			err = errors.Join(err, closeIPCListener(s.listener, s.opts.SocketPath))
 		}
 	})
 	return err
@@ -193,7 +190,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conn, _ := r.Context().Value(connContextKey{}).(net.Conn)
-	if uid, ok := unixPeerUID(conn); !ok || uid != int32(os.Getuid()) {
+	if conn == nil || !ipcPeerOK(conn) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
@@ -211,6 +208,36 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 				go s.opts.Shutdown()
 			}
 		})
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/app/restart":
+		var req restartRequest
+		if err := decodeBody(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_json")
+			return
+		}
+		if s.opts.Restart == nil {
+			writeError(w, http.StatusNotImplemented, "restart_unsupported")
+			return
+		}
+		if err := s.opts.Restart(req.Args); err != nil {
+			writeAppError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/app/login-task":
+		var req loginTaskRequest
+		if err := decodeBody(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_json")
+			return
+		}
+		if s.opts.ConfigureLoginTask == nil {
+			writeError(w, http.StatusNotImplemented, "login_task_unsupported")
+			return
+		}
+		if err := s.opts.ConfigureLoginTask(req.Enabled); err != nil {
+			writeAppError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/app/server-test":
 		var req serverTestRequest
 		if err := decodeBody(r, &req); err != nil {

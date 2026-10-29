@@ -23,10 +23,10 @@ func (c *diskUsageCollector) Gather(ctx context.Context, ids []string) (Batch, m
 	for n := range batch.Metrics {
 		metric := &batch.Metrics[n]
 		switch metric.Name {
-		case "darwin_disk_usage":
+		case nativeSourceID("disk_usage"):
 			metric.Fields["used"] = float64(c.used)
 			metric.Exact = map[string]string{"used": strconv.FormatUint(c.used, 10)}
-		case "darwin_disk":
+		case nativeSourceID("disk"):
 			metric.Timestamp = c.smartAt
 		}
 	}
@@ -34,6 +34,7 @@ func (c *diskUsageCollector) Gather(ctx context.Context, ids []string) (Batch, m
 }
 
 func TestV2DiskUsageReachesUploadWithoutRates(t *testing.T) {
+	requireNative(t, "disk", "disk_usage")
 	for _, tc := range []struct {
 		name  string
 		used  uint64
@@ -110,7 +111,7 @@ func TestV2DiskUsageReachesUploadWithoutRates(t *testing.T) {
 					// Repeat the same SMART observation with a fresh ordinary sample.
 					// Removing the cached SMART must preserve the current used bytes.
 					batch, _ := gather(context.Background(), g.core, g.native, selectedSources(g.collect))
-					m.accept(g, batch)
+					m.accept(g, batch, true)
 				}
 			}
 		})

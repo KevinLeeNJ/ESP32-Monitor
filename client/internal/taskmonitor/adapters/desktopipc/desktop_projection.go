@@ -6,11 +6,12 @@ import (
 	"errors"
 	"esp32-monitor/client/internal/taskmonitor"
 	"strconv"
+	"time"
 )
 
 // Desktop IPC is internal. Only these fields survive parsing. Transcript text,
 // prompts, paths and tool arguments are never retained in the observer state.
-var turnFields = map[string]bool{"id": true, "turnId": true, "status": true, "turnStartedAtMs": true}
+var turnFields = map[string]bool{"id": true, "turnId": true, "status": true, "turnStartedAtMs": true, "durationMs": true}
 
 func projectDesktop(value any, path []string) any {
 	if obj, ok := value.(map[string]any); ok {
@@ -177,7 +178,7 @@ func patchDesktop(state map[string]any, raw json.RawMessage, id string) (map[str
 	}
 	return result, nil
 }
-func desktopTask(id string, state map[string]any, nowTask taskmonitor.Task) taskmonitor.Task {
+func desktopTask(id string, state map[string]any, nowTask taskmonitor.Task, now time.Time) taskmonitor.Task {
 	out := taskmonitor.Task{ID: id, State: taskmonitor.Unknown, ObservedAt: nowTask.ObservedAt}
 	bytes, _ := json.Marshal(state)
 	var v struct {
@@ -233,13 +234,21 @@ func desktopTask(id string, state map[string]any, nowTask taskmonitor.Task) task
 		case "interrupted":
 			terminalState = taskmonitor.Cancelled
 		}
-		// Historical completions seen on first attach are not new completion events.
-		if terminalState != taskmonitor.Unknown && nowTask.TurnID == out.TurnID {
-			if terminal(nowTask.State) {
+		// A terminal turn observed while attached is a new completion event.
+		// One that finished just before attaching is still current, so use the
+		// reported duration to recover its actual completion time.
+		if terminalState != taskmonitor.Unknown {
+			switch {
+			case nowTask.TurnID == out.TurnID && terminal(nowTask.State):
 				out.State = nowTask.State
 				out.ObservedAt = nowTask.ObservedAt
-			} else if nowTask.State == taskmonitor.Running || nowTask.State == taskmonitor.WaitingInput || nowTask.State == taskmonitor.WaitingApproval {
+			case nowTask.TurnID == out.TurnID && (nowTask.State == taskmonitor.Running || nowTask.State == taskmonitor.WaitingInput || nowTask.State == taskmonitor.WaitingApproval):
 				out.State = terminalState
+			default:
+				if completedAt, ok := turnCompletion(latest); ok && !completedAt.After(now) && now.Sub(completedAt) < time.Minute {
+					out.State = terminalState
+					out.ObservedAt = completedAt
+				}
 			}
 		}
 	}
@@ -273,8 +282,16 @@ func desktopTask(id string, state map[string]any, nowTask taskmonitor.Task) task
 }
 
 type desktopTurn struct {
-	ID      string  `json:"id"`
-	TurnID  string  `json:"turnId"`
-	Status  string  `json:"status"`
-	Started float64 `json:"turnStartedAtMs"`
+	ID       string  `json:"id"`
+	TurnID   string  `json:"turnId"`
+	Status   string  `json:"status"`
+	Started  float64 `json:"turnStartedAtMs"`
+	Duration float64 `json:"durationMs"`
+}
+
+func turnCompletion(turn desktopTurn) (time.Time, bool) {
+	if turn.Started <= 0 || turn.Duration <= 0 {
+		return time.Time{}, false
+	}
+	return time.UnixMilli(int64(turn.Started + turn.Duration)), true
 }

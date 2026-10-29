@@ -88,13 +88,10 @@ func SettingsPath() (string, error) {
 	return filepath.Join(base, "ESP32-Monitor", "gui-settings.json"), nil
 }
 
-// DefaultSocketPath returns the well-known Agent IPC socket path.
+// DefaultSocketPath returns the well-known Agent IPC endpoint. macOS/Linux
+// use a user-config Unix socket; Windows uses a per-user named pipe.
 func DefaultSocketPath() (string, error) {
-	base, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(base, "ESP32-Monitor", "agent-ipc.sock"), nil
+	return defaultIPCPath()
 }
 
 // LoadSettings reads the settings file, falling back to defaults.

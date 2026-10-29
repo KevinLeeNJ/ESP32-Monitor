@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
-	"syscall"
 	"time"
 
 	"esp32-monitor/client/internal/ipc"
@@ -31,10 +30,21 @@ type Supervisor struct {
 	stopReq      chan struct{}
 
 	current *currentAgent
-	stopped bool
+	// external means Windows started the Agent through UAC or Task Scheduler.
+	// The GUI intentionally never inherits that token.
+	external bool
+	stopped  bool
 
 	restarts  int
 	lastError error
+
+	// restartMu serializes settings-driven external restarts. The save call
+	// returns after the Agent acknowledges the request; readiness is tracked in
+	// the background so a queued save waits for the replacement instead of
+	// racing the old process.
+	restartMu       sync.Mutex
+	restartInFlight bool
+	restartOldPID   int
 }
 
 type currentAgent struct {
@@ -59,12 +69,12 @@ func resolveAgentPath() (string, error) {
 	}
 	executable, err := os.Executable()
 	if err == nil {
-		candidate := filepath.Join(filepath.Dir(executable), "monitor-agent")
+		candidate := filepath.Join(filepath.Dir(executable), agentBinaryName())
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate, nil
 		}
 	}
-	candidate := filepath.Join("bin", "monitor-agent")
+	candidate := filepath.Join("bin", agentBinaryName())
 	if _, err := os.Stat(candidate); err == nil {
 		return candidate, nil
 	}
@@ -89,11 +99,39 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	s.manageDone = make(chan struct{})
 	s.stopReq = make(chan struct{})
 	s.mu.Unlock()
+	// A logon task may already have started the elevated Windows Agent. Reuse
+	// it instead of spawning a second process (and a second UAC prompt).
+	if s.socketReady(ctx, 800*time.Millisecond) {
+		s.mu.Lock()
+		s.external = true
+		s.mu.Unlock()
+		return nil
+	}
+	if handled, err := s.startPlatformAgent(ctx); handled {
+		if err != nil {
+			s.setLast(err)
+			return err
+		}
+		s.mu.Lock()
+		s.external = true
+		s.mu.Unlock()
+		if err := s.WaitSocket(ctx, 15*time.Second); err != nil {
+			s.setLast(err)
+			return err
+		}
+		return nil
+	}
 	go s.manage()
 	if err := s.WaitSocket(ctx, 15*time.Second); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (s *Supervisor) socketReady(ctx context.Context, timeout time.Duration) bool {
+	probe, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return s.WaitSocket(probe, timeout) == nil
 }
 
 // manage spawns the Agent, waits for exit and restarts after crashes.
@@ -163,7 +201,7 @@ func (s *Supervisor) stopChild(grace time.Duration) {
 	if current == nil || current.cmd.Process == nil {
 		return
 	}
-	_ = current.cmd.Process.Signal(syscall.SIGTERM)
+	_ = s.terminateAgent(current.cmd.Process)
 	deadline := time.After(grace)
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
@@ -176,8 +214,7 @@ func (s *Supervisor) stopChild(grace time.Duration) {
 			if current.cmd.ProcessState != nil {
 				return
 			}
-			// ProcessState only fills after Wait; poll via signal 0 instead.
-			if err := current.cmd.Process.Signal(syscall.Signal(0)); err != nil {
+			if !processAlive(current.cmd.Process) {
 				return
 			}
 		}
@@ -273,20 +310,133 @@ func (s *Supervisor) Call(fn func(client *ipc.Client) error) error {
 	return fn(client)
 }
 
-// Restart stops the Agent gracefully; the management loop relaunches it with
-// the current settings, and WaitSocket confirms it is serving again.
+// Restart relaunches the Agent with the current settings. An externally
+// started (elevated) Agent restarts itself over IPC, inheriting its own token,
+// so settings changes never trigger another UAC prompt. A managed child is
+// stopped and relaunched by the management loop.
 func (s *Supervisor) Restart(ctx context.Context) error {
 	s.mu.Lock()
-	if s.current == nil {
-		s.mu.Unlock()
-		return errors.New("agent_not_running")
-	}
+	external := s.external
+	managed := s.current != nil
 	s.mu.Unlock()
-	current := s.current
-	if current.cmd.Process != nil {
-		_ = current.cmd.Process.Signal(syscall.SIGTERM)
+	if managed {
+		s.stopChild(5 * time.Second)
+		return s.WaitSocket(ctx, 20*time.Second)
 	}
-	return s.WaitSocket(ctx, 20*time.Second)
+	if external {
+		return s.restartExternal(ctx)
+	}
+	return errors.New("agent_not_running")
+}
+
+func (s *Supervisor) restartExternal(ctx context.Context) error {
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
+	if s.restartInFlight {
+		// A save moments ago already replaced the Agent. Wait for the new
+		// process before sending another restart request.
+		err := s.waitNewPID(ctx, s.restartOldPID, 40*time.Second)
+		s.restartInFlight = false
+		if err != nil {
+			s.setLast(err)
+			return err
+		}
+	}
+	client, err := ipc.Dial(s.socket)
+	if err != nil {
+		return fmt.Errorf("ipc_unavailable: %w", err)
+	}
+	defer client.Close()
+	callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	status, err := client.Status(callCtx)
+	if err != nil {
+		cancel()
+		return err
+	}
+	err = client.Restart(callCtx, s.agentArgs())
+	cancel()
+	if err != nil {
+		return err
+	}
+	s.restartOldPID = status.PID
+	s.restartInFlight = true
+	// Saving settings must feel immediate; the replacement serves while
+	// collectors warm up, and readiness is observed in the background.
+	go func(oldPID int) {
+		waitCtx, waitCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer waitCancel()
+		err := s.waitNewPID(waitCtx, oldPID, 60*time.Second)
+		s.restartMu.Lock()
+		if s.restartOldPID == oldPID {
+			s.restartInFlight = false
+		}
+		s.restartMu.Unlock()
+		if err != nil {
+			s.setLast(err)
+		}
+	}(status.PID)
+	return nil
+}
+
+// awaitRestart blocks until a restart requested by an earlier save has
+// produced a reachable Agent.
+func (s *Supervisor) awaitRestart(ctx context.Context) error {
+	s.restartMu.Lock()
+	inFlight, oldPID := s.restartInFlight, s.restartOldPID
+	s.restartMu.Unlock()
+	if !inFlight {
+		return nil
+	}
+	if err := s.waitNewPID(ctx, oldPID, 40*time.Second); err != nil {
+		s.setLast(err)
+		return err
+	}
+	return nil
+}
+
+// waitNewPID confirms the replacement Agent owns the endpoint. The old
+// process keeps serving briefly after the restart acknowledgement, so socket
+// availability alone would wrongly report success.
+func (s *Supervisor) waitNewPID(ctx context.Context, oldPID int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		client, err := ipc.Dial(s.socket)
+		if err == nil {
+			status, statusErr := client.Status(probeCtx)
+			_ = client.Close()
+			if statusErr == nil && status.PID != 0 && status.PID != oldPID {
+				cancel()
+				s.mu.Lock()
+				s.restarts = 0
+				s.lastError = nil
+				s.mu.Unlock()
+				return nil
+			}
+		}
+		cancel()
+		if time.Now().After(deadline) {
+			return errors.New("agent_restart_timeout")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(150 * time.Millisecond):
+		}
+	}
+}
+
+// SetLoginTask creates or removes the highest-privilege logon task through the
+// elevated Agent, so toggling launch-at-login needs no UAC prompt.
+func (s *Supervisor) SetLoginTask(ctx context.Context, enabled bool) error {
+	if err := s.awaitRestart(ctx); err != nil {
+		return err
+	}
+	return s.Call(func(client *ipc.Client) error {
+		callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		return client.SetLoginTask(callCtx, enabled)
+	})
 }
 
 // UpdateSettings replaces settings and restarts the Agent only when the
@@ -311,10 +461,25 @@ func (s *Supervisor) Stop() {
 	}
 	s.stopped = true
 	done := s.manageDone
+	external := s.external
 	s.mu.Unlock()
+	if external {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if client, err := ipc.Dial(s.socket); err == nil {
+			_ = client.Quit(ctx)
+			_ = client.Close()
+		}
+		return
+	}
 	s.stopOnce.Do(func() { close(s.stopReq) })
 	s.stopChild(5 * time.Second)
-	s.manageCancel()
+	if s.manageCancel != nil {
+		s.manageCancel()
+	}
+	if done == nil {
+		return
+	}
 	select {
 	case <-done:
 	case <-time.After(8 * time.Second):

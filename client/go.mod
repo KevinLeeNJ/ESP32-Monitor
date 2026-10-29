@@ -3,9 +3,11 @@ module esp32-monitor/client
 go 1.26.0
 
 require (
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/mochi-mqtt/server/v2 v2.7.9
 	github.com/shirou/gopsutil/v4 v4.26.9
 	github.com/wailsapp/wails/v3 v3.0.0
+	github.com/yusufpapurcu/wmi v1.2.4
 	go.bug.st/serial v1.6.4
 	golang.org/x/sys v0.48.0
 	google.golang.org/protobuf v1.36.11
@@ -26,5 +28,4 @@ require (
 	github.com/rs/xid v1.4.0 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
-	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 )

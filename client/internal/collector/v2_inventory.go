@@ -14,7 +14,11 @@ func (s *v2State) buildInventory(b Batch) error {
 	i := &s.inventory
 	i.CPU = &v2.CPUInfo{}
 	// Native values override Core only when present.
-	for _, name := range []string{"cpu", "darwin_cpu"} {
+	cpuSources := []string{"cpu"}
+	if native := nativeSourceID("cpu"); native != "" {
+		cpuSources = append(cpuSources, native)
+	}
+	for _, name := range cpuSources {
 		m := fixedMetric(b, name, "", "")
 		if p := text(m.Tags, "model"); p != nil {
 			i.CPU.Model = p
@@ -30,13 +34,13 @@ func (s *v2State) buildInventory(b Batch) error {
 	if platform := system.Tags["os_platform"]; platform != "" {
 		i.OS = &v2.OSInfo{Family: runtime.GOOS, Name: platform, Version: system.Tags["os_version"]}
 	}
-	native := fixedMetric(b, "darwin_system", "", "")
+	native := fixedMetric(b, nativeSourceID("system"), "", "")
 	if native.Tags["os_name"] != "" {
 		name := native.Tags["os_name"]
 		if code := native.Tags["os_codename"]; code != "" {
 			name += " " + code
 		}
-		i.OS = &v2.OSInfo{Family: "darwin", Name: name, Version: native.Tags["os_version"], Build: text(native.Tags, "os_build")}
+		i.OS = &v2.OSInfo{Family: runtime.GOOS, Name: name, Version: native.Tags["os_version"], Build: text(native.Tags, "os_build")}
 	}
 	i.Product = text(native.Tags, "product_name")
 	if i.CPU.LogicalCores != nil {
@@ -53,20 +57,34 @@ func (s *v2State) buildInventory(b Batch) error {
 	sort.Slice(metrics, func(a, b int) bool {
 		return metrics[a].Name+tagKey(metrics[a].Tags) < metrics[b].Name+tagKey(metrics[b].Tags)
 	})
+	kinds := map[string]string{"net": "interface"}
+	// Windows volume counters are per drive letter, while native drive objects
+	// are physical disks; they cannot share one object ID.
+	if runtime.GOOS != "windows" {
+		kinds["diskio"] = "drive"
+	}
+	for _, role := range []struct{ role, kind string }{{"network", "interface"}, {"disk", "drive"}, {"gpu", "gpu"}, {"battery", "battery"}} {
+		if source := nativeSourceID(role.role); source != "" {
+			kinds[source] = role.kind
+		}
+	}
+	// On Windows core net counters exist for loopback and tunnel adapters that
+	// have no confirmed medium; keep v2 interface objects to physical adapters
+	// so rate and medium selections describe the same device.
+	confirmedInterfaces := map[string]bool{}
+	if runtime.GOOS == "windows" {
+		for _, m := range b.Metrics {
+			if m.Name == nativeSourceID("network") {
+				confirmedInterfaces[m.Tags["interface"]] = true
+			}
+		}
+	}
 	for _, m := range metrics {
-		var kind string
-		switch m.Name {
-		case "net", "darwin_network":
-			kind = "interface"
-		case "diskio", "darwin_disk":
-			kind = "drive"
-		case "darwin_gpu":
-			kind = "gpu"
-		case "darwin_fan":
-			kind = "fan"
-		case "darwin_battery":
-			kind = "battery"
-		default:
+		kind := kinds[m.Name]
+		if kind == "" {
+			continue
+		}
+		if m.Name == "net" && runtime.GOOS == "windows" && !confirmedInterfaces[m.Tags["interface"]] {
 			continue
 		}
 		id, e := s.allocate(kind, m)
@@ -92,27 +110,8 @@ func (s *v2State) buildInventory(b Batch) error {
 			if total := number(m, "total"); total != nil {
 				p.TotalBytes = total
 			}
-			if m.Name == "darwin_disk" {
-				for n, f := range smartFields {
-					if _, ok := m.Fields[f]; !ok {
-						if _, ok = m.Exact[f]; !ok {
-							continue
-						}
-					}
-					unit := "count"
-					if strings.Contains(f, "percent") {
-						unit = "percent"
-					}
-					if strings.Contains(f, "hours") {
-						unit = "hours"
-					}
-					p.SMART = append(p.SMART, v2.SMARTAttributeInfo{ID: uint16(n + 1), Key: f, Unit: unit, Scale10: 0, Source: "diskutil"})
-				}
-			}
 		case "gpu":
 			i.GPUs = append(i.GPUs, v2.ObjectInfo{ID: id})
-		case "fan":
-			i.Fans = append(i.Fans, v2.FanInfo{ID: id, Scope: "system"})
 		case "battery":
 			i.Batteries = append(i.Batteries, v2.ObjectInfo{ID: id})
 		}
@@ -170,11 +169,6 @@ func (m *Manager) v2Capabilities(batch Batch) *V2Capabilities {
 			c.Objects = append(c.Objects, id)
 		}
 		sort.Slice(c.Objects, func(a, b int) bool { return c.Objects[a] < c.Objects[b] })
-		if key == "drive.smart_attribute" {
-			for n := range smartFields {
-				c.Detail = append(c.Detail, uint16(n+1))
-			}
-		}
 		c.Required = key == "cpu.usage" || key == "memory.usage" || key == "system.uptime"
 		if fixed {
 			c.Available = m.fixedV2Available(key)
@@ -190,14 +184,6 @@ func (m *Manager) v2Capabilities(batch Batch) *V2Capabilities {
 				if _, exact := v.Exact[binding.field]; exact {
 					ok = true
 				}
-				if key == "drive.smart_attribute" {
-					ok = false
-					for _, f := range smartFields {
-						if _, has := smartInteger(v, f); has {
-							ok = true
-						}
-					}
-				}
 				if ok {
 					c.Available = true
 					if kind != "" {
@@ -212,7 +198,7 @@ func (m *Manager) v2Capabilities(batch Batch) *V2Capabilities {
 				c.Objects = slices.Compact(observed)
 				c.Available = len(c.Objects) > 0
 			}
-			if key == "network.public_ipv4" && runtime.GOOS == "darwin" {
+			if key == "network.public_ipv4" && binding.source != "" {
 				c.Available = true
 				c.Reason = "not_probed_until_selected"
 			}
@@ -224,9 +210,13 @@ func (m *Manager) v2Capabilities(batch Batch) *V2Capabilities {
 	}
 	for key, id := range m.v2.IDs {
 		kind, name, ok := strings.Cut(key, ":")
-		if ok && m.v2.objectsOfKind(kind)[id] {
-			out.Objects = append(out.Objects, V2Object{ID: id, Kind: kind, Name: name})
+		if !ok || !m.v2.objectsOfKind(kind)[id] {
+			continue
 		}
+		if display := m.v2.Names[key]; display != "" {
+			name = display
+		}
+		out.Objects = append(out.Objects, V2Object{ID: id, Kind: kind, Name: name})
 	}
 	sort.Slice(out.Objects, func(a, b int) bool { return out.Objects[a].ID < out.Objects[b].ID })
 	return out
@@ -302,7 +292,7 @@ func (m *Manager) fixedV2ObjectAvailable(key string, id uint16) bool {
 func (s *v2State) objectsOfKind(kind string) map[uint16]bool {
 	out := map[uint16]bool{}
 	v := reflect.ValueOf(s.inventory)
-	fields := map[string]string{"core": "Cores", "drive": "Drives", "volume": "Volumes", "interface": "Interfaces", "gpu": "GPUs", "battery": "Batteries", "fan": "Fans"}
+	fields := map[string]string{"core": "Cores", "drive": "Drives", "volume": "Volumes", "interface": "Interfaces", "gpu": "GPUs", "battery": "Batteries"}
 	name := fields[kind]
 	if name == "" {
 		return out

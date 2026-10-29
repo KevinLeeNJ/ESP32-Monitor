@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,25 +21,39 @@ import (
 	"time"
 )
 
+func requireNative(t *testing.T, roles ...string) {
+	t.Helper()
+	for _, role := range roles {
+		if nativeSourceID(role) == "" {
+			t.Skipf("native source %q unavailable on %s", role, runtime.GOOS)
+		}
+	}
+}
+
 type v2Fixture struct {
 	fixedReads *atomic.Int32
 	missing    *atomic.Bool
 }
 
 func fixtureFixed() Batch {
-	return Batch{Metrics: []Metric{
+	metrics := []Metric{
 		{Name: "cpu", Tags: map[string]string{"model": "Fixture CPU"}, Fields: map[string]float64{"logical_cores": 2, "physical_cores": 2}},
 		{Name: "mem", Fields: map[string]float64{"total": 8192}},
 		{Name: "system", Tags: map[string]string{"os_platform": "fixture", "os_version": "1"}},
 		{Name: "net", Tags: map[string]string{"interface": "en0"}},
-		{Name: "darwin_network", Tags: map[string]string{"interface": "en0", "type": "wifi"}},
 		{Name: "diskio", Tags: map[string]string{"name": "disk0"}},
-		{Name: "darwin_disk", Tags: map[string]string{"device": "disk0", "model": "Fixture SSD"}, Fields: map[string]float64{"total": 65536, "smart_media_errors": 0}},
 		{Name: "disk", Tags: map[string]string{"device": "disk0s1", "path": "/", "fstype": "apfs"}, Fields: map[string]float64{"total": 32768}},
-		{Name: "darwin_gpu", Tags: map[string]string{"device": "fixture-gpu"}},
-		{Name: "darwin_battery", Tags: map[string]string{}},
-		{Name: "darwin_fan", Tags: map[string]string{"fan": "0"}},
-	}}
+	}
+	add := func(role string, tags map[string]string, fields map[string]float64) {
+		if name := nativeSourceID(role); name != "" {
+			metrics = append(metrics, Metric{Name: name, Tags: tags, Fields: fields})
+		}
+	}
+	add("network", map[string]string{"interface": "en0", "type": "wifi"}, nil)
+	add("disk", map[string]string{"device": "disk0", "model": "Fixture SSD"}, map[string]float64{"total": 65536})
+	add("gpu", map[string]string{"device": "fixture-gpu"}, nil)
+	add("battery", map[string]string{}, nil)
+	return Batch{Metrics: metrics}
 }
 func (f *v2Fixture) Fixed(context.Context) Batch { f.fixedReads.Add(1); return fixtureFixed() }
 func (f *v2Fixture) Fork() Collector             { return &v2Fixture{fixedReads: f.fixedReads, missing: f.missing} }
@@ -59,30 +74,30 @@ func (f *v2Fixture) Gather(_ context.Context, ids []string) (Batch, map[string]s
 			}
 		case "system":
 			add(id, map[string]string{}, map[string]float64{"uptime": 86400, "load1": 1.25})
-		case "darwin_cpu":
-			add(id, map[string]string{}, map[string]float64{"temperature_celsius": 42.3})
 		case "swap":
 			add(id, map[string]string{}, map[string]float64{"total": 0, "used": 0})
-		case "darwin_memory":
-			add(id, map[string]string{}, map[string]float64{"app_bytes": 0, "wired_bytes": 0, "compressed_bytes": 0, "pressure_level": 1})
-		case "darwin_network":
-			add(id, map[string]string{"interface": "en0", "type": "wifi", "ipv4": "192.168.1.2"}, map[string]float64{"connected": 1})
 		case "net":
 			add(id, map[string]string{"interface": "en0"}, map[string]float64{"download_bytes_per_second": 0, "upload_bytes_per_second": 1024})
-		case "darwin_gpu":
-			add(id, map[string]string{"device": "fixture-gpu"}, map[string]float64{"usage_percent": 0, "temperature_celsius": 0})
 		case "diskio":
 			add(id, map[string]string{"name": "disk0"}, map[string]float64{"read_bytes_per_second": 0, "write_bytes_per_second": 0})
-		case "darwin_disk":
-			add(id, map[string]string{"device": "disk0"}, map[string]float64{"smart_healthy": 0, "smart_media_errors": 0})
-		case "darwin_disk_usage":
-			add(id, map[string]string{"device": "disk0"}, map[string]float64{"used": 1234})
 		case "disk":
 			add(id, map[string]string{"device": "disk0s1", "path": "/", "fstype": "apfs"}, map[string]float64{"used": 0})
-		case "darwin_battery":
+		case nativeSourceID("cpu"):
+			add(id, map[string]string{}, map[string]float64{"temperature_celsius": 42.3, "load1": 1.25, "load5": 1.1, "load15": 0.9})
+		case nativeSourceID("memory"):
+			add(id, map[string]string{}, map[string]float64{"app_bytes": 0, "wired_bytes": 0, "compressed_bytes": 0, "pressure_level": 1})
+		case nativeSourceID("network"):
+			add(id, map[string]string{"interface": "en0", "type": "wifi", "ipv4": "192.168.1.2"}, map[string]float64{"connected": 1})
+		case nativeSourceID("gpu"):
+			add(id, map[string]string{"device": "fixture-gpu"}, map[string]float64{"usage_percent": 0, "temperature_celsius": 0})
+		case nativeSourceID("disk"):
+			add(id, map[string]string{"device": "disk0"}, map[string]float64{"smart_healthy": 0})
+		case nativeSourceID("disk_usage"):
+			add(id, map[string]string{"device": "disk0"}, map[string]float64{"used": 1234})
+		case nativeSourceID("public_ip"):
+			add(id, map[string]string{"ipv4": "203.0.113.7"}, map[string]float64{"present": 1})
+		case nativeSourceID("battery"):
 			add(id, map[string]string{}, map[string]float64{"charge_percent": 0, "charging": 0})
-		case "darwin_fan":
-			add(id, map[string]string{"fan": "0"}, map[string]float64{"speed_rpm": 0})
 		}
 	}
 	return b, map[string]string{}
@@ -95,7 +110,7 @@ func newV2Fixture(t *testing.T, endpoint, dir string, reads *atomic.Int32, missi
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	m, err := New(Options{StateDirectory: dir, UploadURL: endpoint, UploadToken: func(context.Context) (string, error) { return strings.Repeat("a", 64), nil }, CoreFactory: func() Collector { return &v2Fixture{reads, missing} }, NativeFactory: func() Collector { return &NativeCollector{} }, ApplyTimeout: time.Second})
+	m, err := New(Options{StateDirectory: dir, UploadURL: endpoint, UploadToken: func(context.Context) (string, error) { return strings.Repeat("a", 64), nil }, CoreFactory: func() Collector { return &v2Fixture{reads, missing} }, NativeFactory: func() Collector { return &v2Fixture{new(atomic.Int32), missing} }, ApplyTimeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,25 +242,87 @@ func TestV2ProfileRetrySelectionAndStartupCache(t *testing.T) {
 		t.Errorf("restart retransmitted fixed profile: %d/%d", writes, patches)
 	}
 }
+
+// A commit with upload enabled must sync the profile ahead of the first
+// sample round, and a 401 must clear by itself once the Agent picks up a
+// re-registered token — no restart required.
+func TestV2CommitSyncsProfileAndRecoversFromAuthError(t *testing.T) {
+	var lock sync.Mutex
+	var first string
+	var puts int
+	good := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lock.Lock()
+		if first == "" {
+			first = r.Method + " " + r.URL.Path
+		}
+		accept := good
+		lock.Unlock()
+		if !accept {
+			w.WriteHeader(401)
+			return
+		}
+		lock.Lock()
+		defer lock.Unlock()
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v2/collector/profile":
+			w.WriteHeader(404)
+		case "PUT /v2/collector/profile":
+			if r.Header.Get("If-None-Match") != "*" {
+				t.Error("missing creation condition")
+			}
+			puts++
+			w.Header().Set("ETag", `"3"`)
+			_, _ = io.WriteString(w, `{"r":3}`)
+		case "POST /v2/collector/samples":
+			w.WriteHeader(204)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL)
+			w.WriteHeader(404)
+		}
+	}))
+	defer server.Close()
+	m := newV2Fixture(t, server.URL+"/v2/collector/samples", "", &atomic.Int32{}, &atomic.Bool{})
+	if _, e := m.Apply(context.Background(), v2Config()); e != nil {
+		t.Fatal(e)
+	}
+	awaitV2(t, func() bool { return m.Snapshot().UploadError == "upload_auth_required" })
+	lock.Lock()
+	good = true
+	lock.Unlock()
+	awaitV2(t, func() bool {
+		s := m.Snapshot()
+		return puts > 0 && s.UploadError == "" && s.LastUploadAt != nil
+	})
+	lock.Lock()
+	defer lock.Unlock()
+	if first != "GET /v2/collector/profile" {
+		t.Fatalf("profile did not lead delivery: %s", first)
+	}
+	if puts != 1 {
+		t.Fatalf("profile PUT count %d", puts)
+	}
+}
 func TestV2SevenCategoriesAndMissingRequired(t *testing.T) {
+	requireNative(t, "cpu", "gpu", "disk", "disk_usage", "network", "battery")
 	m := newV2Fixture(t, "http://127.0.0.1:1/v2/collector/samples", "", &atomic.Int32{}, &atomic.Bool{})
 	c := v2Config()
-	for _, key := range []string{"cpu.temperature", "cpu.load1", "memory.used", "memory.app", "memory.wired", "memory.compressed", "memory.swap_total", "memory.swap_used", "memory.pressure"} {
+	optional := []string{"cpu.temperature", "cpu.load1", "memory.used", "memory.swap_total", "memory.swap_used"}
+	if nativeSourceID("memory") != "" {
+		optional = append(optional, "memory.app", "memory.wired", "memory.compressed", "memory.pressure")
+	}
+	for _, key := range optional {
 		c.Upload.Optional = append(c.Upload.Optional, v2.UploadSelection{Metric: key})
 	}
 	ids := map[string]uint16{}
-	for _, kind := range []string{"core", "gpu", "drive", "interface", "battery", "fan"} {
+	for _, kind := range []string{"core", "gpu", "drive", "interface", "battery"} {
 		for id := range m.v2.objectsOfKind(kind) {
 			ids[kind] = id
 			break
 		}
 	}
-	for key, kind := range map[string]string{"gpu.usage": "gpu", "gpu.temperature": "gpu", "drive.read_rate": "drive", "drive.write_rate": "drive", "drive.smart_health": "drive", "drive.smart_attribute": "drive", "drive.used": "drive", "interface.download_rate": "interface", "interface.ipv4": "interface", "battery.level": "battery", "battery.charging": "battery", "fan.rpm": "fan"} {
-		s := v2.UploadSelection{Metric: key, Objects: []uint16{ids[kind]}}
-		if key == "drive.smart_attribute" {
-			s.Detail = []uint16{4}
-		}
-		c.Upload.Optional = append(c.Upload.Optional, s)
+	for key, kind := range map[string]string{"gpu.usage": "gpu", "gpu.temperature": "gpu", "drive.read_rate": "drive", "drive.write_rate": "drive", "drive.smart_health": "drive", "drive.used": "drive", "interface.download_rate": "interface", "interface.ipv4": "interface", "battery.level": "battery", "battery.charging": "battery"} {
+		c.Upload.Optional = append(c.Upload.Optional, v2.UploadSelection{Metric: key, Objects: []uint16{ids[kind]}})
 	}
 	var e error
 	c, e = m.prepareV2(c)
@@ -258,7 +335,14 @@ func TestV2SevenCategoriesAndMissingRequired(t *testing.T) {
 		t.Fatal(e)
 	}
 	encoded, _ := json.Marshal(s)
-	for _, fragment := range []string{`"c":1250`, `"m":6200`, `"t":423`, `"u":"0"`, `"p":0`, `"h":false`, `"c":false`, `"r":0`} {
+	fragments := []string{`"c":1250`, `"m":6200`, `"u":"0"`, `"h":false`, `"c":false`}
+	if nativeSourceID("cpu") != "" {
+		fragments = append(fragments, `"t":423`)
+	}
+	if nativeSourceID("memory") != "" {
+		fragments = append(fragments, `"p":0`)
+	}
+	for _, fragment := range fragments {
 		if !strings.Contains(string(encoded), fragment) {
 			t.Errorf("missing %s in %s", fragment, encoded)
 		}
@@ -358,20 +442,18 @@ func TestV2ProfileDiffScalarGroupsUseLeaves(t *testing.T) {
 }
 
 func TestV2ExactValuesAndAddressRemoval(t *testing.T) {
+	requireNative(t, "disk", "network")
 	m := newV2Fixture(t, "http://127.0.0.1:1/v2/collector/samples", "", &atomic.Int32{}, &atomic.Bool{})
 	drive := m.v2.inventory.Drives[0].ID
 	iface := m.v2.inventory.Interfaces[0].ID
-	c := v2Config(v2.UploadSelection{Metric: "memory.used"}, v2.UploadSelection{Metric: "drive.smart_attribute", Objects: []uint16{drive}, Detail: []uint16{4}}, v2.UploadSelection{Metric: "interface.ipv4", Objects: []uint16{iface}})
+	c := v2Config(v2.UploadSelection{Metric: "memory.used"}, v2.UploadSelection{Metric: "drive.smart_health", Objects: []uint16{drive}}, v2.UploadSelection{Metric: "interface.ipv4", Objects: []uint16{iface}})
 	b, _ := m.opts.CoreFactory().Gather(context.Background(), allSources())
 	for n := range b.Metrics {
 		v := &b.Metrics[n]
 		switch v.Name {
 		case "mem":
 			v.Exact = map[string]string{"used": "18446744073709551615"}
-		case "darwin_disk":
-			delete(v.Fields, "smart_media_errors")
-			v.Exact = map[string]string{"smart_media_errors": "340282366920938463463374607431768211455"}
-		case "darwin_network":
+		case nativeSourceID("network"):
 			v.Tags["ipv4"] = ""
 		}
 	}
@@ -380,18 +462,13 @@ func TestV2ExactValuesAndAddressRemoval(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, _ := json.Marshal(sample)
-	for _, want := range []string{`"u":"18446744073709551615"`, `"4":"340282366920938463463374607431768211455"`, `"ip":[]`} {
+	for _, want := range []string{`"u":"18446744073709551615"`, `"ip":[]`} {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("missing %s: %s", want, body)
 		}
 	}
-	for _, v := range b.Metrics {
-		if v.Name == "darwin_disk" {
-			v.Exact["smart_media_errors"] = "340282366920938463463374607431768211456"
-		}
-	}
-	if _, ok := smartInteger(fixedMetric(b, "darwin_disk", "", ""), "smart_media_errors"); ok {
-		t.Fatal("SMART overflow accepted")
+	if strings.Contains(string(body), `"v":`) {
+		t.Fatalf("SMART details must not be uploaded: %s", body)
 	}
 }
 
@@ -444,14 +521,19 @@ func TestV2MissingServerProfileReconcilesBeforeNewBatch(t *testing.T) {
 }
 
 func TestV2OptionalFailureDoesNotSuppressMandatorySample(t *testing.T) {
+	requireNative(t, "cpu")
 	m := newV2Fixture(t, "http://127.0.0.1:1/v2/collector/samples", "", &atomic.Int32{}, &atomic.Bool{})
-	c := v2Config(v2.UploadSelection{Metric: "cpu.temperature"}, v2.UploadSelection{Metric: "memory.pressure"})
+	optional := []v2.UploadSelection{{Metric: "cpu.temperature"}}
+	if nativeSourceID("memory") != "" {
+		optional = append(optional, v2.UploadSelection{Metric: "memory.pressure"})
+	}
+	c := v2Config(optional...)
 	batch, _ := m.opts.CoreFactory().Gather(context.Background(), allSources())
 	for n := range batch.Metrics {
 		switch batch.Metrics[n].Name {
-		case "darwin_cpu":
+		case nativeSourceID("cpu"):
 			batch.Metrics[n].Fields["temperature_celsius"] = math.NaN()
-		case "darwin_memory":
+		case nativeSourceID("memory"):
 			batch.Metrics[n].Fields["pressure_level"] = 3
 		}
 	}
@@ -462,6 +544,7 @@ func TestV2OptionalFailureDoesNotSuppressMandatorySample(t *testing.T) {
 }
 
 func TestV2BatteryUploadIsBundled(t *testing.T) {
+	requireNative(t, "battery")
 	m := newV2Fixture(t, "http://127.0.0.1:1/v2/collector/samples", "", &atomic.Int32{}, &atomic.Bool{})
 	id := m.v2.inventory.Batteries[0].ID
 	for _, key := range []string{"battery.level", "battery.charging"} {
@@ -483,7 +566,7 @@ func TestV2BatteryUploadIsBundled(t *testing.T) {
 				t.Fatal("real zero/false changed")
 			}
 			for n := range batch.Metrics {
-				if batch.Metrics[n].Name == "darwin_battery" {
+				if batch.Metrics[n].Name == nativeSourceID("battery") {
 					delete(batch.Metrics[n].Fields, "charging")
 				}
 			}
@@ -608,6 +691,21 @@ func TestV2PairedRatesOmitPartialReadings(t *testing.T) {
 	}
 }
 
+func TestPreviewFollowsGUIActivity(t *testing.T) {
+	m := &Manager{}
+	if m.previewActive() {
+		t.Fatal("preview active without a GUI consumer")
+	}
+	m.MarkPreview()
+	if !m.previewActive() {
+		t.Fatal("preview inactive after a GUI poll")
+	}
+	m.previewAt.Store(time.Now().Add(-previewTTL).UnixNano())
+	if m.previewActive() {
+		t.Fatal("preview stayed active after the TTL")
+	}
+}
+
 func TestV2ApplyPerCoreCannotSelectSubset(t *testing.T) {
 	m := newV2Fixture(t, "http://127.0.0.1:1/v2/collector/samples", "", &atomic.Int32{}, &atomic.Bool{})
 	ids := []uint16{m.v2.inventory.Cores[0].ID, m.v2.inventory.Cores[1].ID}
@@ -628,41 +726,68 @@ func TestV2ApplyPerCoreCannotSelectSubset(t *testing.T) {
 func TestV2PreviewSampleCoversUnselectedMetrics(t *testing.T) {
 	m := newV2Fixture(t, "http://127.0.0.1:1/v2/collector/samples", "", &atomic.Int32{}, &atomic.Bool{})
 	preview := selectedSources(v2PreviewConfig(v2Config()))
-	for _, src := range []string{"cpu", "mem", "swap", "system", "darwin_cpu", "darwin_memory", "darwin_gpu", "darwin_disk_usage", "diskio", "net", "darwin_network", "darwin_battery", "darwin_fan"} {
+	for _, src := range []string{"cpu", "mem", "swap", "system"} {
 		if !slices.Contains(preview, src) {
 			t.Fatalf("unselected source not previewed: %s", src)
 		}
 	}
-	if slices.Contains(preview, "darwin_disk") || slices.Contains(preview, "darwin_public_ip") {
-		t.Fatal("gated source gathered without selection")
+	for _, role := range []string{"cpu", "memory", "gpu", "disk_usage", "network", "battery"} {
+		if source := nativeSourceID(role); source != "" && !slices.Contains(preview, source) {
+			t.Fatalf("unselected native source not previewed: %s", source)
+		}
+	}
+	for _, role := range []string{"disk", "public_ip"} {
+		if source := nativeSourceID(role); source != "" && !slices.Contains(preview, source) {
+			t.Fatalf("unselected source not previewed: %s", source)
+		}
 	}
 	batch, _ := m.opts.CoreFactory().Gather(context.Background(), preview)
 	previewSample, err := m.previewSampleV2(batch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(previewSample.Drives) == 0 || len(previewSample.Interfaces) == 0 || len(previewSample.GPUs) == 0 || len(previewSample.Batteries) == 0 || len(previewSample.Fans) == 0 {
+	if len(previewSample.Drives) == 0 || len(previewSample.Interfaces) == 0 {
 		t.Fatalf("unselected devices missing from preview: %+v", previewSample)
 	}
-	if previewSample.CPU == nil || previewSample.CPU.Load1 == nil || previewSample.CPU.Temperature == nil {
-		t.Fatalf("unselected cpu metrics missing from preview: %+v", previewSample.CPU)
-	}
-	if previewSample.Memory == nil || previewSample.Memory.Pressure == nil {
-		t.Fatalf("unselected memory metrics missing from preview: %+v", previewSample.Memory)
-	}
-	for _, drive := range previewSample.Drives {
-		if drive.SMART != nil {
-			t.Fatalf("SMART must stay selection-gated: %+v", drive)
+	for _, role := range []string{"gpu", "battery"} {
+		if nativeSourceID(role) == "" {
+			continue
+		}
+		var count int
+		switch role {
+		case "gpu":
+			count = len(previewSample.GPUs)
+		case "battery":
+			count = len(previewSample.Batteries)
+		}
+		if count == 0 {
+			t.Fatalf("unselected %s missing from preview: %+v", role, previewSample)
 		}
 	}
-	if previewSample.PublicIPv4 != nil {
-		t.Fatal("public IPv4 must stay selection-gated")
+	if previewSample.CPU == nil || previewSample.CPU.Load1 == nil {
+		t.Fatalf("unselected cpu metrics missing from preview: %+v", previewSample.CPU)
+	}
+	if nativeSourceID("cpu") != "" && previewSample.CPU.Temperature == nil {
+		t.Fatalf("unselected cpu temperature missing from preview: %+v", previewSample.CPU)
+	}
+	if nativeSourceID("memory") != "" && (previewSample.Memory == nil || previewSample.Memory.Pressure == nil) {
+		t.Fatalf("unselected memory metrics missing from preview: %+v", previewSample.Memory)
+	}
+	if nativeSourceID("disk") != "" {
+		for _, drive := range previewSample.Drives {
+			if drive.SMART == nil || drive.SMART.Healthy == nil {
+				t.Fatalf("preview SMART health missing: %+v", drive)
+			}
+		}
+	}
+	if nativeSourceID("public_ip") != "" && previewSample.PublicIPv4 == nil {
+		t.Fatal("unselected public IPv4 missing from preview")
 	}
 	uploadSample, err := m.sampleV2(v2Config(), batch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(uploadSample.Drives) != 0 || len(uploadSample.Interfaces) != 0 || len(uploadSample.GPUs) != 0 || len(uploadSample.Fans) != 0 || len(uploadSample.Batteries) != 0 {
+	if len(uploadSample.Drives) != 0 || len(uploadSample.Interfaces) != 0 || len(uploadSample.GPUs) != 0 || len(uploadSample.Batteries) != 0 {
 		t.Fatalf("unselected metrics uploaded: %+v", uploadSample)
 	}
 }
@@ -730,6 +855,7 @@ func TestV2DefaultMemoryAndPartialDiskBundle(t *testing.T) {
 }
 
 func TestV2DiskUsageSelectedAndLegacyVolumeRemoved(t *testing.T) {
+	requireNative(t, "disk_usage")
 	m := newV2Fixture(t, "http://127.0.0.1:1/v2/collector/samples", "", &atomic.Int32{}, &atomic.Bool{})
 	drive := m.v2.inventory.Drives[0].ID
 	c, err := m.prepareV2(v2Config(v2.UploadSelection{Metric: "drive.used", Objects: []uint16{drive}}, v2.UploadSelection{Metric: "volume.used", Objects: []uint16{123}}))
@@ -744,5 +870,23 @@ func TestV2DiskUsageSelectedAndLegacyVolumeRemoved(t *testing.T) {
 	body, _ := json.Marshal(sample)
 	if !strings.Contains(string(body), `"u":"1234"`) || strings.Contains(string(body), `"vol"`) {
 		t.Fatalf("unexpected encoded disk sample: %s", body)
+	}
+}
+
+func TestV2ObjectDisplayNames(t *testing.T) {
+	s := &v2State{IDs: map[string]uint16{`gpu:PCI\VEN_10DE`: 7}, Next: 8}
+	gpu := Metric{Tags: map[string]string{"device": `PCI\VEN_10DE`, "model": "NVIDIA GeForce RTX 5080"}}
+	if id, err := s.allocate("gpu", gpu); err != nil || id != 7 {
+		t.Fatalf("allocate existing gpu = %d, %v", id, err)
+	}
+	if got := s.Names[`gpu:PCI\VEN_10DE`]; got != "NVIDIA GeForce RTX 5080" {
+		t.Fatalf("gpu display name = %q", got)
+	}
+	drive := Metric{Tags: map[string]string{"device": "PHYSICALDRIVE0", "model": "Samsung SSD 990 PRO"}}
+	if id, err := s.allocate("drive", drive); err != nil || id != 8 {
+		t.Fatalf("allocate drive = %d, %v", id, err)
+	}
+	if got := s.Names["drive:PHYSICALDRIVE0"]; got != "Samsung SSD 990 PRO" {
+		t.Fatalf("drive display name = %q", got)
 	}
 }

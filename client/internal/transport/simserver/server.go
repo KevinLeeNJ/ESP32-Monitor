@@ -4,6 +4,7 @@
 package simserver
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -30,6 +31,9 @@ import (
 const maxBody = 256 << 10 // 256 KiB, per doc §6.6
 
 const pairingTTL = 10 * time.Minute
+
+// maxFeedEntries bounds the WebUI batch feed (oldest entries are dropped).
+const maxFeedEntries = 100
 
 //go:embed webui.html
 var webuiHTML []byte
@@ -74,12 +78,25 @@ type latestValue struct {
 	Revision uint64
 }
 
+// batchEntry is one accepted sample batch, kept verbatim for the WebUI feed.
+type batchEntry struct {
+	Seq      uint64    `json:"seq"`
+	DeviceID string    `json:"device_id,omitempty"`
+	Device   string    `json:"device"`
+	Received time.Time `json:"received_at"`
+	Revision uint64    `json:"revision"`
+	Samples  int       `json:"samples"`
+	Raw      string    `json:"raw"`
+}
+
 // Server is the in-memory simulator. It is safe for concurrent use.
 type Server struct {
 	mu           sync.Mutex
 	devices      map[string]*Device // by Bearer token
 	byID         map[string]*Device
 	byCode       map[string]*Device
+	feed         []batchEntry
+	feedSeq      uint64
 	registration bool
 	requiredTok  string
 	now          func() time.Time
@@ -130,6 +147,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v2/collector/register", s.register)
 	mux.HandleFunc("/api/devices", s.adminDevices)
 	mux.HandleFunc("/api/devices/", s.adminDevice)
+	mux.HandleFunc("/api/batches", s.adminBatches)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
 	mux.HandleFunc("/", s.webUI)
@@ -137,9 +155,9 @@ func (s *Server) Handler() http.Handler {
 		start := s.now()
 		rec := &statusRecorder{ResponseWriter: w, status: 200}
 		mux.ServeHTTP(rec, r)
-		// The WebUI polls the device list every few seconds; logging it would
-		// bury registration and collector events in the simulator output.
-		if r.Method == http.MethodGet && (r.URL.Path == "/" || r.URL.Path == "/api/devices") {
+		// The WebUI polls the device list and batch feed every few seconds;
+		// logging it would bury registration and collector events.
+		if r.Method == http.MethodGet && (r.URL.Path == "/" || r.URL.Path == "/api/devices" || r.URL.Path == "/api/batches") {
 			return
 		}
 		token, _ := bearer(r)
@@ -329,6 +347,61 @@ func (s *Server) webUI(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(webuiHTML)
 }
 
+// recordBatchLocked appends an accepted batch to the WebUI feed ring buffer.
+// Callers must hold s.mu.
+func (s *Server) recordBatchLocked(d *Device, batch *v2.SampleBatch, raw []byte) {
+	label := d.Name
+	if label == "" {
+		label = "令牌 " + shortToken(d.Token)
+	}
+	s.feedSeq++
+	s.feed = append(s.feed, batchEntry{
+		Seq:      s.feedSeq,
+		DeviceID: d.ID,
+		Device:   label,
+		Received: s.now(),
+		Revision: batch.Revision,
+		Samples:  len(batch.Samples),
+		Raw:      string(raw),
+	})
+	if len(s.feed) > maxFeedEntries {
+		s.feed = s.feed[len(s.feed)-maxFeedEntries:]
+	}
+}
+
+// adminBatches serves recent accepted batches for the WebUI feed. It works in
+// both fixed-token and registration mode; ?after=<seq> returns only newer
+// entries, and a cursor newer than the simulator's sequence triggers a full
+// resend flagged as reset (the simulator was restarted).
+func (s *Server) adminBatches(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.fail(w, errf(http.StatusMethodNotAllowed, "method_not_allowed"))
+		return
+	}
+	after := uint64(0)
+	if v := r.URL.Query().Get("after"); v != "" {
+		n, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			s.fail(w, errf(http.StatusBadRequest, "invalid_after"))
+			return
+		}
+		after = n
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	reset := after > s.feedSeq
+	if reset {
+		after = 0
+	}
+	entries := make([]batchEntry, 0, len(s.feed))
+	for _, e := range s.feed {
+		if e.Seq > after {
+			entries = append(entries, e)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"batches": entries, "latest": s.feedSeq, "reset": reset})
+}
+
 func (s *Server) adminDevices(w http.ResponseWriter, r *http.Request) {
 	if !s.registration {
 		http.NotFound(w, r)
@@ -444,9 +517,29 @@ func (s *Server) adminDevice(w http.ResponseWriter, r *http.Request) {
 		s.deleteDevice(w, d)
 	case r.Method == http.MethodPost && action == "code":
 		s.issueCode(w, d)
+	case r.Method == http.MethodGet && action == "profile":
+		s.deviceProfile(w, d)
 	default:
 		s.fail(w, errf(http.StatusMethodNotAllowed, "method_not_allowed"))
 	}
+}
+
+// deviceProfile serves the device's confirmed profile inventory for the WebUI
+// 设备 tab: the long-term hardware descriptors uploaded once per profile sync.
+func (s *Server) deviceProfile(w http.ResponseWriter, d *Device) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if d.Profile == nil {
+		s.fail(w, errf(http.StatusNotFound, "profile_required"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"device_id":        d.ID,
+		"name":             d.Name,
+		"revision":         d.Revision,
+		"interval_seconds": d.Profile.IntervalSeconds,
+		"inventory":        d.Profile.Inventory,
+	})
 }
 
 func (s *Server) deleteDevice(w http.ResponseWriter, d *Device) {
@@ -678,7 +771,7 @@ func (s *Server) samples(w http.ResponseWriter, r *http.Request, d *Device) {
 		return
 	}
 	var batch v2.SampleBatch
-	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&batch); err != nil {
 		s.fail(w, errf(http.StatusBadRequest, "invalid_json"))
@@ -722,6 +815,7 @@ func (s *Server) samples(w http.ResponseWriter, r *http.Request, d *Device) {
 	if t := batch.Samples[len(batch.Samples)-1].Timestamp; time.Since(time.Unix(t, 0)) < maxStaleness(d.Profile) {
 		d.LastSeen = s.now()
 	}
+	s.recordBatchLocked(d, &batch, raw)
 	w.WriteHeader(http.StatusNoContent)
 	s.log.Printf(`{"at":%q,"event":"samples","op":"accept","batch":%q,"samples":%d,"revision":%d}`,
 		s.now().UTC().Format(time.RFC3339Nano), batch.ID, len(batch.Samples), batch.Revision)
@@ -738,7 +832,6 @@ func maxStaleness(p *v2.Profile) time.Duration {
 // selection indexes the profile's enabled declarations by semantic ID.
 type selection struct {
 	objects map[uint16]bool
-	details map[uint16]bool
 }
 
 func selectionsOf(p *v2.Profile) map[string]*selection {
@@ -746,14 +839,11 @@ func selectionsOf(p *v2.Profile) map[string]*selection {
 	for _, sel := range p.Enabled {
 		s, ok := out[sel.Metric]
 		if !ok {
-			s = &selection{objects: map[uint16]bool{}, details: map[uint16]bool{}}
+			s = &selection{objects: map[uint16]bool{}}
 			out[sel.Metric] = s
 		}
 		for _, id := range sel.Objects {
 			s.objects[id] = true
-		}
-		for _, id := range sel.Detail {
-			s.details[id] = true
 		}
 	}
 	return out
@@ -867,14 +957,6 @@ func (s *Server) validateSample(d *Device, sm *v2.Sample, serverNow int64) error
 			}
 			if !selectedFor(sel, "drive.smart_health", drive.ID) && drive.SMART.Healthy != nil {
 				return errf(http.StatusUnprocessableEntity, "metric_not_enabled:drive.smart_health")
-			}
-			if len(drive.SMART.Values) > 0 && (sel["drive.smart_attribute"] == nil || !sel["drive.smart_attribute"].objects[drive.ID]) {
-				return errf(http.StatusUnprocessableEntity, "metric_not_enabled:drive.smart_attribute")
-			}
-			for id := range drive.SMART.Values {
-				if sel["drive.smart_attribute"] == nil || !sel["drive.smart_attribute"].details[id] {
-					return errf(http.StatusUnprocessableEntity, "metric_not_enabled:smart detail")
-				}
 			}
 		}
 	}

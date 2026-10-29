@@ -18,6 +18,26 @@ try {
         return $task.Result
     }
     $manager = Await ($managerType::RequestAsync()) $managerType
+    # SourceAppUserModelId is an identifier; the media flyout shows the Start
+    # menu display name instead. Cache lookups for the polling loop.
+    $appNames = @{}
+    function Get-FriendlyAppName($aumid) {
+        if ([string]::IsNullOrWhiteSpace($aumid)) { return $null }
+        if ($appNames.ContainsKey($aumid)) { return $appNames[$aumid] }
+        $name = $null
+        try {
+            $entry = Get-StartApps -ErrorAction SilentlyContinue | Where-Object { $_.AppID -eq $aumid } | Select-Object -First 1
+            if ($null -ne $entry -and $entry.Name) { $name = $entry.Name }
+        } catch {}
+        if (-not $name) {
+            try {
+                $props = Get-ItemProperty -Path ('Registry::HKEY_CURRENT_USER\Software\Classes\AppUserModelId\' + $aumid) -ErrorAction Stop
+                if ($props.DisplayName -and -not $props.DisplayName.StartsWith('@')) { $name = $props.DisplayName }
+            } catch {}
+        }
+        if ($name) { $appNames[$aumid] = $name }
+        return $name
+    }
 } catch {
     $code = 'music_unsupported'
     if ($_.Exception.ToString() -match 'Access.*denied|0x80070005') { $code = 'music_permission_denied' }
@@ -40,8 +60,17 @@ while ($true) {
             if ($null -ne $timeline -and $timeline.EndTime -gt $timeline.StartTime) {
                 $duration = ($timeline.EndTime - $timeline.StartTime).TotalSeconds
                 $position = ($timeline.Position - $timeline.StartTime).TotalSeconds
+                # Most apps only refresh Position when the timeline changes, so
+                # playing progress must be extrapolated from LastUpdatedTime.
+                if ($status -eq 'playing' -and $null -ne $timeline.LastUpdatedTime -and $timeline.LastUpdatedTime.Year -gt 2000) {
+                    $position += ([DateTimeOffset]::UtcNow - $timeline.LastUpdatedTime).TotalSeconds
+                }
+                if ($position -lt 0) { $position = 0 }
+                if ($position -gt $duration) { $position = $duration }
             }
-            Emit @{title=$media.Title;artist=$media.Artist;source=$session.SourceAppUserModelId;
+            $source = Get-FriendlyAppName $session.SourceAppUserModelId
+            if (-not $source) { $source = $session.SourceAppUserModelId }
+            Emit @{title=$media.Title;artist=$media.Artist;source=$source;
                    state=$status;duration=$duration;position=$position} $null
         }
     } catch {

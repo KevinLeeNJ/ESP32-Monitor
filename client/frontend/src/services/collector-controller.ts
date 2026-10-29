@@ -1,6 +1,6 @@
 import { collectorService, type CollectorBridge } from "./collector.js";
 import type { CollectorCapabilities, CollectorConfig, CollectorSnapshot } from "../types/collector.js";
-import { prepareMetricDraft, validateMetricDraft } from "./collector-metrics.js";
+import { prepareMetricDraft, repairV2Selections, validateMetricDraft } from "./collector-metrics.js";
 
 /** Keeps editing state separate from live snapshots. A failed apply preserves
  * the draft for repair and the previous committed config shown by the Agent. */
@@ -15,6 +15,7 @@ export class CollectorController {
   private listeners = new Set<() => void>();
   private timer?: ReturnType<typeof setTimeout>;
   private stopped = true;
+  private capsRetryAt = 0;
 
   constructor(bridge: CollectorBridge, private pollMS = 1000) {
     this.service = collectorService(bridge);
@@ -48,19 +49,37 @@ export class CollectorController {
     if (this.busy) return;
     try {
       const snapshot = await this.service.snapshot();
-      if (this.stopped || this.busy || snapshot.revision < (this.snapshot?.revision ?? 0)) return;
+      if (this.stopped || this.busy) return;
+      // A restarted Agent starts a fresh revision counter; only compare
+      // revisions within the same process.
+      if (this.snapshot && snapshot.pid === this.snapshot.pid && snapshot.revision < this.snapshot.revision) return;
       this.snapshot = snapshot;
-      this.draft ??= structuredClone(snapshot.config);
+      if (!this.draft) {
+        this.draft = structuredClone(snapshot.config);
+        this.repairDraft();
+      }
       this.pollError = "";
+      if (!this.capabilities && Date.now() >= this.capsRetryAt) {
+        this.capsRetryAt = Date.now() + 5000;
+        void this.rescan();
+      }
     } catch (error) { this.pollError = String(error); }
     this.emit();
   }
   async rescan() {
     if (this.busy) return;
     this.busy = true; this.error = ""; this.emit();
-    try { this.capabilities = await this.service.rescan(); }
+    try {
+      this.capabilities = await this.service.rescan();
+      this.repairDraft();
+    }
     catch (error) { this.error = String(error); }
     finally { this.busy = false; this.emit(); }
+  }
+  // Hardware changes silently invalidate saved selections; prune them so the
+  // draft never carries choices the GUI cannot display or uncheck.
+  private repairDraft() {
+    if (this.draft && this.capabilities?.v2) repairV2Selections(this.draft, this.capabilities.v2);
   }
   async apply() {
     if (this.busy || !this.draft) return;

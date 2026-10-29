@@ -215,6 +215,10 @@ func TestDeliveryRetriesAndPermanentErrors(t *testing.T) {
 		t.Fatal("auth error not surfaced or batch dropped")
 	}
 	m.mu.Lock()
+	if m.queue[0].next.IsZero() || !time.Now().Before(m.queue[0].next) {
+		m.mu.Unlock()
+		t.Fatal("auth error did not schedule a retry")
+	}
 	m.snapshot.UploadError = ""
 	m.queue[0].next = time.Time{}
 	m.mu.Unlock()
