@@ -10,6 +10,7 @@ import CompanionView from "./views/CompanionView.vue";
 import Esp32View from "./views/Esp32View.vue";
 import StartupView from "./views/StartupView.vue";
 import DiagnosticsView from "./views/DiagnosticsView.vue";
+import appIcon from "../../assets/icons/app-icon-128.png";
 
 const views: Record<PageID, Component> = {
   overview: OverviewView, metrics: MetricsView, server: ServerView, companion: CompanionView,
@@ -33,7 +34,7 @@ onUnmounted(stopPolling);
   <div class="shell">
     <aside class="sidebar">
       <div class="brand">
-        <div class="logo"><i class="pixelart-icons-font-cpu" aria-hidden="true"></i></div>
+        <img class="logo brand-icon" :src="appIcon" alt="" aria-hidden="true">
         <div><strong>ESP32 MONITOR</strong><small>DESKTOP CLIENT</small></div>
       </div>
       <div class="nav-label">工作空间</div>

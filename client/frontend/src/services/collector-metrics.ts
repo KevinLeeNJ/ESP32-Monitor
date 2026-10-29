@@ -258,6 +258,9 @@ export function rowValue(row: MetricRow, caps: CollectorV2Capabilities, snapshot
   if (row.bundle?.key === "cpu.model") return cpuInfoValue(row, caps);
   if (row.bundle?.key === "drive.model") return driveInfoValue(row, caps, snapshot, objectID);
   if (!row.bundle) return bond(metricValue(row.members[0], caps, snapshot, objectID));
-  const values = row.members.map(metric => ({ key: metric.metric, value: metricValue(metric, caps, snapshot, objectID) })).filter(entry => entry.value !== "—");
+  const values = row.members.map(metric => {
+    const value = metricValue(metric, caps, snapshot, objectID);
+    return { key: metric.metric, value: metric.metric === "interface.up" && value === "—" ? "未知" : value };
+  }).filter(entry => entry.value !== "—");
   return values.length ? values.map(entry => `${bond(memberLabels[entry.key] ?? entry.key)}\u00A0${bond(entry.value)}`).join("\n") : "—";
 }

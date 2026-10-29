@@ -40,6 +40,24 @@ func TestNetworkPortClassification(t *testing.T) {
 	}
 }
 
+func TestDarwinLinkStatus(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		value float64
+		ok    bool
+	}{
+		{"flags=UP,RUNNING\n\tstatus: active\n", 1, true},
+		{"flags=UP,RUNNING\n\tmedia: none\n\tstatus: inactive\n", 0, true},
+		{"flags=UP,RUNNING\n", 0, false},
+		{"status: unknown\n", 0, false},
+	} {
+		value, ok := parseDarwinLinkStatus(tc.input)
+		if value != tc.value || ok != tc.ok {
+			t.Fatalf("%q: got %v %v", tc.input, value, ok)
+		}
+	}
+}
+
 func TestPlistGPUAndDiskParsing(t *testing.T) {
 	input := `<?xml version="1.0"?><plist version="1.0"><array><dict><key>IOClass</key><string>AGX</string><key>PerformanceStatistics</key><dict><key>Device Utilization %</key><integer>37</integer><key>other</key><data>AA==</data></dict></dict></array></plist>`
 	v, err := decodePlist(input)
@@ -63,6 +81,9 @@ func TestPlistGPUAndDiskParsing(t *testing.T) {
 func TestParsePublicIPv4(t *testing.T) {
 	if ip, err := parsePublicIPv4([]byte(`{"ipv4":"8.8.8.8","country":"US"}`)); err != nil || ip != "8.8.8.8" {
 		t.Fatalf("valid: %q %v", ip, err)
+	}
+	if ip, err := parsePublicIPv4([]byte(`{"ip":"8.8.4.4"}`)); err != nil || ip != "8.8.4.4" {
+		t.Fatalf("fallback: %q %v", ip, err)
 	}
 	for _, value := range []string{`{"ipv4":"192.168.1.1"}`, `{"ipv4":"::1"}`, `{"ipv6":"::1"}`, `broken`} {
 		if _, err := parsePublicIPv4([]byte(value)); err == nil {

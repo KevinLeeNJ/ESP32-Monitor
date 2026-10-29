@@ -29,7 +29,7 @@ var (
 func validateRestartArgs(currentSocket string, args []string) error {
 	fs := flag.NewFlagSet("monitor-agent-restart", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var socket, uploadURL, tokenFile, companionIP, githubLogin, githubClientID, nativeLibrary string
+	var socket, uploadURL, tokenFile, companionIP, githubLogin, githubClientID, nativeLibrary, taskAdapter string
 	var collector, companion, codex, music bool
 	fs.StringVar(&socket, "ipc-socket", "", "")
 	fs.BoolVar(&collector, "collector", false, "")
@@ -40,6 +40,7 @@ func validateRestartArgs(currentSocket string, args []string) error {
 	fs.StringVar(&githubLogin, "github-user", "", "")
 	fs.StringVar(&githubClientID, "github-client-id", "", "")
 	fs.BoolVar(&codex, "codex", false, "")
+	fs.StringVar(&taskAdapter, "codex-task-adapter", "", "")
 	fs.BoolVar(&music, "music", false, "")
 	fs.StringVar(&nativeLibrary, "music-native-library", "", "")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
@@ -50,6 +51,9 @@ func validateRestartArgs(currentSocket string, args []string) error {
 	}
 	if !collector && (uploadURL != "" || tokenFile != "") {
 		return errors.New("restart_collector_args_invalid")
+	}
+	if taskAdapter != "" && taskAdapter != "auto" && taskAdapter != "desktop-ipc" {
+		return errors.New("restart_task_adapter_invalid")
 	}
 	if uploadURL != "" {
 		u, err := url.Parse(uploadURL)

@@ -20,7 +20,7 @@ func TestValidateRestartArgsAcceptsGUIFlags(t *testing.T) {
 		"--collector-upload-token-file", token,
 		"--companion", "--companion-ip", "192.168.1.20",
 		"--github-user", "octocat", "--github-client-id", "Ov23liExample",
-		"--codex", "--music",
+		"--codex", "--codex-task-adapter", "auto", "--music",
 	}
 	if err := validateRestartArgs(testSocket, args); err != nil {
 		t.Fatal(err)
@@ -38,6 +38,7 @@ func TestValidateRestartArgsRejectsPrivilegeChanges(t *testing.T) {
 		"bad login":         {"--ipc-socket", testSocket, "--github-user", "../octocat"},
 		"bad client id":     {"--ipc-socket", testSocket, "--github-client-id", "id with space"},
 		"ipv6 companion":    {"--ipc-socket", testSocket, "--companion", "--companion-ip", "::1"},
+		"unknown adapter":   {"--ipc-socket", testSocket, "--codex", "--codex-task-adapter", "arbitrary"},
 	} {
 		if err := validateRestartArgs(testSocket, args); err == nil {
 			t.Fatalf("%s accepted", name)

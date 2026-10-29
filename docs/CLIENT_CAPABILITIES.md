@@ -53,7 +53,7 @@ Core 只使用 gopsutil 可提供的能力；Native 补平台专有字段。可�
 | 内存 | 总量/已用/比例、App/Wired/压缩、Swap总量/已用、压力 | Core内存/Swap；vm_stat细分与可用压力级别 | Windows 仅 Core 内存/Swap；App/Wired/压缩/压力为 macOS 专有，不可用；Linux Native 为 stub |
 | GPU | 占用、平均温度 | IOKit PerformanceStatistics；SMC温度 | Windows Native 已实现 GPU Engine 占用，经 D3DKMT 枚举把 LUID 映射到 WMI 显卡，唯一匹配时按卡归属，多 GPU 可分别归属；温度经 WDDM D3DKMT 驱动性能数据读取，NVIDIA/AMD/Intel 自动适配，需 WDDM 2.4+ 驱动支持；映射歧义时省略；Linux Native 为 stub；无 GPU/计数器禁用不显示 0% |
 | 磁盘 | 型号、物理总量/已用、读写B/s、SMART健康 | diskutil档案/SMART；可可靠归属的APFS容器汇总；Core计数器速率 | Windows Native 已实现物理盘型号/总量/健康、可归属的物理盘已用，以及经包内 LHM helper 提供的温度（需提权与 .NET Framework 4.7.2+）；SMART 全平台只探测健康状态；Core `diskio` 为卷级计数，Windows 物理盘读写速率不可用；Linux Native 为 stub |
-| 网络 | Wi-Fi/有线类型、上传/下载B/s、本地IPv4、公网IPv4 | Core速率；Native接口介质/连接/IP；显式选择公网查询 | Windows Native 已实现物理网卡介质/在线/IPv4，Core 速率仅映射已确认物理网卡，公网 IP 显式查询；虚拟/隧道/蓝牙网卡不进入 v2 对象；Linux Native 为 stub |
+| 网络 | Wi-Fi/有线类型、上传/下载B/s、本地IPv4、公网IPv4 | 物理网卡介质/链路/IP及Core速率；公网IPv4外部查询 | Windows Native 已实现物理网卡介质/在线/IPv4，Core 速率仅映射已确认物理网卡，公网 IP 可在GUI预览或上传时查询；虚拟/隧道/蓝牙网卡不进入 v2 对象；Linux Native 为 stub |
 | 电池 | 电量百分比、充电状态 | 系统电源信息，两项成对 | Windows Native 已实现 `GetSystemPowerStatus`，两项成对；无电池整机不可用；Linux Native 为 stub |
 | 系统 | Uptime、OS类型/名称/版本/构建、硬件产品名 | Core Uptime；Native OS与产品映射 | Windows Native 读注册表 OS 名称/版本/构建与 BIOS 产品名；Linux Native 为 stub |
 
@@ -63,7 +63,11 @@ Windows Native 通过 WMI、WDDM、注册表和 `GetSystemPowerStatus` 采集，
 
 当前不再采集挂载点容量/文件系统用量、进程/连接统计；不把旧 Telegraf 任意插件列表或 CPU 最高频率列为当前 v2 支持字段。`volume.*` 为历史兼容类型，配置会清除。
 
-macOS 物理磁盘用量只在分区均能唯一归属单盘 APFS 容器时给出；共享容器只计一次，混合分区/跨盘容器/查询失败省略。Windows 物理磁盘用量只累加卷符唯一归属单盘的分区，无盘符分区、动态盘/存储空间不猜测；固定拓扑启动缓存，硬件变动需重启 Agent。公网 IP 当前选择启用后通过 `https://api.mac-stats.com/ip` 查询，缓存5分钟，保留真实观测时间；扫描不触发此请求。GPU Engine 以 LUID 标识适配器；Windows 通过 D3DKMT 枚举把 LUID 映射到 WMI 显卡，仅唯一匹配时归属占用/温度，重复同型号或多卡歧义时省略而非猜测。
+macOS 物理磁盘用量只在分区均能唯一归属单盘 APFS 容器时给出；共享容器只计一次，混合分区/跨盘容器/查询失败省略。Windows 物理磁盘用量只累加卷符唯一归属单盘的分区，无盘符分区、动态盘/存储空间不猜测；固定拓扑启动缓存，硬件变动需重启 Agent。公网 IPv4 查询及 macOS 网卡状态的具体行为见下文。GPU Engine 以 LUID 标识适配器；Windows 通过 D3DKMT 枚举把 LUID 映射到 WMI 显卡，仅唯一匹配时归属占用/温度，重复同型号或多卡歧义时省略而非猜测。
+
+macOS 网络列表仅包含系统识别的 Wi-Fi 和以太网硬件端口，速率不列回环、隧道等虚拟接口；连接状态取 `ifconfig` 的实际链路状态，无法读取时显示未知并省略状态样本。
+
+macOS 和 Windows 公网 IPv4 先查询 `https://api.mac-stats.com/ip`，无有效 IPv4 时尝试 `https://api4.ipify.org?format=json`，使用系统代理；地址可能是代理出口。结果缓存5分钟并保留真实观测时间，查询失败则省略。能力扫描不触发请求；GUI 活跃预览或选择上传时可能发起查询。
 
 ### 3.1 原 METRICS.md 要求逐项承接
 
@@ -99,7 +103,7 @@ macOS 物理磁盘用量只在分区均能唯一归属单盘 APFS 容器时给�
 | 网络上传速度 | Core按网卡计数器差分B/s；Windows 仅映射已确认物理网卡；上传依赖同网卡连接组 | `interface.upload_rate` |
 | 网络下载速度 | 同上，与上传速率成组选择 | `interface.download_rate` |
 | 本地IP（仅IPv4） | macOS、Windows Native支持多地址及确认无地址的空数组 | `interface.ipv4` |
-| 公网IP（如能获取，仅IPv4） | macOS/Windows 显式选择后外部查询，5分钟缓存，失败省略；扫描不触发 | `network.public_ipv4` |
+| 公网IP（如能获取，仅IPv4） | macOS/Windows GUI预览或选择上传时外部查询，5分钟缓存，失败省略；扫描不触发 | `network.public_ipv4` |
 | 电池容量百分比（有电池时） | macOS、Windows 系统电源读取；当前不是容量Wh/mAh或电池健康度；无电池整机不可用 | `battery.level` |
 | 电池充电状态 | macOS、Windows 已实现，与电量成对可获取/上传；未充电false保留 | `battery.charging` |
 | Uptime运行时长 | Core已实现，远端必选 | `system.uptime` |
@@ -116,7 +120,7 @@ macOS 物理磁盘用量只在分区均能唯一归属单盘 APFS 容器时给�
 
 | 能力 | 状态 | 当前行为 |
 | --- | --- | --- |
-| 能力发现/重扫 | 已实现 | 报告来源、字段、对象、可用/部分/权限/不支持及原因；固定信息不随重扫重新读取 |
+| 能力发现/重扫 | 已实现 | 报告来源、字段、对象、可用/部分/权限/不支持及原因；完成后页面自动刷新，固定信息不随重扫重新读取 |
 | 事务应用 | 已实现 | 候选校验/采样/持久化后切换；失败不停止旧循环；新配置清空旧上传队列 |
 | 本机/远端选择 | 已实现 | 本机 selections 与 upload.optional 分离；GUI 在线时预览所有可获取指标（含 SMART 健康状态与缓存公网 IP），GUI 停止轮询 15 秒后只采集上传选择 |
 | v2最小上传 | 已实现 | 总体CPU、内存百分比、Uptime必选；可获取时隐式带内存总量与已用量 |
@@ -126,7 +130,7 @@ macOS 物理磁盘用量只在分区均能唯一归属单盘 APFS 容器时给�
 | 无损离线恢复 | 未实现 | 队列不持久化；退出可能丢样本；重启恢复配置不等于补回旧样本 |
 | v1上传 | 不支持 | 当前 uploader只接受`/v2/collector/samples`，旧Server需升级 |
 | 正式Server端到端 | 待实现/联调 | 模拟器支持注册/Profile/Sample；生产Server尚无v2存储/投影 |
-| 系统时间修复 | 待实现 | 422仅报通用样本/时钟错误，无精确诊断、授权同步、UAC及恢复上传闭环 |
+| 系统时间修复 | 待实现 | Profile 422与样本 422分别报告；样本错误仍无法精确区分时钟原因，无授权同步、UAC及恢复上传闭环 |
 
 字段/编码/重试细节统一由 [Server–Client v2协议](SERVER_CLIENT_PROTOCOL_V2.md) 维护。不能因本地保存成功宣称远端字段立即移除；需等待 Server 确认 Profile。
 
@@ -137,7 +141,7 @@ macOS 物理磁盘用量只在分区均能唯一归属单盘 APFS 容器时给�
 | GitHub | Device Flow默认浏览器授权、轮询/取消/过期、账号确认、贡献日历、限流/缓存/账号隔离 | [auth](../client/internal/auth/github)、[provider](../client/internal/providers/github)；实际授权和三平台复用需各自验收 |
 | GitHub凭据 | 应用私有文件、原子写入、路径/符号链接校验；Unix0700/0600；Windows使用Credential Manager且禁止枚举 | [credential_file.go](../client/internal/platform/credential_file.go)、[credentials_windows.go](../client/internal/platform/credentials_windows.go)；Windows Save/Load/Delete往返已在本机通过；不恢复Keychain依赖，不打包Client Secret |
 | Codex额度 | 通过本机App Server只读读取账号额度、多bucket/窗口、未知值处理；Windows解析桌面App捆绑CLI | [codex](../client/internal/providers/codex)；不启动推理，不把额度读取成功等同桌面任务可观察 |
-| Codex任务 | 独立Adapter、显式启用desktop IPC观察；默认自动跟踪最近更新的本地任务，也可用显式ID覆盖（最多128个）；显示状态/活动数 | [taskmonitor](../client/internal/taskmonitor)、[desktop_discovery.go](../client/internal/taskmonitor/adapters/desktopipc/desktop_discovery.go)；内部IPC是实验接入，非稳定分发保证；只读`session_index.jsonl`的id/updated_at选择最新任务，不保留名称或内容；macOS/Linux用Unix socket、Windows用`\\.\pipe\codex-ipc`，Windows已实测运行态自动发现；完成态由turn的`durationMs`还原，完成发生在连接前60秒内也会上报`completed`，更早的历史完成按`idle`处理；等待/审批与实时完成转换待验收 |
+| Codex任务 | GUI启用Codex时同时启用只读任务观察；自动跟踪最近更新的本地用户会话，也可用显式ID覆盖（最多128个）；显示运行、等待、完成及不可用状态 | [taskmonitor](../client/internal/taskmonitor)、[desktop_discovery.go](../client/internal/taskmonitor/adapters/desktopipc/desktop_discovery.go)；内部IPC是实验接入，非稳定分发保证；优先只读状态库选择未归档用户会话，缺少状态库时回退`session_index.jsonl`；不保留名称或内容；macOS/Linux用Unix socket、Windows用`\\.\pipe\codex-ipc`，Windows已实测运行态自动发现；完成态由turn的`durationMs`还原，完成发生在连接前60秒内也会上报`completed`，更早的历史完成按`idle`处理；等待/审批与实时完成转换待验收 |
 | 系统播放 | 统一只读快照、playing/not_playing、元数据/来源/位置；取消和异常降级 | [adapters](../client/internal/nowplaying/adapters)；仅覆盖向系统播放接口暴露的应用 |
 | macOS播放 | MediaRemote + dylib桥接，isPlaying为播放权威状态 | 依私有API/系统版本及桥接库；真实分发兼容仍需验证 |
 | Windows播放 | GSMTC，PowerShell适配器 | 本机适配器健康且无源时 `current` 缺席；真实会话/播放元数据/权限/安装环境待验收 |
@@ -178,7 +182,7 @@ make build
 
 macOS 应用构建入口为 `cd client && make build-app-darwin`，生成 `client/build/ESP32 Monitor.app`；脚本构建并嵌入前端、Agent与播放桥接库，执行本地签名。该入口不等于已有公证安装包。Windows 构建入口为 `cd client && powershell -ExecutionPolicy Bypass -File scripts/build-windows-app.ps1`，生成 `client/build/windows/ESP32-Monitor/` 与 `ESP32-Monitor-<version>-windows-amd64.zip`；需 Go、Node.js、.NET SDK 与 windres（无 windres 时使用已生成的 `.syso`），未安装 Inno Setup 时跳过安装器。纯Agent可通过 `--collector` 及私有状态目录运行；真实上传需先得到v2 Server签发的Token，GUI优先走验证码注册。
 
-可选模块参数：GitHub使用 `--github-login --github-client-id <public-id>` 或 `--github-user <login>`；额度用 `--codex`，任务用 `--codex-task-adapter auto`（默认跟踪最近更新的本地任务，`--codex-thread <id>` 可显式覆盖）；播放用 `--music`；LAN上位机用 `--companion --companion-ip <local-ip>`。完整参数以 [Agent入口](../client/internal/agent/run.go) 为准。
+可选模块参数：GitHub使用 `--github-login --github-client-id <public-id>` 或 `--github-user <login>`；额度用 `--codex`，任务用 `--codex-task-adapter auto`，可通过 `--codex-thread <id>` 指定会话；GUI启用Codex时自动传入任务观察参数。自动模式优先只读本地桌面状态库中的未归档用户会话ID，排除内部审查和子任务，不读取任务正文；没有状态库时回退会话索引，桌面状态不可用时不推断任务空闲。Windows 使用同用户校验的命名管道；本次状态库筛选改动仍需真实 Windows 桌面端验收。播放用 `--music`；LAN上位机用 `--companion --companion-ip <local-ip>`。完整参数以 [Agent入口](../client/internal/agent/run.go) 为准。
 
 | 检查 | 从对应目录执行 | 证明范围 |
 | --- | --- | --- |
@@ -187,5 +191,7 @@ macOS 应用构建入口为 `cd client && make build-app-darwin`，生成 `clien
 | Collector回环 | `make test-collector-e2e` | 当前脚本覆盖的Agent/HTTP/SQLite路径；需检查脚本与v2迁移是否一致 |
 | Companion | `go test ./internal/transport/...` | 模拟LAN/字节流/编码/认证，无实机功耗结论 |
 | 模拟Server | `go run ./cmd/sim-server -listen 127.0.0.1:18080` | 注册与v2联调，无生产持久化/管理安全保证 |
+
+模拟 Server 接受成对选择的 `battery.level` 和 `battery.charging`，并校验样本中两个字段均存在。模拟器设备、注册与指标保存在内存中，重启后需重新注册。
 
 清理前的旧验收文件保存在 [.bak历史证据](../.bak/docs-cleanup-2026-10-28/client/docs/evidence)；其中 Telegraf 与早期 Core 结果只代表对应版本，不能为当前 Native/v2/GUI 完成背书。本次整理的验证结果由交付说明单独报告。

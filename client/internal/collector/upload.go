@@ -98,7 +98,7 @@ func (m *Manager) deliver() {
 	m.mu.Unlock()
 	m.deliverV2(q)
 }
-func (m *Manager) finishDelivery(q queued, status int, headers http.Header) {
+func (m *Manager) finishDelivery(q queued, status int, headers http.Header, profileSync ...bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	// A bounded queue can drop the in-flight head when newer batches arrive.
@@ -139,6 +139,9 @@ func (m *Manager) finishDelivery(q queued, status int, headers http.Header) {
 		m.snapshot.UploadError = "upload_rejected_" + strconv.Itoa(status)
 		if status == 422 {
 			m.snapshot.UploadError = "upload_invalid_sample_or_clock"
+			if len(profileSync) > 0 && profileSync[0] {
+				m.snapshot.UploadError = "upload_invalid_profile"
+			}
 		}
 		m.snapshot.DroppedMetrics += uint64(queueMetrics([]queued{q}))
 		m.queue = m.queue[1:]

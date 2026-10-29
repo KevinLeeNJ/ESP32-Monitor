@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { companionService } from "../services/bridge.js";
 import type { GitHubSession } from "../types/companion.js";
 import { cloneSettings, refreshCompanion, saveSettings, store, toast } from "../store.js";
+import { taskStatusText } from "../services/codex-task.js";
 
 const session = ref<GitHubSession | null>(null);
 const loggingIn = ref(false);
@@ -195,7 +196,7 @@ onUnmounted(() => {
         <div class="task-status">
           <span class="task-dot"></span>
           <div><small>当前任务</small>
-            <strong>{{ codex?.tasks.active_count ? `运行中 · ${codex.tasks.active_count} 个任务` : "无运行任务" }}</strong>
+            <strong>{{ taskStatusText(codex?.tasks) }}</strong>
           </div>
         </div>
       </section>

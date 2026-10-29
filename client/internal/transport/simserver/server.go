@@ -982,7 +982,7 @@ func (s *Server) validateSample(d *Device, sm *v2.Sample, serverNow int64) error
 	}
 	batteries := objectIDs(inv.Batteries)
 	for _, bat := range sm.Batteries {
-		if !batteries[bat.ID] || sel["battery.level"] == nil || !sel["battery.level"].objects[bat.ID] {
+		if !batteries[bat.ID] || !selectedFor(sel, "battery.level", bat.ID) || !selectedFor(sel, "battery.charging", bat.ID) {
 			return errf(http.StatusUnprocessableEntity, "metric_not_enabled:battery.level")
 		}
 		if bat.Level == nil || bat.Charging == nil {

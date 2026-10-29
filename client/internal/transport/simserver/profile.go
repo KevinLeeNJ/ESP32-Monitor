@@ -26,9 +26,9 @@ var (
 		"drive.model": true, "drive.total": true, "drive.used": true,
 		"drive.read_rate": true, "drive.write_rate": true,
 		"drive.smart_health": true,
-		"interface.medium": true, "interface.up": true,
+		"interface.medium":   true, "interface.up": true,
 		"interface.upload_rate": true, "interface.download_rate": true,
-		"interface.ipv4": true, "battery.level": true, "fan.rpm": true,
+		"interface.ipv4": true, "battery.level": true, "battery.charging": true, "fan.rpm": true,
 	}
 	implicitMetrics = map[string]bool{
 		"cpu.usage": true, "memory.usage": true, "memory.used": true, "system.uptime": true,

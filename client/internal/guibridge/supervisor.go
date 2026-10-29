@@ -253,7 +253,7 @@ func (s *Supervisor) agentArgsFor(settings Settings) []string {
 		args = append(args, "--github-client-id", settings.GitHub.ClientID)
 	}
 	if settings.Codex.Enabled {
-		args = append(args, "--codex")
+		args = append(args, "--codex", "--codex-task-adapter", "auto")
 	}
 	if settings.Music.Enabled {
 		args = append(args, "--music")

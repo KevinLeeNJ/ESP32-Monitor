@@ -55,6 +55,31 @@ func fixtureFixed() Batch {
 	add("battery", map[string]string{}, nil)
 	return Batch{Metrics: metrics}
 }
+
+func TestInventoryExcludesVirtualNetworkCounters(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("physical interface filtering is platform-specific")
+	}
+	b := fixtureFixed()
+	b.Metrics = append(b.Metrics, Metric{Name: "net", Tags: map[string]string{"interface": "utun0"}})
+	s := &v2State{IDs: map[string]uint16{}, Next: 1}
+	if err := s.buildInventory(b); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.inventory.Interfaces) != 1 || s.IDs["interface:utun0"] != 0 {
+		t.Fatalf("virtual interface included: %+v", s.inventory.Interfaces)
+	}
+	// IDs from an older version remain reserved, but must not reappear in
+	// capabilities or preview samples after their inventory entry is removed.
+	s.IDs["interface:utun0"] = 500
+	m := &Manager{v2: s}
+	b.Metrics = append(b.Metrics, Metric{Name: "net", Tags: map[string]string{"interface": "utun0"}, Fields: map[string]float64{"upload_bytes_per_second": 1}})
+	for _, metric := range m.v2Capabilities(b).Metrics {
+		if metric.Metric == "interface.upload_rate" && slices.Contains(metric.Objects, 500) {
+			t.Fatalf("stale virtual ID in capabilities: %+v", metric)
+		}
+	}
+}
 func (f *v2Fixture) Fixed(context.Context) Batch { f.fixedReads.Add(1); return fixtureFixed() }
 func (f *v2Fixture) Fork() Collector             { return &v2Fixture{fixedReads: f.fixedReads, missing: f.missing} }
 func (f *v2Fixture) Gather(_ context.Context, ids []string) (Batch, map[string]string) {
@@ -87,7 +112,7 @@ func (f *v2Fixture) Gather(_ context.Context, ids []string) (Batch, map[string]s
 		case nativeSourceID("memory"):
 			add(id, map[string]string{}, map[string]float64{"app_bytes": 0, "wired_bytes": 0, "compressed_bytes": 0, "pressure_level": 1})
 		case nativeSourceID("network"):
-			add(id, map[string]string{"interface": "en0", "type": "wifi", "ipv4": "192.168.1.2"}, map[string]float64{"connected": 1})
+			add(id, map[string]string{"interface": "en0", "type": "wifi", "ipv4": "192.168.1.2"}, map[string]float64{"connected": 1, "present": 1})
 		case nativeSourceID("gpu"):
 			add(id, map[string]string{"device": "fixture-gpu"}, map[string]float64{"usage_percent": 0, "temperature_celsius": 0})
 		case nativeSourceID("disk"):

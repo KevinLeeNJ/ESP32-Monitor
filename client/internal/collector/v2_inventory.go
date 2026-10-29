@@ -68,11 +68,11 @@ func (s *v2State) buildInventory(b Batch) error {
 			kinds[source] = role.kind
 		}
 	}
-	// On Windows core net counters exist for loopback and tunnel adapters that
+	// Core net counters exist for loopback and tunnel adapters that
 	// have no confirmed medium; keep v2 interface objects to physical adapters
 	// so rate and medium selections describe the same device.
 	confirmedInterfaces := map[string]bool{}
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		for _, m := range b.Metrics {
 			if m.Name == nativeSourceID("network") {
 				confirmedInterfaces[m.Tags["interface"]] = true
@@ -84,7 +84,7 @@ func (s *v2State) buildInventory(b Batch) error {
 		if kind == "" {
 			continue
 		}
-		if m.Name == "net" && runtime.GOOS == "windows" && !confirmedInterfaces[m.Tags["interface"]] {
+		if m.Name == "net" && (runtime.GOOS == "windows" || runtime.GOOS == "darwin") && !confirmedInterfaces[m.Tags["interface"]] {
 			continue
 		}
 		id, e := s.allocate(kind, m)
@@ -181,13 +181,16 @@ func (m *Manager) v2Capabilities(batch Batch) *V2Capabilities {
 					continue
 				}
 				_, ok := v.Fields[binding.field]
+				if runtime.GOOS == "darwin" && (key == "interface.up" || key == "interface.ipv4") {
+					_, ok = v.Fields["present"]
+				}
 				if _, exact := v.Exact[binding.field]; exact {
 					ok = true
 				}
 				if ok {
 					c.Available = true
 					if kind != "" {
-						if id := m.v2.object(kind, v); id != 0 {
+						if id := m.v2.object(kind, v); id != 0 && m.v2.objectsOfKind(kind)[id] {
 							observed = append(observed, id)
 						}
 					}

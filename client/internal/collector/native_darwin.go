@@ -183,11 +183,13 @@ func (d *darwinCollector) Gather(ctx context.Context, ids []string) (Batch, map[
 						ips = append(ips, ip.To4().String())
 					}
 				}
-				up := float64(0)
-				if iface.Flags&net.FlagUp != 0 {
-					up = 1
+				fields := map[string]float64{"present": 1}
+				if output, err := darwinCommand(ctx, "/sbin/ifconfig", iface.Name); err == nil {
+					if connected, ok := parseDarwinLinkStatus(output); ok {
+						fields["connected"] = connected
+					}
 				}
-				add(id, map[string]string{"interface": iface.Name, "type": kind, "ipv4": strings.Join(ips, ",")}, map[string]float64{"connected": up})
+				add(id, map[string]string{"interface": iface.Name, "type": kind, "ipv4": strings.Join(ips, ",")}, fields)
 			}
 
 		case "darwin_battery":
@@ -209,6 +211,18 @@ func (d *darwinCollector) Gather(ctx context.Context, ids []string) (Batch, map[
 		}
 	}
 	return out, reasons
+}
+
+func parseDarwinLinkStatus(output string) (float64, bool) {
+	for _, line := range strings.Split(output, "\n") {
+		switch strings.TrimSpace(line) {
+		case "status: active":
+			return 1, true
+		case "status: inactive":
+			return 0, true
+		}
+	}
+	return 0, false
 }
 
 var pageSizePattern = regexp.MustCompile(`page size of ([0-9]+) bytes`)

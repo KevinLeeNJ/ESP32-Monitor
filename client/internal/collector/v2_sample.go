@@ -82,6 +82,9 @@ func (m *Manager) sampleV2(c Config, b Batch) (v2.Sample, error) {
 				continue
 			}
 			id := m.v2.object(binding.kind, v)
+			if binding.kind != "" && !m.v2.objectsOfKind(binding.kind)[id] {
+				continue
+			}
 			if binding.kind != "" && !slices.Contains(sel.Objects, id) {
 				continue
 			}
@@ -132,7 +135,7 @@ func (m *Manager) previewSampleV2(b Batch) (v2.Sample, error) {
 			id := uint16(0)
 			if binding.kind != "" {
 				id = m.v2.object(binding.kind, v)
-				if id == 0 {
+				if id == 0 || !m.v2.objectsOfKind(binding.kind)[id] {
 					continue
 				}
 			}
@@ -148,6 +151,11 @@ func (m *Manager) previewSampleV2(b Batch) (v2.Sample, error) {
 func (m *Manager) fillV2Sample(out *v2.Sample, key string, v Metric, id uint16) {
 	binding := v2Bindings[key]
 	value, exists := v.Fields[binding.field]
+	if key == "interface.ipv4" {
+		if present, ok := v.Fields["present"]; ok {
+			value, exists = present, true
+		}
+	}
 	if _, ok := v.Exact[binding.field]; ok {
 		exists = true
 	}

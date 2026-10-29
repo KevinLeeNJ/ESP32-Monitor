@@ -5,6 +5,20 @@ import (
 	"testing"
 )
 
+func TestCodexEnabledStartsTaskObserver(t *testing.T) {
+	s := &Supervisor{socket: "test.sock"}
+	settings := Settings{}
+	settings.Codex.Enabled = true
+	args := s.agentArgsFor(settings)
+	if !slices.Contains(args, "--codex") || !slices.Contains(args, "--codex-task-adapter") || !slices.Contains(args, "auto") {
+		t.Fatalf("missing task observer: %v", args)
+	}
+	settings.Codex.Enabled = false
+	if slices.Contains(s.agentArgsFor(settings), "--codex-task-adapter") {
+		t.Fatal("observer enabled while Codex disabled")
+	}
+}
+
 func TestAgentArgsIgnoreUIPreferences(t *testing.T) {
 	s := &Supervisor{socket: "/tmp/test.sock", agentPath: "/tmp/monitor-agent"}
 	base := Settings{Collector: CollectorSettings{Enabled: true}}
