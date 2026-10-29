@@ -15,6 +15,12 @@ const maxSessionIndex = 4 << 20
 // discoverThread returns the most recently updated local Codex thread. Only id
 // and updated_at are decoded; thread names and task content are never retained.
 func discoverThread(home string) (string, error) {
+	if id, available := discoverDesktopUserThread(home); available {
+		if id == "" {
+			return "", errors.New("desktop_task_not_found")
+		}
+		return id, nil
+	}
 	file, err := os.Open(filepath.Join(home, "session_index.jsonl"))
 	if err != nil {
 		return "", errors.New("desktop_task_not_found")

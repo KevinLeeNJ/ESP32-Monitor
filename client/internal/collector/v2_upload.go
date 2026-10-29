@@ -173,7 +173,7 @@ func (m *Manager) deliverV2(q queued) {
 		if status == 412 || status == 0 {
 			status = 503
 		}
-		m.finishDelivery(q, status, headers)
+		m.finishDelivery(q, status, headers, true)
 		return
 	}
 	if q.v2.Revision == 0 {

@@ -56,6 +56,22 @@ func minimalProfile() v2.Profile {
 	return v2.Profile{Version: 2, IntervalSeconds: 10}
 }
 
+func TestBatteryPairProfileAndSample(t *testing.T) {
+	_, ts := newTest(t)
+	p := minimalProfile()
+	p.Inventory.Batteries = []v2.ObjectInfo{{ID: 1}}
+	p.Enabled = []v2.UploadSelection{{Metric: "battery.level", Objects: []uint16{1}}, {Metric: "battery.charging", Objects: []uint16{1}}}
+	if resp, body := request(t, ts, "PUT", "/v2/collector/profile", "tok", p, map[string]string{"If-None-Match": "*"}); resp.StatusCode != 200 {
+		t.Fatalf("profile: %d %v", resp.StatusCode, body)
+	}
+	sample := baseSample(time.Now().Unix())
+	level, charging := uint16(8000), true
+	sample.Batteries = []v2.BatterySample{{ID: 1, Level: &level, Charging: &charging}}
+	if resp, body := request(t, ts, "POST", "/v2/collector/samples", "tok", batch(1, "0123456789abcdef0123456789abcdef", sample), nil); resp.StatusCode != 204 {
+		t.Fatalf("sample: %d %v", resp.StatusCode, body)
+	}
+}
+
 func baseSample(t int64) v2.Sample {
 	c, m, u := uint16(1250), uint16(6200), uint32(86400)
 	return v2.Sample{Timestamp: t, CPUUsage: &c, MemoryUsage: &m, Uptime: &u}

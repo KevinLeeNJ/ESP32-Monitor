@@ -23,10 +23,6 @@ var errPublicIPPending = errors.New("public_ip_pending")
 func publicIPv4(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
-	req, e := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.mac-stats.com/ip", nil)
-	if e != nil {
-		return "", e
-	}
 	dialer := &net.Dialer{Timeout: 3 * time.Second}
 	resolver := proxy.Default()
 	transport := &http.Transport{
@@ -46,6 +42,20 @@ func publicIPv4(ctx context.Context) (string, error) {
 	}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	for _, endpoint := range []string{"https://api.mac-stats.com/ip", "https://api4.ipify.org?format=json"} {
+		ip, err := fetchPublicIPv4(ctx, client, endpoint)
+		if err == nil {
+			return ip, nil
+		}
+	}
+	return "", io.ErrUnexpectedEOF
+}
+
+func fetchPublicIPv4(ctx context.Context, client *http.Client, endpoint string) (string, error) {
+	req, e := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if e != nil {
+		return "", e
+	}
 	resp, e := client.Do(req)
 	if e != nil {
 		return "", e
@@ -67,11 +77,16 @@ func publicIPv4(ctx context.Context) (string, error) {
 func parsePublicIPv4(b []byte) (string, error) {
 	var result struct {
 		IPv4 string `json:"ipv4"`
+		IP   string `json:"ip"`
 	}
 	if err := json.Unmarshal(b, &result); err != nil {
 		return "", err
 	}
-	ip := net.ParseIP(strings.TrimSpace(result.IPv4))
+	address := result.IPv4
+	if address == "" {
+		address = result.IP
+	}
+	ip := net.ParseIP(strings.TrimSpace(address))
 	if ip == nil || ip.To4() == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() {
 		return "", io.ErrUnexpectedEOF
 	}

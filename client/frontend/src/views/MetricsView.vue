@@ -17,13 +17,13 @@ const busy = ref(false);
 // snapshot poll re-render this view (object gating, checked states, values).
 const revision = ref(0);
 
-const caps = computed(() => collector.capabilities?.v2 ?? null);
-const hardwareMonitor = computed(() => collector.capabilities?.hardware_monitor);
+const caps = computed(() => { revision.value; return collector.capabilities?.v2 ?? null; });
+const hardwareMonitor = computed(() => { revision.value; return collector.capabilities?.hardware_monitor; });
 const v2Configured = computed(() => (store.settings?.collector.upload_url ?? "").endsWith("/v2/collector/samples"));
 const stateNames: Record<string, string> = { healthy: "正常", degraded: "需关注", error: "异常", disabled: "未启用", starting: "启动中" };
-const collectorState = computed(() => stateNames[collector.snapshot?.state ?? ""] ?? collector.snapshot?.state ?? "加载中");
+const collectorState = computed(() => { revision.value; return stateNames[collector.snapshot?.state ?? ""] ?? collector.snapshot?.state ?? "加载中"; });
 const uploadEnabled = computed({
-  get: () => collector.draft?.upload?.enabled ?? false,
+  get: () => { revision.value; return collector.draft?.upload?.enabled ?? false; },
   set: (value: boolean) => {
     const draft = collector.draft;
     if (!draft) return;
@@ -139,11 +139,17 @@ async function apply() {
   if (!collector.error && collector.snapshot) draftInterval.value = collector.snapshot.config.interval_seconds;
 }
 
+const unsubscribe = collector.subscribe(() => { revision.value++; });
+onUnmounted(unsubscribe);
+let intervalInitialized = false;
+watch(revision, () => {
+  if (!intervalInitialized && collector.snapshot) {
+    draftInterval.value = collector.snapshot.config.interval_seconds;
+    intervalInitialized = true;
+  }
+}, { immediate: true });
 onMounted(async () => {
-  const unsubscribe = collector.subscribe(() => { revision.value++; });
-  onUnmounted(unsubscribe);
   if (!collector.capabilities) await collector.rescan();
-  if (collector.snapshot) draftInterval.value = collector.snapshot.config.interval_seconds;
 });
 </script>
 

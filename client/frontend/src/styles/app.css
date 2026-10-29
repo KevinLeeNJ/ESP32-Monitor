@@ -122,6 +122,7 @@ button,button:hover,button:active,button:focus,button:focus-visible{box-shadow:n
 .shell{grid-template-columns:clamp(200px,17vw,240px) minmax(0,1fr)}
 .sidebar{padding:28px clamp(14px,1.6vw,20px)}
 .brand strong{font-size:15px}
+.brand .brand-icon{display:block;width:42px;height:42px;flex:none;object-fit:contain;padding:0;border:0;background:transparent;box-shadow:none}
 .brand small,.sidefoot{font-size:12px}
 .nav-label{font-size:11px}
 .nav button{font-size:13px;padding:11px 12px}
