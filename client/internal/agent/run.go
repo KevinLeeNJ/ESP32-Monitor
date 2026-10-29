@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync/atomic"
 	"time"
 )
 
@@ -33,6 +34,11 @@ func defaultRouteIPv4() string {
 // and --ipc-socket stay in the background and emit JSONL while services own
 // their own schedules.
 func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
+	// A self-restarted Agent must not open collector/companion state while the
+	// previous instance is still shutting down.
+	waitForPredecessor()
+	runCtx, shutdown := context.WithCancel(ctx)
+	defer shutdown()
 	fs := flag.NewFlagSet("monitor-agent", flag.ContinueOnError)
 	fs.SetOutput(errOut)
 	var c config.Config
@@ -48,9 +54,9 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	fs.BoolVar(&c.Codex.Enabled, "codex", false, "read current Codex App Server account quota")
 	fs.StringVar(&c.Codex.Executable, "codex-executable", "codex", "Codex executable path")
 	fs.StringVar(&c.Codex.TaskAdapter, "codex-task-adapter", "", "task monitoring adapter: auto or desktop-ipc (explicitly enables task observation)")
-	fs.BoolVar(&c.Codex.DesktopEnabled, "codex-desktop", false, "EXPERIMENTAL: passively observe selected Codex Desktop tasks using internal IPC v11")
+	fs.BoolVar(&c.Codex.DesktopEnabled, "codex-desktop", false, "EXPERIMENTAL: passively observe the latest Codex Desktop task using internal IPC v11")
 	fs.StringVar(&c.Codex.Home, "codex-home", "", "Codex home directory for desktop IPC (defaults to CODEX_HOME or ~/.codex)")
-	fs.Func("codex-thread", "local desktop task ID to observe (repeatable, max 128)", func(id string) error { c.Codex.ThreadIDs = append(c.Codex.ThreadIDs, id); return nil })
+	fs.Func("codex-thread", "optional override: local desktop task ID to observe (repeatable, max 128); default observes the most recently updated task", func(id string) error { c.Codex.ThreadIDs = append(c.Codex.ThreadIDs, id); return nil })
 	fs.StringVar(&cacheDir, "cache-dir", "", "optional private cache directory; calendar only, no credentials")
 	fs.BoolVar(&c.Music.Enabled, "music", false, "read system current playback in this user session")
 	fs.StringVar(&c.Music.Adapter, "music-adapter", "auto", "playback adapter: auto, mediaremote, gsmtc, mpris")
@@ -127,6 +133,31 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 			return err
 		}
 	}
+	// Serve the GUI as soon as the application exists; collector restore and
+	// discovery keep running behind the IPC endpoint so a settings-driven
+	// restart is acknowledged quickly.
+	var ipcServer *ipc.Server
+	if ipcSocket != "" {
+		var restarting atomic.Bool
+		opts := ipc.Options{SocketPath: ipcSocket, Shutdown: shutdown}
+		opts.Restart = func(args []string) error {
+			return restartAgent(ipcSocket, args, shutdown, &restarting)
+		}
+		configureLoginTask(&opts)
+		ipcServer, err = ipc.NewServer(application, opts)
+		if err != nil {
+			return err
+		}
+		if err := listenIPCWithRetry(ipcServer); err != nil {
+			return err
+		}
+		defer func() {
+			_ = ipcServer.Close()
+			_, _ = fmt.Fprintln(errOut, "ipc_closed")
+		}()
+		go refreshLoginTask()
+		_, _ = fmt.Fprintln(errOut, "ipc_listening:", ipcSocket)
+	}
 	var localAPI *collector.API
 	if application.Collector != nil {
 		if collectorScan {
@@ -165,7 +196,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	// Provider requests execute on a worker; the snapshot loop stays responsive.
 	done := make(chan struct{})
 	wake := make(chan struct{}, 1)
-	workerCtx, cancel := context.WithCancel(ctx)
+	workerCtx, cancel := context.WithCancel(runCtx)
 	defer cancel()
 	musicDone := make(chan struct{})
 	go func() { defer close(musicDone); service.Music.Run(workerCtx) }()
@@ -183,21 +214,6 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		}
 	}()
 	defer func() { cancel(); <-done; <-tasksDone; <-musicDone }()
-	var ipcServer *ipc.Server
-	if ipcSocket != "" {
-		ipcServer, err = ipc.NewServer(application, ipc.Options{SocketPath: ipcSocket, Shutdown: cancel})
-		if err != nil {
-			return err
-		}
-		if err := ipcServer.Listen(); err != nil {
-			return err
-		}
-		defer func() {
-			_ = ipcServer.Close()
-			_, _ = fmt.Fprintln(errOut, "ipc_closed")
-		}()
-		_, _ = fmt.Fprintln(errOut, "ipc_listening:", ipcSocket)
-	}
 	if !watch && !c.Companion.Enabled && collectorAPI == "" && !c.Collector.Enabled && ipcServer == nil {
 		// A one-shot must wait for its requested reads rather than return starting.
 		service.Refresh(ctx)
@@ -218,7 +234,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 			return errors.New("snapshot_write_failed")
 		}
 		select {
-		case <-ctx.Done():
+		case <-runCtx.Done():
 			return nil
 		case <-ticker.C:
 		}

@@ -3,7 +3,9 @@ package guibridge
 import "testing"
 
 func TestLoadSettingsUsesEmbeddedGitHubClientID(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("APPDATA", t.TempDir())
 	previous := DefaultGitHubClientID
 	DefaultGitHubClientID = "Iv1.embedded"
 	t.Cleanup(func() { DefaultGitHubClientID = previous })

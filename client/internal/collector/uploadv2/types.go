@@ -13,7 +13,6 @@ type UploadConfig struct {
 type UploadSelection struct {
 	Metric  string   `json:"metric"`            // 第 2 节中的语义 ID
 	Objects []uint16 `json:"objects,omitempty"` // 本机稳定对象 ID
-	Detail  []uint16 `json:"detail,omitempty"`  // 仅 SMART 细项，必须显式选择
 }
 
 type Profile struct {
@@ -72,10 +71,9 @@ type CoreInfo struct {
 }
 
 type DriveInfo struct {
-	ID         uint16               `json:"id"`
-	Model      *string              `json:"model,omitempty"`
-	TotalBytes *uint64              `json:"total,omitempty,string"`
-	SMART      []SMARTAttributeInfo `json:"smart,omitempty"`
+	ID         uint16  `json:"id"`
+	Model      *string `json:"model,omitempty"`
+	TotalBytes *uint64 `json:"total,omitempty,string"`
 }
 
 type VolumeInfo struct {
@@ -94,15 +92,6 @@ type FanInfo struct {
 	ID    uint16  `json:"id"`
 	Scope string  `json:"scope"`         // cpu / gpu / system
 	GPU   *uint16 `json:"gpu,omitempty"` // 仅已确认归属的 GPU ID
-}
-
-// ID 在所属 Drive 内唯一，定义变更分配新 ID；不要跨盘比较厂商原始值。
-type SMARTAttributeInfo struct {
-	ID      uint16 `json:"id"`
-	Key     string `json:"key"`     // 如 nvme.media_errors / ata.5.raw
-	Unit    string `json:"unit"`    // count / hours / percent / celsius / raw
-	Scale10 int8   `json:"scale10"` // 实际值 = 十进制整数值 × 10^scale10
-	Source  string `json:"source"`  // diskutil / nvme / ata 等明确来源
 }
 
 type SampleBatch struct {
@@ -166,9 +155,8 @@ type DriveSample struct {
 }
 
 type SMARTSample struct {
-	Timestamp int64             `json:"t"`           // 实际读取时间
-	Healthy   *bool             `json:"h,omitempty"` // false 是已知故障
-	Values    map[uint16]string `json:"v,omitempty"` // 细项 ID → 十进制整数文本
+	Timestamp int64 `json:"t"`           // 实际读取时间
+	Healthy   *bool `json:"h,omitempty"` // false 是已知故障
 }
 
 type VolumeSample struct {

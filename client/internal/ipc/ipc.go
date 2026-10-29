@@ -1,6 +1,7 @@
-// Package ipc implements the user-authenticated Unix-socket channel between
-// the GUI host and the background Agent. Every connection is validated with
-// socket peer credentials: the peer must run as the same OS user as this
+// Package ipc implements the user-authenticated local channel between the GUI
+// host and the background Agent. macOS/Linux use a Unix socket with kernel peer
+// credentials; Windows uses a per-user named pipe and validates the peer
+// process token SID. Every connection must resolve to the same OS user as this
 // process. No bearer token is required on top of the peer check, and no
 // credential-bearing DTO ever crosses this boundary in either direction.
 package ipc
@@ -10,9 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"syscall"
 )
 
 const (
@@ -76,25 +75,4 @@ func decodeBody(r *http.Request, target any) error {
 		return fmt.Errorf("trailing_json")
 	}
 	return nil
-}
-
-// unixPeerUID resolves the authenticated peer user id for a Unix socket
-// connection. darwin and linux implement it with their native APIs. Control
-// keeps the connection non-blocking; File().Fd() would switch it to blocking
-// mode and break the HTTP server deadlines.
-func unixPeerUID(conn net.Conn) (int32, bool) {
-	sysconn, ok := conn.(syscall.Conn)
-	if !ok {
-		return 0, false
-	}
-	raw, err := sysconn.SyscallConn()
-	if err != nil {
-		return 0, false
-	}
-	var uid int32
-	var resolved bool
-	if ctlErr := raw.Control(func(fd uintptr) { uid, resolved = peerUID(fd) }); ctlErr != nil {
-		return 0, false
-	}
-	return uid, resolved
 }

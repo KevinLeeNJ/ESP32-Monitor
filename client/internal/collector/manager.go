@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -44,7 +45,13 @@ type Manager struct {
 	queue      []queued
 	fixed      Batch
 	v2         *v2State
+	previewAt  atomic.Int64
+	previewCh  chan struct{}
 }
+
+// previewTTL comfortably exceeds the GUI snapshot poll interval.
+const previewTTL = 15 * time.Second
+
 type generation struct {
 	config       Config
 	revision     uint64
@@ -84,7 +91,7 @@ func New(opts Options) (*Manager, error) {
 		return nil, errors.New("collector_already_owned")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{opts: opts, lock: lock, ctx: ctx, cancel: cancel, workerDone: make(chan struct{}), wake: make(chan struct{}, 1), snapshot: Snapshot{SchemaVersion: SchemaVersion, State: "disabled", Config: DefaultConfig(), Preview: Batch{Metrics: []Metric{}}}}
+	m := &Manager{opts: opts, lock: lock, ctx: ctx, cancel: cancel, workerDone: make(chan struct{}), wake: make(chan struct{}, 1), previewCh: make(chan struct{}, 1), snapshot: Snapshot{SchemaVersion: SchemaVersion, State: "disabled", Config: DefaultConfig(), Preview: Batch{Metrics: []Metric{}}}}
 	if err := m.initUploader(); err != nil {
 		cancel()
 		unlockFile(lock)
@@ -256,11 +263,13 @@ func (m *Manager) commit(g *generation) {
 	// Pending samples belong to the previous config and must not escape after a switch.
 	m.snapshot.DroppedMetrics += uint64(queueMetrics(m.queue))
 	m.queue = nil
-	if m.v2 != nil && (g.config.Upload == nil || !g.config.Upload.Enabled) {
+	// Sync the profile right away — including when upload is enabled — so the
+	// server learns the device without waiting for the first sample round.
+	if m.v2 != nil {
 		m.enqueueV2ProfileLocked(g.config, g.revision)
 	}
 	m.mu.Unlock()
-	m.accept(g, g.staged)
+	m.accept(g, g.staged, true)
 	ctx, cancel := context.WithCancel(m.ctx)
 	g.cancel = cancel
 	g.done = make(chan struct{})
@@ -274,10 +283,28 @@ func randomToken() string {
 	return hex.EncodeToString(b[:])
 }
 
-// collectConfig keeps every cheap local source running so the GUI can show live
+// collectConfig keeps every local source running so the GUI can show live
 // values for available metrics the user has not selected.
 func (m *Manager) collectConfig(c Config) Config {
 	return v2PreviewConfig(c)
+}
+
+// MarkPreview records that a GUI is consuming snapshots. Preview gathering
+// stops once the TTL expires, so a headless Agent only reads upload selections.
+func (m *Manager) MarkPreview() {
+	now := time.Now()
+	previous := m.previewAt.Swap(now.UnixNano())
+	if previous == 0 || now.Sub(time.Unix(0, previous)) >= previewTTL {
+		select {
+		case m.previewCh <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (m *Manager) previewActive() bool {
+	at := m.previewAt.Load()
+	return at != 0 && time.Since(time.Unix(0, at)) < previewTTL
 }
 
 func (m *Manager) start(ctx context.Context, c Config, revision uint64) (*generation, error) {
@@ -295,9 +322,6 @@ func (m *Manager) start(ctx context.Context, c Config, revision uint64) (*genera
 		return nil, err
 	}
 	if c.Upload != nil && c.Upload.Enabled {
-		if err := m.validateV2Selection(c, batch); err != nil {
-			return nil, err
-		}
 		profile := m.profileV2(c)
 		if err := validateV2Profile(profile); err != nil {
 			return nil, err
@@ -318,10 +342,22 @@ func (m *Manager) collectLoop(ctx context.Context, g *generation) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-m.previewCh:
+			// A GUI just started consuming snapshots; refresh preview promptly
+			// instead of waiting for the next sampling tick.
 		case <-ticker.C:
 		}
+		preview := m.previewActive()
+		uploadEnabled := g.config.Upload != nil && g.config.Upload.Enabled
+		if !preview && !uploadEnabled {
+			continue
+		}
+		collect := g.collect
+		if !preview {
+			collect = v2CollectConfig(g.config)
+		}
 		sampleCtx, cancel := context.WithTimeout(ctx, m.opts.ApplyTimeout)
-		batch, reasons := gather(sampleCtx, g.core, g.native, selectedSources(g.collect))
+		batch, reasons := gather(sampleCtx, g.core, g.native, selectedSources(collect))
 		cancel()
 		if ctx.Err() != nil {
 			return
@@ -347,10 +383,10 @@ func (m *Manager) collectLoop(ctx context.Context, g *generation) {
 			}
 		}
 		m.mu.Unlock()
-		m.accept(g, batch)
+		m.accept(g, batch, preview)
 	}
 }
-func (m *Manager) accept(g *generation, b Batch) {
+func (m *Manager) accept(g *generation, b Batch, preview bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.current != g {
@@ -372,6 +408,9 @@ func (m *Manager) accept(g *generation, b Batch) {
 	}
 	// The GUI shows every gathered metric, not only the upload choices;
 	// uploaded samples stay restricted to the user's selections.
+	if !preview {
+		return
+	}
 	if sample, err := m.previewSampleV2(b); err == nil {
 		m.snapshot.V2Sample = ptr(detached(sample))
 	}

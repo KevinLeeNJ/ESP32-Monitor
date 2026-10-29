@@ -18,6 +18,7 @@ const busy = ref(false);
 const revision = ref(0);
 
 const caps = computed(() => collector.capabilities?.v2 ?? null);
+const hardwareMonitor = computed(() => collector.capabilities?.hardware_monitor);
 const v2Configured = computed(() => (store.settings?.collector.upload_url ?? "").endsWith("/v2/collector/samples"));
 const stateNames: Record<string, string> = { healthy: "正常", degraded: "需关注", error: "异常", disabled: "未启用", starting: "启动中" };
 const collectorState = computed(() => stateNames[collector.snapshot?.state ?? ""] ?? collector.snapshot?.state ?? "加载中");
@@ -32,9 +33,9 @@ const uploadEnabled = computed({
   },
 });
 const allRows = computed<MetricRow[]>(() => (caps.value ? orderedRows(caps.value as CollectorV2Capabilities) : []));
-const tabs = computed(() => metricGroups.filter(group => allRows.value.some(row => metricGroup(row.metric, caps.value as CollectorV2Capabilities) === group)));
+const tabs = computed(() => metricGroups.filter(group => allRows.value.some(row => metricGroup(row.metric) === group)));
 watch(tabs, value => { if (!value.includes(activeTab.value)) activeTab.value = value[0] ?? "CPU"; }, { immediate: true });
-const rows = computed<MetricRow[]>(() => allRows.value.filter(row => metricGroup(row.metric, caps.value as CollectorV2Capabilities) === activeTab.value));
+const rows = computed<MetricRow[]>(() => allRows.value.filter(row => metricGroup(row.metric) === activeTab.value));
 
 const rowTitle = (row: MetricRow) => row.bundle?.title ?? metricNames[row.metric] ?? row.metric;
 const isObjectRow = (row: MetricRow) => !!row.objects?.length && row.metric !== "battery.level";
@@ -160,6 +161,10 @@ onMounted(async () => {
       <div><b>仅显示当前可获取的指标。</b>可随时重新检测刷新。</div>
       <button class="btn" :disabled="busy" @click="rescan">重新检测</button>
     </div>
+    <div v-if="hardwareMonitor" class="banner warning" data-testid="lhm-runtime-required">
+      <div><b>Windows 硬件传感器需要处理。</b>{{ hardwareMonitor.message || "请检查 .NET Framework 和后台 Agent 的启动权限后重新检测。" }}</div>
+      <button class="btn" :disabled="busy" @click="rescan">重新检测</button>
+    </div>
     <div class="grid">
       <section class="card span12" :data-revision="revision">
         <div class="card-title"><h2>采集配置</h2>
@@ -176,7 +181,10 @@ onMounted(async () => {
           <PixelSelect v-model="draftInterval" :options="intervalOptions" label="采样周期" :disabled="busy" />
         </div>
         <div v-if="!caps" class="muted" data-testid="metrics-caps-empty">
-          {{ v2Configured ? "正在读取本机指标能力…" : "请先在「Server 连接」配置上传地址，然后重新检测可选指标。" }}
+          {{ collector.error ? (collector.error.includes("ipc_unavailable") ? "Agent 正在重启，正在自动重试读取本机指标能力…" : `读取本机指标能力失败：${collector.error}`) : v2Configured ? "正在读取本机指标能力…" : "请先在「Server 连接」配置上传地址，然后重新检测可选指标。" }}
+        </div>
+        <div v-if="!caps && collector.error" class="actions">
+          <button class="btn" :disabled="busy" @click="rescan">重新检测</button>
         </div>
         <div v-if="!v2Configured" class="actions">
           <button class="btn" @click="store.page = 'server'">前往 Server 连接</button>

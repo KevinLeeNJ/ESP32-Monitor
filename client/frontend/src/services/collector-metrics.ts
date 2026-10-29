@@ -8,13 +8,13 @@ export const metricNames: Record<string, string> = {
   "cpu.load1": "平均负载（1 分钟）", "cpu.load5": "平均负载（5 分钟）", "cpu.load15": "平均负载（15 分钟）", "cpu.temperature": "CPU 平均温度",
   "memory.usage": "内存占用率", "memory.total": "内存总量", "memory.used": "已用内存", "memory.app": "App 内存", "memory.wired": "Wired 内存", "memory.compressed": "压缩内存",
   "memory.swap_total": "Swap 总量", "memory.swap_used": "Swap 已用", "memory.pressure": "内存压力",
-  "gpu.usage": "GPU 占用率", "gpu.temperature": "GPU 平均温度", "fan.rpm": "风扇转速",
-  "drive.model": "磁盘型号", "drive.total": "物理磁盘容量", "drive.used": "磁盘已用容量", "drive.read_rate": "磁盘读取速度", "drive.write_rate": "磁盘写入速度", "drive.smart_health": "SMART 健康状态", "drive.smart_attribute": "SMART 细项",
+  "gpu.usage": "GPU 占用率", "gpu.temperature": "GPU 平均温度",
+  "drive.model": "磁盘型号", "drive.total": "物理磁盘容量", "drive.used": "磁盘已用容量", "drive.read_rate": "磁盘读取速度", "drive.write_rate": "磁盘写入速度", "drive.smart_health": "SMART 健康状态",
   "volume.filesystem": "文件系统", "volume.total": "文件系统总容量", "volume.used": "文件系统已用容量",
   "interface.medium": "网络连接类型", "interface.up": "网卡连接状态", "interface.upload_rate": "网络上传速度", "interface.download_rate": "网络下载速度", "interface.ipv4": "本地 IPv4", "network.public_ipv4": "公网 IPv4",
   "battery.level": "电池电量与充电状态", "battery.charging": "充电状态", "system.uptime": "运行时间", "system.os": "操作系统", "system.product": "硬件产品名称",
 };
-export function metricGroup(key: string, caps?: CollectorV2Capabilities): string {
+export function metricGroup(key: string): string {
   const prefix = key.split(".")[0];
   if (prefix === "cpu" || prefix === "core") return "CPU";
   if (prefix === "memory") return "内存（Swap）";
@@ -22,11 +22,6 @@ export function metricGroup(key: string, caps?: CollectorV2Capabilities): string
   if (prefix === "drive" || prefix === "volume") return "磁盘";
   if (prefix === "interface" || prefix === "network") return "网络";
   if (prefix === "battery") return "电池";
-  if (prefix === "fan") {
-    const fans = array(caps?.inventory.fans);
-    if (fans.length && fans.every(fan => fan.scope === "cpu")) return "CPU";
-    if (fans.length && fans.every(fan => fan.scope === "gpu")) return "GPU";
-  }
   return "系统指标";
 }
 export const isRequired = (metric: CollectorV2Metric) => metric.required || requiredMetrics.has(metric.metric);
@@ -50,7 +45,7 @@ export const bundleFor = (key: string) => metricBundles.find(bundle => bundle.me
 export const deviceDependencies: Record<string, string> = {
   "interface.upload_rate": "interface.medium", "interface.ipv4": "interface.medium",
   "gpu.temperature": "gpu.usage", "drive.read_rate": "drive.model",
-  "drive.smart_health": "drive.model", "drive.smart_attribute": "drive.model",
+  "drive.smart_health": "drive.model",
 };
 export function selectedObjects(upload: CollectorUploadConfig, key: string): number[] {
   const members = bundleFor(key)?.members ?? [key];
@@ -64,9 +59,7 @@ export function pruneDeviceDependents(upload: CollectorUploadConfig, parent: str
 }
 export function availableMetrics(caps: CollectorV2Capabilities): CollectorV2Metric[] {
   return caps.metrics.filter(metric => !metric.metric.startsWith("volume.") && metric.available && (!metric.objects || metric.objects.length > 0) &&
-    (metric.metric !== "core.usage" || (array(caps.inventory.cores).length > 0 && array(caps.inventory.cores).length <= 256 && array(caps.inventory.cores).every(core => metric.objects?.includes(Number(core.id))))) &&
-    (metric.metric !== "drive.smart_attribute" || (metric.objects ?? []).some(id => smartDetails(caps, [id]).length > 0)))
-    .map(metric => metric.metric === "drive.smart_attribute" ? { ...metric, objects: metric.objects!.filter(id => smartDetails(caps, [id]).length > 0) } : metric);
+    (metric.metric !== "core.usage" || (array(caps.inventory.cores).length > 0 && array(caps.inventory.cores).length <= 256 && array(caps.inventory.cores).every(core => metric.objects?.includes(Number(core.id))))));
 }
 export function displayMetrics(caps: CollectorV2Capabilities): MetricRow[] {
   const available = availableMetrics(caps), rows: MetricRow[] = [];
@@ -84,8 +77,8 @@ export function displayMetrics(caps: CollectorV2Capabilities): MetricRow[] {
 // Row order mirrors the preview page so the GUI reads identically.
 export const displayOrder = ["cpu.usage", "cpu.model", "core.usage", "cpu.load1", "cpu.temperature",
   "memory.usage", "memory.app", "memory.swap_total", "memory.pressure",
-  "gpu.usage", "gpu.temperature", "drive.model", "drive.read_rate", "drive.smart_health", "drive.smart_attribute",
-  "interface.medium", "interface.upload_rate", "interface.ipv4", "battery.level", "system.uptime", "system.os", "fan.rpm"];
+  "gpu.usage", "gpu.temperature", "drive.model", "drive.read_rate", "drive.smart_health",
+  "interface.medium", "interface.upload_rate", "interface.ipv4", "battery.level", "system.uptime", "system.os"];
 const orderIndex = (key: string) => { const index = displayOrder.indexOf(key); return index === -1 ? displayOrder.length : index; };
 export function orderedRows(caps: CollectorV2Capabilities): MetricRow[] {
   return displayMetrics(caps).sort((a, b) => orderIndex(a.metric) - orderIndex(b.metric));
@@ -110,13 +103,6 @@ export function bundleUploads(upload: CollectorUploadConfig, caps: CollectorV2Ca
     }
   }
 }
-export function smartDetails(caps: CollectorV2Capabilities, objects: number[]): Array<{ id: number; name: string }> {
-  const drives = array(caps.inventory.drives).filter(drive => objects.includes(Number(drive.id)));
-  if (drives.length !== objects.length || !drives.length) return [];
-  const lists = drives.map(drive => array(drive.smart));
-  return lists[0].filter(detail => lists.every(list => list.some(item => item.id === detail.id)))
-    .map(detail => ({ id: Number(detail.id), name: String(detail.key) }));
-}
 export function invalidV2Selections(config: CollectorConfig, caps: CollectorV2Capabilities): CollectorUploadSelection[] {
   const available = new Map(availableMetrics(caps).map(metric => [metric.metric, metric]));
   const rows = displayMetrics(caps);
@@ -126,8 +112,7 @@ export function invalidV2Selections(config: CollectorConfig, caps: CollectorV2Ca
     const row = bundle && rows.find(item => item.bundle === bundle);
     const parent = deviceDependencies[bundle?.key ?? selection.metric];
     return !metric || isRequired(metric) || (bundle && !row) || (parent && selection.objects?.some(id => !selectedObjects(config.upload!, parent).includes(id))) ||
-      (selection.metric === "network.public_ipv4" && !selectedObjects(config.upload!, "interface.ipv4").length) || (metric.objects && (!selection.objects?.length || selection.objects.some(id => !(row?.objects ?? metric.objects!).includes(id)))) ||
-      (selection.metric === "drive.smart_attribute" && (!selection.detail?.length || selection.detail.some(id => !smartDetails(caps, selection.objects ?? []).some(detail => detail.id === id))));
+      (selection.metric === "network.public_ipv4" && !selectedObjects(config.upload!, "interface.ipv4").length) || (metric.objects && (!selection.objects?.length || selection.objects.some(id => !(row?.objects ?? metric.objects!).includes(id))));
   });
 }
 export function repairV2Selections(config: CollectorConfig, caps: CollectorV2Capabilities) {
@@ -143,17 +128,12 @@ export function repairV2Selections(config: CollectorConfig, caps: CollectorV2Cap
     const parent = deviceDependencies[bundle?.key ?? selection.metric];
     if (parent && next.objects) { next.objects = next.objects.filter(id => selectedObjects(config.upload!, parent).includes(id)); if (!next.objects.length) return []; }
     if (selection.metric === "network.public_ipv4" && !selectedObjects(config.upload!, "interface.ipv4").some(id => selectedObjects(config.upload!, "interface.medium").includes(id))) return [];
-    if (selection.metric === "drive.smart_attribute") {
-      const allowed = smartDetails(caps, next.objects ?? []);
-      next.detail = (next.detail ?? []).filter(id => allowed.some(detail => detail.id === id)); if (!next.detail.length) return [];
-    }
     return [next];
   });
   bundleUploads(config.upload, caps);
 }
 export function validateMetricDraft(config: CollectorConfig, caps?: CollectorCapabilities): string {
   if (!Number.isInteger(config.interval_seconds) || config.interval_seconds < 5 || config.interval_seconds > 60) return "采集间隔必须为 5–60 秒的整数";
-  if (caps?.v2 && config.upload?.enabled && invalidV2Selections(config, caps.v2).length) return "部分已选指标或对象当前不可用，请先清理这些选择。";
   return "";
 }
 export function prepareMetricDraft(config: CollectorConfig, caps?: CollectorCapabilities): CollectorConfig {
@@ -163,7 +143,10 @@ export function prepareMetricDraft(config: CollectorConfig, caps?: CollectorCapa
     next.upload.interval_seconds = next.interval_seconds;
     // V2 upload choices live in upload.optional; keep local previews separate.
     next.upload.optional = next.upload.optional.filter(selection => !requiredMetrics.has(selection.metric));
-    bundleUploads(next.upload, caps.v2);
+    // The GUI only offers currently available metrics, so stale selections
+    // (hardware changed or a sensor backend went away) are pruned here
+    // instead of blocking the save with a selection the user cannot see.
+    repairV2Selections(next, caps.v2);
   }
   return next;
 }
@@ -196,7 +179,6 @@ function formatValue(key: string, value: unknown): string {
   if (key === "interface.up") return value ? "已连接" : "未连接";
   if (key === "interface.ipv4") return Array.isArray(value) ? value.length ? value.join(" / ") : "无地址" : "—";
   if (key === "memory.pressure") return ["正常", "警告", "严重"][Number(value)] ?? "—";
-  if (key === "fan.rpm") return `${value} RPM`;
   if (key === "system.uptime") { const n = Number(value); return `${Math.floor(n / 86400)} 天 ${Math.floor(n % 86400 / 3600)} 小时 ${Math.floor(n % 3600 / 60)} 分`; }
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
@@ -212,18 +194,17 @@ export function metricValue(metric: CollectorV2Metric, caps: CollectorV2Capabili
   }
   const direct: Record<string, unknown> = { "cpu.usage": sample.c, "memory.usage": sample.m, "system.uptime": sample.u, "network.public_ipv4": record(sample.ip).v };
   if (key in direct) return formatValue(key, direct[key]);
-  const fields: Record<string, string> = { "cpu.load1": "l1", "cpu.load5": "l5", "cpu.load15": "l15", "cpu.temperature": "t", "memory.used": "u", "memory.app": "a", "memory.wired": "w", "memory.compressed": "c", "memory.swap_total": "st", "memory.swap_used": "su", "memory.pressure": "p", "core.usage": "u", "gpu.usage": "u", "gpu.temperature": "t", "drive.model": "model", "drive.total": "total", "drive.used": "u", "drive.read_rate": "r", "drive.write_rate": "w", "interface.medium": "medium", "interface.upload_rate": "tx", "interface.download_rate": "rx", "interface.ipv4": "ip", "interface.up": "up", "battery.level": "l", "battery.charging": "c", "fan.rpm": "r" };
+  const fields: Record<string, string> = { "cpu.load1": "l1", "cpu.load5": "l5", "cpu.load15": "l15", "cpu.temperature": "t", "memory.used": "u", "memory.app": "a", "memory.wired": "w", "memory.compressed": "c", "memory.swap_total": "st", "memory.swap_used": "su", "memory.pressure": "p", "core.usage": "u", "gpu.usage": "u", "gpu.temperature": "t", "drive.model": "model", "drive.total": "total", "drive.used": "u", "drive.read_rate": "r", "drive.write_rate": "w", "interface.medium": "medium", "interface.upload_rate": "tx", "interface.download_rate": "rx", "interface.ipv4": "ip", "interface.up": "up", "battery.level": "l", "battery.charging": "c" };
   if (!metric.objects) {
     const value = record(sample[family === "memory" ? "mem" : family])[fields[key]];
     return ["memory.app", "memory.wired", "memory.compressed"].includes(key) ? formatMemoryPart(value, inventory.memory_total) : formatValue(key, value);
   }
-  const lists: Record<string, string> = metric.fixed ? { drive: "drives", volume: "volumes", interface: "interfaces" } : { core: "cores", gpu: "gpu", drive: "disk", volume: "vol", interface: "net", battery: "bat", fan: "fan" };
+  const lists: Record<string, string> = metric.fixed ? { drive: "drives", volume: "volumes", interface: "interfaces" } : { core: "cores", gpu: "gpu", drive: "disk", volume: "vol", interface: "net", battery: "bat" };
   return array((metric.fixed ? inventory : sample)[lists[family]])
     .filter(item => metric.objects!.includes(Number(item[metric.fixed ? "id" : "i"])) && (objectID === undefined || Number(item[metric.fixed ? "id" : "i"]) === objectID))
     .map(item => {
       let value = item[fields[key]];
       if (key === "drive.smart_health") value = record(item.sm).h;
-      if (key === "drive.smart_attribute") value = record(item.sm).v;
       const id = Number(item[metric.fixed ? "id" : "i"]);
       const name = caps.objects?.find(object => object.id === id)?.name ?? `对象 ${id}`;
       const formatted = key === "interface.medium" ? ({ wifi: "Wi-Fi", ethernet: "有线网络", other: "其他" }[String(value)] ?? "—") : formatValue(key, value);
@@ -253,10 +234,29 @@ function cpuInfoValue(row: MetricRow, caps: CollectorV2Capabilities): string {
   return parts.filter(part => part !== "—").join("\n") || "—";
 }
 
+// 磁盘信息每行只展示「名称: 已用 / 总容量」，容量取自 inventory 与最新采样。
+function driveInfoValue(row: MetricRow, caps: CollectorV2Capabilities, snapshot?: CollectorSnapshot, objectID?: number): string {
+  const totals = new Map(array(caps.inventory.drives).map(drive => [Number(drive.id), drive.total]));
+  const used = new Map(array(record(snapshot?.v2_sample).disk).map(disk => [Number(disk.i), disk.u]));
+  const ids = objectID === undefined ? row.objects ?? [] : [objectID];
+  const lines = ids.map(id => {
+    let value = "—";
+    try {
+      const usedBytes = BigInt(String(used.get(id))), totalBytes = BigInt(String(totals.get(id)));
+      if (usedBytes >= 0n && totalBytes > 0n && usedBytes <= totalBytes) value = `${formatBytes(usedBytes)} / ${formatBytes(totalBytes)}`;
+    } catch { /* 缺失或非法容量保持占位符 */ }
+    if (objectID !== undefined) return bond(value);
+    const name = caps.objects?.find(object => object.id === id)?.name ?? `对象 ${id}`;
+    return `${name}: ${bond(value)}`;
+  });
+  return lines.join("\n") || "—";
+}
+
 // 每个 "·" 分隔的指标独占一行：WebKit 在 keep-all 下会在小数点/斜杠处断行，
 // 预先分行可完全避开该行为。
 export function rowValue(row: MetricRow, caps: CollectorV2Capabilities, snapshot?: CollectorSnapshot, objectID?: number): string {
   if (row.bundle?.key === "cpu.model") return cpuInfoValue(row, caps);
+  if (row.bundle?.key === "drive.model") return driveInfoValue(row, caps, snapshot, objectID);
   if (!row.bundle) return bond(metricValue(row.members[0], caps, snapshot, objectID));
   const values = row.members.map(metric => ({ key: metric.metric, value: metricValue(metric, caps, snapshot, objectID) })).filter(entry => entry.value !== "—");
   return values.length ? values.map(entry => `${bond(memberLabels[entry.key] ?? entry.key)}\u00A0${bond(entry.value)}`).join("\n") : "—";

@@ -1,7 +1,15 @@
-//go:build !darwin && !linux
+//go:build !darwin && !linux && !windows
 
 package desktopipc
 
-import "errors"
+import (
+	"context"
+	"errors"
+	"net"
+)
 
-func validateDesktopSocket(string) error { return errors.New("desktop_platform_unsupported") }
+func desktopEndpoint(string) (string, string) { return "", "desktop_platform_unsupported" }
+
+func connectDesktop(context.Context, string) (net.Conn, error) {
+	return nil, errors.New("desktop_platform_unsupported")
+}

@@ -4,4 +4,6 @@ package guibridge
 
 import "errors"
 
-func setLaunchAtLogin(bool) error { return errors.New("launch_at_login_unsupported") }
+func setLaunchAtLogin(bool, func(bool) error) error {
+	return errors.New("launch_at_login_unsupported")
+}

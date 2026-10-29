@@ -4,7 +4,6 @@ package collector
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"os/exec"
 	"regexp"
@@ -16,12 +15,13 @@ import (
 )
 
 type darwinCollector struct {
-	mu         sync.Mutex
-	fixed      *darwinFixed
-	smart      []Metric
-	smartAt    time.Time
-	publicIP   string
-	publicIPAt time.Time
+	mu               sync.Mutex
+	fixed            *darwinFixed
+	smart            []Metric
+	smartAt          time.Time
+	publicIP         string
+	publicIPAt       time.Time
+	publicIPFetching bool
 }
 
 func newNativeCollector() Collector { return &darwinCollector{} }
@@ -55,10 +55,9 @@ func (d *darwinCollector) Gather(ctx context.Context, ids []string) (Batch, map[
 		out.Metrics = append(out.Metrics, Metric{Name: id, Tags: tags, Fields: fields, Timestamp: time.Now().Unix()})
 	}
 	var cpuSensors, gpuSensors map[string]float64
-	var fans []float64
 	brand := fixed.brand
-	if slices.Contains(ids, "darwin_cpu") || slices.Contains(ids, "darwin_gpu") || slices.Contains(ids, "darwin_fan") {
-		cpuSensors, gpuSensors, fans = readSMC(brand)
+	if slices.Contains(ids, "darwin_cpu") || slices.Contains(ids, "darwin_gpu") {
+		cpuSensors, gpuSensors = readSMC(brand)
 	}
 	for _, id := range ids {
 		if ctx.Err() != nil {
@@ -88,13 +87,6 @@ func (d *darwinCollector) Gather(ctx context.Context, ids []string) (Batch, map[
 			}
 			out.Metrics = append(out.Metrics, gpu...)
 			if len(gpu) == 0 && len(gpuSensors) == 0 && reasons[id] == "" {
-				reasons[id] = "unavailable"
-			}
-		case "darwin_fan":
-			for index, rpm := range fans {
-				add(id, map[string]string{"fan": fmt.Sprintf("%d", index)}, map[string]float64{"speed_rpm": rpm})
-			}
-			if len(fans) == 0 {
 				reasons[id] = "unavailable"
 			}
 		case "darwin_disk":
@@ -137,18 +129,23 @@ func (d *darwinCollector) Gather(ctx context.Context, ids []string) (Batch, map[
 
 		case "darwin_public_ip":
 			if d.publicIP == "" || time.Since(d.publicIPAt) > 5*time.Minute {
-				ip, err := publicIPv4(ctx)
-				if err != nil {
-					reasons[id] = gatherReason(err)
-					d.publicIP = ""
-				} else {
-					d.publicIP = ip
-					d.publicIPAt = time.Now()
+				if !d.publicIPFetching {
+					d.publicIPFetching = true
+					go func() {
+						ip, err := publicIPv4(context.Background())
+						d.mu.Lock()
+						defer d.mu.Unlock()
+						d.publicIPFetching = false
+						if err != nil {
+							d.publicIP = ""
+							return
+						}
+						d.publicIP, d.publicIPAt = ip, time.Now()
+					}()
 				}
+				continue
 			}
-			if d.publicIP != "" {
-				out.Metrics = append(out.Metrics, Metric{Name: id, Tags: map[string]string{"ipv4": d.publicIP}, Fields: map[string]float64{"present": 1}, Timestamp: d.publicIPAt.Unix()})
-			}
+			out.Metrics = append(out.Metrics, Metric{Name: id, Tags: map[string]string{"ipv4": d.publicIP}, Fields: map[string]float64{"present": 1}, Timestamp: d.publicIPAt.Unix()})
 		case "darwin_memory":
 			fields := map[string]float64{}
 			if s, err := darwinCommand(ctx, "/usr/bin/vm_stat"); err == nil {

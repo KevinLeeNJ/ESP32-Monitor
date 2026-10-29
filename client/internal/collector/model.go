@@ -55,14 +55,25 @@ type Category struct {
 	Sources []Capability `json:"sources"`
 }
 type Capabilities struct {
-	SchemaVersion   int             `json:"schema_version"`
-	CoreCollector   string          `json:"core_collector"`
-	NativeCollector string          `json:"native_collector"`
-	OS              string          `json:"os"`
-	Arch            string          `json:"arch"`
-	ObservedAt      time.Time       `json:"observed_at"`
-	Categories      []Category      `json:"categories"`
-	V2              *V2Capabilities `json:"v2,omitempty"`
+	SchemaVersion   int                    `json:"schema_version"`
+	CoreCollector   string                 `json:"core_collector"`
+	NativeCollector string                 `json:"native_collector"`
+	OS              string                 `json:"os"`
+	Arch            string                 `json:"arch"`
+	ObservedAt      time.Time              `json:"observed_at"`
+	Categories      []Category             `json:"categories"`
+	V2              *V2Capabilities        `json:"v2,omitempty"`
+	HardwareMonitor *HardwareMonitorStatus `json:"hardware_monitor,omitempty"`
+}
+
+// HardwareMonitorStatus makes an optional Windows helper dependency visible to
+// the GUI. In particular, a missing .NET Framework must never look like a
+// generic sensor failure.
+type HardwareMonitorStatus struct {
+	Backend string `json:"backend"`
+	State   string `json:"state"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 type Snapshot struct {
 	SchemaVersion   int              `json:"schema_version"`

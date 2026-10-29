@@ -26,7 +26,7 @@ func macLoginItemPath() (string, error) {
 
 // setLaunchAtLogin writes a per-user LaunchAgent. The app path is resolved
 // from the running bundle, so moving or rebuilding requires toggling it again.
-func setLaunchAtLogin(enabled bool) error {
+func setLaunchAtLogin(enabled bool, _ func(bool) error) error {
 	path, err := macLoginItemPath()
 	if err != nil {
 		return err

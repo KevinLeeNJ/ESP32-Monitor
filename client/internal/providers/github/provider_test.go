@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -86,7 +87,8 @@ func TestCacheAgeAndFailure(t *testing.T) {
 	p.opts.CachePath = filepath.Join(t.TempDir(), "cache.json")
 	p.Refresh(context.Background(), false)
 	info, err := os.Stat(p.opts.CachePath)
-	if err != nil || info.Mode().Perm() != 0600 {
+	// Windows has no POSIX mode bits; privacy comes from the user profile ACL.
+	if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0600) {
 		t.Fatal("cache must be 0600")
 	}
 	bytes, _ := os.ReadFile(p.opts.CachePath)

@@ -14,7 +14,7 @@ func TestPlatformSelectionAndUnknownSource(t *testing.T) {
 	opts := Options{Home: t.TempDir(), ThreadIDs: []string{"a"}, Now: func() time.Time { return now }}
 	for _, name := range []string{"", "auto", "desktop-ipc"} {
 		adapter := New(name, opts)
-		if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
+		if runtime.GOOS == "darwin" || runtime.GOOS == "linux" || runtime.GOOS == "windows" {
 			if adapter.ID() != "desktop-ipc" || adapter.Snapshot().Scope != "desktop_selected_threads" {
 				t.Fatal("wrong Unix source", adapter.ID())
 			}

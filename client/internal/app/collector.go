@@ -23,6 +23,7 @@ func (a *Application) GetCollectorSnapshot() (collector.Snapshot, error) {
 	if a.Collector == nil {
 		return collector.Snapshot{}, errors.New("collector_disabled")
 	}
+	a.Collector.MarkPreview()
 	return a.Collector.Snapshot(), nil
 }
 func (a *Application) ApplyCollectorConfig(ctx context.Context, c collector.Config) (collector.Snapshot, error) {

@@ -1,0 +1,10 @@
+Portions of client/internal/collector/windows_gpu_sensors_windows.go are adapted
+from prometheus-community/windows_exporter:
+https://github.com/prometheus-community/windows_exporter
+
+Copyright (c) 2016 Martin Lindhe
+Copyright (c) 2021 The Prometheus Authors
+
+The upstream repository is distributed under the MIT License; see LICENSE in
+this directory. The adapted upstream GPU sensor files also carry
+SPDX-License-Identifier: Apache-2.0 headers.

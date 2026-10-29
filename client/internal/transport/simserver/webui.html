@@ -23,6 +23,7 @@
   --red-soft: #f7e4e0;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; min-height: 100vh; }
 button, input { font: inherit; }
 button { cursor: pointer; }
@@ -54,12 +55,34 @@ tbody tr:hover { background: #f4f7f1; }
 .sub { color: var(--muted); font-size: 11px; margin-top: 3px; }
 .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px; letter-spacing: .18em; font-weight: 700; }
 .pill { display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; border: 1px solid transparent; white-space: nowrap; }
-th:nth-child(2), td:nth-child(2) { width: 84px; }
-th:nth-child(3), td:nth-child(3) { width: 118px; white-space: nowrap; }
+#device-table th:nth-child(2), #device-table td:nth-child(2) { width: 84px; }
+#device-table th:nth-child(3), #device-table td:nth-child(3) { width: 118px; white-space: nowrap; }
 .pill.pending { background: var(--amber-soft); color: var(--amber); border-color: #ead8b3; }
 .pill.registered { background: var(--accent-soft); color: var(--accent); border-color: #cadfca; }
 .pill.expired { background: var(--red-soft); color: var(--red); border-color: #eccdc6; }
 .row-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.nav.active { background: var(--accent); }
+.nav:hover { background: #4d6d62; }
+.nav.active:hover { background: #275c46; }
+.batch-list { display: flex; flex-direction: column; }
+.batch + .batch { border-top: 1px solid #e2e8df; }
+.batch-head { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 18px; border: 0; background: transparent; text-align: left; }
+.batch-head:hover { background: #f4f7f1; }
+.batch-head .grow { min-width: 0; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.chev { color: var(--muted); font-size: 11px; transition: transform .15s ease; }
+.batch.open .chev { transform: rotate(90deg); }
+.batch-body { padding: 2px 18px 16px; }
+.sample-table { margin: 0 0 12px; }
+.sample-table th, .sample-table td { padding: 9px 12px 9px 0; font-size: 12px; }
+.sample-table th { padding-top: 11px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-block; padding: 3px 9px; border: 1px solid #d7e2d3; border-radius: 999px; background: #f4f8f0; font-size: 11.5px; color: var(--ink); white-space: nowrap; }
+.chip b { font-weight: 700; color: var(--accent); margin-right: 5px; }
+.batch-raw summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.batch-raw pre { margin: 8px 0 0; padding: 12px; background: #f4f8f0; border: 1px solid #d7e2d3; border-radius: 4px; font-size: 11px; line-height: 1.5; overflow: auto; max-height: 320px; }
+.inv-row > td { background: #f6f9f2; padding: 14px 18px 18px; }
+.inv-meta { color: var(--muted); font-size: 12px; margin: 0 0 10px; line-height: 1.7; }
 .btn { border: 2px solid var(--line); background: #fff; color: var(--ink); padding: 8px 14px; border-radius: 3px; font-size: 13px; font-weight: 600; transition: transform .05s ease, box-shadow .05s ease; white-space: nowrap; }
 .btn:hover { background: #f2f6ef; }
 .btn:active { transform: translate(1px, 1px); }
@@ -92,9 +115,9 @@ th:nth-child(3), td:nth-child(3) { width: 118px; white-space: nowrap; }
   .topbar { padding: 14px 18px; }
   .content { padding: 18px; }
   th, td { padding: 11px 10px; }
-  th:nth-child(2), td:nth-child(2) { width: 72px; }
-  th:nth-child(3), td:nth-child(3) { width: 98px; }
-  th:nth-child(4), td:nth-child(4) { display: none; }
+  #device-table th:nth-child(2), #device-table td:nth-child(2) { width: 72px; }
+  #device-table th:nth-child(3), #device-table td:nth-child(3) { width: 98px; }
+  #device-table th:nth-child(4), #device-table td:nth-child(4) { display: none; }
   .row-actions { flex-direction: column; align-items: flex-end; gap: 4px; }
   .name { overflow-wrap: anywhere; }
 }
@@ -108,27 +131,46 @@ th:nth-child(3), td:nth-child(3) { width: 118px; white-space: nowrap; }
       <div><strong>ESP32 Monitor</strong><small>Server 模拟器</small></div>
     </div>
     <div class="nav-label">管理</div>
-    <div class="nav">设备</div>
+    <button class="nav active" id="nav-devices">设备</button>
+    <div class="nav-label">数据</div>
+    <button class="nav" id="nav-batches">指标包</button>
     <div class="foot">仅用于本机开发。<br>设备注册数据保存在内存中，<br>重启模拟器后需重新添加。</div>
   </aside>
   <main class="main">
-    <header class="topbar">
+    <header class="topbar" id="topbar-devices">
       <div>
         <h1>设备</h1>
         <p>添加设备后在 Client 输入验证码，Client 会自动换取上传令牌。</p>
       </div>
       <button class="btn primary" id="add-button">添加设备</button>
     </header>
-    <div class="content">
+    <div class="content" id="view-devices">
       <section class="card">
         <div class="card-head"><h2>已登记设备</h2><span id="count">—</span></div>
-        <table>
+        <table id="device-table">
           <thead><tr><th>设备</th><th>状态</th><th>验证码</th><th>最近在线</th><th></th></tr></thead>
           <tbody id="device-rows"></tbody>
         </table>
         <div class="empty" id="empty" hidden>
           <strong>还没有设备</strong>
           点击右上角「添加设备」，输入名称获取 6 位验证码。
+        </div>
+      </section>
+    </div>
+    <header class="topbar" id="topbar-batches" hidden>
+      <div>
+        <h1>指标包</h1>
+        <p>Client 上传的采样批次会实时显示在这里，服务端最多保留最近 100 批。</p>
+      </div>
+      <button class="btn" id="pause-button">暂停刷新</button>
+    </header>
+    <div class="content" id="view-batches" hidden>
+      <section class="card">
+        <div class="card-head"><h2>最近上传</h2><span id="batch-count">—</span></div>
+        <div class="batch-list" id="batch-list"></div>
+        <div class="empty" id="batch-empty" hidden>
+          <strong>还没有收到指标包</strong>
+          在 Client 完成「Server 连接」并启用上传后，批次会自动出现在这里。
         </div>
       </section>
     </div>
@@ -165,7 +207,11 @@ th:nth-child(3), td:nth-child(3) { width: 118px; white-space: nowrap; }
 </div>
 
 <script>
-const state = { devices: [], modal: null, mode: null, codeDeviceId: null, shownCode: "", timer: null };
+const state = {
+  devices: [], modal: null, mode: null, codeDeviceId: null, shownCode: "", timer: null,
+  view: "devices", batches: [], lastSeq: 0, paused: false, expanded: new Set(), rawOpen: new Set(),
+  invOpen: new Set(), invCache: new Map(), invLoading: new Set(),
+};
 const $ = (id) => document.getElementById(id);
 
 function statusPill(device) {
@@ -205,14 +251,123 @@ function render() {
       <td>${code}</td>
       <td><span class="sub">${formatSeen(device.last_seen_at)}</span></td>
       <td><div class="row-actions">
+        <button class="btn ghost small" data-action="inv" aria-expanded="${state.invOpen.has(device.id)}">长期指标</button>
         <button class="btn ghost small" data-action="code">${device.status === "pending" ? "新验证码" : "重新绑定"}</button>
         <button class="btn danger small" data-action="delete">删除</button>
       </div></td>`;
     tr.querySelector(".name").textContent = device.name;
     tr.querySelector(".sub").textContent = device.id;
+    tr.querySelector('[data-action="inv"]').addEventListener("click", () => toggleInventory(device));
     tr.querySelector('[data-action="code"]').addEventListener("click", () => issueCode(device));
     tr.querySelector('[data-action="delete"]').addEventListener("click", () => removeDevice(device));
     rows.appendChild(tr);
+    if (state.invOpen.has(device.id)) rows.appendChild(inventoryDetailRow(device));
+  }
+}
+
+function inventoryDetailRow(device) {
+  const tr = document.createElement("tr");
+  tr.className = "inv-row";
+  const td = document.createElement("td");
+  td.colSpan = 5;
+  td.appendChild(inventoryBody(device));
+  tr.appendChild(td);
+  return tr;
+}
+
+function inventoryBody(device) {
+  const wrap = document.createElement("div");
+  const meta = document.createElement("p");
+  meta.className = "inv-meta";
+  wrap.appendChild(meta);
+  const cached = state.invCache.get(device.id);
+  if (state.invLoading.has(device.id) || !cached) {
+    meta.textContent = "长期指标加载中…";
+    return wrap;
+  }
+  if (cached.error) {
+    meta.textContent = cached.error;
+    return wrap;
+  }
+  meta.textContent = `指标档案 rev ${cached.revision} · 采集间隔 ${cached.interval_seconds} 秒 · Client 保存采集配置时自动更新`;
+  const chips = document.createElement("div");
+  chips.className = "chips";
+  for (const el of inventoryChips(cached.inventory)) chips.appendChild(el);
+  if (!chips.childElementCount) {
+    chips.appendChild(Object.assign(document.createElement("span"), {
+      className: "sub", textContent: "档案为空：Client 尚未选择任何长期指标。",
+    }));
+  }
+  wrap.appendChild(chips);
+  return wrap;
+}
+
+function inventoryChips(inv) {
+  const out = [];
+  const add = (label, value) => {
+    if (value != null && value !== "") out.push(chip(label, value));
+  };
+  if (!inv) return out;
+  if (inv.os) {
+    let os = [inv.os.name, inv.os.version].filter(Boolean).join(" ");
+    if (inv.os.build) os += `（build ${inv.os.build}）`;
+    add("系统", os || inv.os.family);
+  }
+  add("产品", inv.product);
+  if (inv.cpu) {
+    add("CPU", inv.cpu.model);
+    const cores = [];
+    if (inv.cpu.physical_cores != null) cores.push(`${inv.cpu.physical_cores} 物理`);
+    if (inv.cpu.logical_cores != null) cores.push(`${inv.cpu.logical_cores} 逻辑`);
+    add("核心数", cores.join(" / "));
+    const kinds = [];
+    if (inv.cpu.performance_cores != null) kinds.push(`${inv.cpu.performance_cores} 性能`);
+    if (inv.cpu.efficiency_cores != null) kinds.push(`${inv.cpu.efficiency_cores} 能效`);
+    add("大小核", kinds.join(" / "));
+  }
+  if (inv.memory_total != null) add("内存总量", fmtBytes(inv.memory_total));
+  const kinds = { performance: "性能核", efficiency: "能效核", general: "通用" };
+  for (const c of inv.cores || []) add(`核心 ${c.index}`, kinds[c.kind] || "");
+  for (const g of inv.gpus || []) add("GPU", `#${g.id}`);
+  for (const d of inv.drives || []) {
+    add(`硬盘 ${d.id}`, [d.model, d.total != null ? fmtBytes(d.total) : null].filter(Boolean).join(" · "));
+  }
+  for (const v of inv.volumes || []) {
+    add(`卷 ${v.id}`, [v.filesystem, v.total != null ? fmtBytes(v.total) : null].filter(Boolean).join(" · "));
+  }
+  const mediums = { wifi: "Wi-Fi", ethernet: "以太网", other: "其他" };
+  for (const n of inv.interfaces || []) add(`网卡 ${n.id}`, mediums[n.medium] || "");
+  for (const b of inv.batteries || []) add("电池", `#${b.id}`);
+  const scopes = { cpu: "CPU", gpu: "GPU", system: "系统" };
+  for (const f of inv.fans || []) add(`风扇 ${f.id}`, scopes[f.scope] || f.scope);
+  return out;
+}
+
+async function toggleInventory(device) {
+  if (state.invOpen.has(device.id)) {
+    state.invOpen.delete(device.id);
+    render();
+    return;
+  }
+  state.invOpen.add(device.id);
+  if (!state.invCache.has(device.id)) await loadInventory(device);
+  else render();
+}
+
+async function loadInventory(device) {
+  state.invLoading.add(device.id);
+  render();
+  try {
+    state.invCache.set(device.id, await api(`/api/devices/${device.id}/profile`));
+  } catch (error) {
+    state.invCache.set(device.id, {
+      error: error.message === "profile_required"
+        ? "设备尚未上传指标档案：在 Client 启用「上传」并保存采集配置后自动同步。"
+        : `长期指标加载失败：${error.message}`,
+    });
+  } finally {
+    state.invLoading.delete(device.id);
+    render();
   }
 }
 
@@ -236,6 +391,216 @@ async function refresh() {
   } catch (error) {
     $("count").textContent = "连接失败";
   }
+}
+
+function setView(view) {
+  state.view = view;
+  const devices = view === "devices";
+  $("topbar-devices").hidden = !devices;
+  $("view-devices").hidden = !devices;
+  $("topbar-batches").hidden = devices;
+  $("view-batches").hidden = devices;
+  $("nav-devices").classList.toggle("active", devices);
+  $("nav-batches").classList.toggle("active", !devices);
+  if (!devices) refreshBatches();
+}
+
+async function refreshBatches() {
+  if (state.view !== "batches" || state.paused) return;
+  try {
+    const query = state.lastSeq ? `?after=${state.lastSeq}` : "";
+    const body = await api("/api/batches" + query);
+    if (body.reset) state.batches = [];
+    for (const entry of body.batches || []) state.batches.push(entry);
+    state.lastSeq = body.latest || 0;
+    if (state.batches.length > 200) state.batches.splice(0, state.batches.length - 200);
+    renderBatches();
+  } catch (error) {
+    $("batch-count").textContent = "连接失败";
+  }
+}
+
+function parseBatch(raw) {
+  try {
+    const batch = JSON.parse(raw);
+    if (batch && Array.isArray(batch.s)) return batch;
+  } catch { /* fall through */ }
+  return null;
+}
+
+function renderBatches() {
+  const list = $("batch-list");
+  list.innerHTML = "";
+  $("batch-count").textContent = state.batches.length ? `${state.batches.length} 批` : "—";
+  $("batch-empty").hidden = state.batches.length > 0;
+  for (let i = state.batches.length - 1; i >= 0; i--) {
+    const entry = state.batches[i];
+    const batch = parseBatch(entry.raw);
+    const open = state.expanded.has(entry.seq);
+    const div = document.createElement("div");
+    div.className = "batch" + (open ? " open" : "");
+    div.innerHTML = `
+      <button class="batch-head" type="button" aria-expanded="${open}">
+        <div class="grow">
+          <div class="name"></div>
+          <div class="sub"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <span class="mono"></span>
+          <span class="chev">▶</span>
+        </div>
+      </button>
+      <div class="batch-body">
+        <table class="sample-table">
+          <thead><tr><th>时间</th><th>CPU</th><th>内存</th><th>运行时长</th><th>其他指标</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <details class="batch-raw">
+          <summary>原始 JSON</summary>
+          <pre></pre>
+        </details>
+      </div>`;
+    div.querySelector(".name").textContent = entry.device || "未知设备";
+    div.querySelector(".sub").textContent =
+      `rev ${entry.revision} · ${entry.samples} 条样本 · 收到于 ${fmtClock(entry.received_at)}`;
+    div.querySelector(".mono").textContent = batch ? String(batch.id).slice(0, 8) + "…" : "";
+    const bodyEl = div.querySelector(".batch-body");
+    bodyEl.hidden = !open;
+    if (batch) {
+      const tbody = div.querySelector("tbody");
+      for (const sample of batch.s) tbody.appendChild(sampleRow(sample));
+      div.querySelector("pre").textContent = JSON.stringify(batch, null, 2);
+    } else {
+      bodyEl.innerHTML = '<p class="sub">批次内容无法解析。</p>';
+    }
+    const details = div.querySelector("details");
+    details.open = state.rawOpen.has(entry.seq);
+    details.addEventListener("toggle", () => {
+      if (details.open) state.rawOpen.add(entry.seq);
+      else state.rawOpen.delete(entry.seq);
+    });
+    div.querySelector(".batch-head").addEventListener("click", () => {
+      const now = !state.expanded.has(entry.seq);
+      if (now) state.expanded.add(entry.seq);
+      else state.expanded.delete(entry.seq);
+      bodyEl.hidden = !now;
+      div.classList.toggle("open", now);
+      div.querySelector(".batch-head").setAttribute("aria-expanded", String(now));
+    });
+    list.appendChild(div);
+  }
+}
+
+function fmtPct(v) { return (Number(v) / 100).toFixed(1) + "%"; }
+function fmtLoad(v) { return (Number(v) / 1000).toFixed(2); }
+function fmtTemp(v) { return (Number(v) / 10).toFixed(1) + "°C"; }
+function fmtRate(v) { return fmtBytes(v) + "/s"; }
+
+function fmtBytes(value) {
+  let n = Number(value);
+  if (!Number.isFinite(n)) return String(value);
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return (i === 0 ? String(n) : n.toFixed(1)) + " " + units[i];
+}
+
+function fmtUptime(value) {
+  let s = Number(value);
+  const d = Math.floor(s / 86400); s %= 86400;
+  const h = Math.floor(s / 3600); s %= 3600;
+  const m = Math.floor(s / 60); s %= 60;
+  if (d) return `${d} 天 ${h} 小时`;
+  if (h) return `${h} 小时 ${m} 分`;
+  if (m) return `${m} 分 ${s} 秒`;
+  return `${s} 秒`;
+}
+
+function fmtClock(value) {
+  if (value == null) return "—";
+  const date = typeof value === "number" ? new Date(value * 1000) : new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleTimeString("zh-CN", { hour12: false });
+}
+
+function chip(label, value) {
+  const span = document.createElement("span");
+  span.className = "chip";
+  const b = document.createElement("b");
+  b.textContent = label;
+  span.appendChild(b);
+  span.appendChild(document.createTextNode(value));
+  return span;
+}
+
+function metricChips(s) {
+  const chips = [];
+  const add = (label, value) => {
+    if (value != null && value !== "") chips.push(chip(label, value));
+  };
+  if (s.cpu) {
+    const loads = ["l1", "l5", "l15"].map(k => s.cpu[k]).filter(v => v != null).map(fmtLoad).join(" / ");
+    if (loads) add("load", loads);
+    if (s.cpu.t != null) add("CPU 温度", fmtTemp(s.cpu.t));
+  }
+  if (s.mem) {
+    if (s.mem.u != null) add("内存已用", fmtBytes(s.mem.u));
+    if (s.mem.a != null) add("应用内存", fmtBytes(s.mem.a));
+    if (s.mem.w != null) add("联动内存", fmtBytes(s.mem.w));
+    if (s.mem.c != null) add("压缩内存", fmtBytes(s.mem.c));
+    if (s.mem.st != null) add("交换总量", fmtBytes(s.mem.st));
+    if (s.mem.su != null) add("交换已用", fmtBytes(s.mem.su));
+    if (s.mem.p != null) add("内存压力", ["正常", "警告", "危急"][s.mem.p] || s.mem.p);
+  }
+  for (const c of s.cores || []) if (c.u != null) add(`核心 ${c.i}`, fmtPct(c.u));
+  for (const g of s.gpu || []) {
+    add(`GPU ${g.i}`, [g.u != null ? fmtPct(g.u) : null, g.t != null ? fmtTemp(g.t) : null].filter(Boolean).join(" · "));
+  }
+  for (const dr of s.disk || []) {
+    const parts = [];
+    if (dr.r != null) parts.push(`读 ${fmtRate(dr.r)}`);
+    if (dr.w != null) parts.push(`写 ${fmtRate(dr.w)}`);
+    if (dr.u != null) parts.push(`已用 ${fmtBytes(dr.u)}`);
+    if (dr.sm && dr.sm.h != null) parts.push(dr.sm.h ? "SMART 健康" : "SMART 异常");
+    if (parts.length) add(`磁盘 ${dr.i}`, parts.join(" · "));
+  }
+  for (const n of s.net || []) {
+    const parts = [];
+    if (n.up != null) parts.push(n.up ? "已连接" : "已断开");
+    if (n.tx != null) parts.push(`↑ ${fmtRate(n.tx)}`);
+    if (n.rx != null) parts.push(`↓ ${fmtRate(n.rx)}`);
+    if (n.ip != null) parts.push(n.ip.length ? n.ip.join(", ") : "无 IP");
+    if (parts.length) add(`网卡 ${n.i}`, parts.join(" · "));
+  }
+  if (s.ip && s.ip.v) add("公网 IPv4", s.ip.v);
+  for (const b of s.bat || []) {
+    if (b.l == null) continue;
+    let text = fmtPct(b.l);
+    if (b.c === true) text += " · 充电中";
+    add(`电池 ${b.i}`, text);
+  }
+  for (const f of s.fan || []) if (f.r != null) add(`风扇 ${f.i}`, `${Number(f.r)} RPM`);
+  return chips;
+}
+
+function sampleRow(s) {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td class="mono"></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td><div class="chips"></div></td>`;
+  const cells = tr.querySelectorAll("td");
+  cells[0].textContent = fmtClock(s.t);
+  cells[1].textContent = s.c != null ? fmtPct(s.c) : "—";
+  cells[2].textContent = s.m != null ? fmtPct(s.m) : "—";
+  cells[3].textContent = s.u != null ? fmtUptime(s.u) : "—";
+  const chips = tr.querySelector(".chips");
+  const chipEls = metricChips(s);
+  if (chipEls.length) chipEls.forEach(el => chips.appendChild(el));
+  else chips.appendChild(Object.assign(document.createElement("span"), { className: "sub", textContent: "无可选指标" }));
+  return tr;
 }
 
 function syncCodeModal() {
@@ -345,6 +710,8 @@ async function removeDevice(device) {
   if (!confirm(`删除「${device.name}」？该设备的上传令牌会立即失效。`)) return;
   try {
     await api(`/api/devices/${device.id}`, { method: "DELETE" });
+    state.invOpen.delete(device.id);
+    state.invCache.delete(device.id);
     await refresh();
   } catch (error) {
     alert(`删除失败：${error.message}`);
@@ -367,6 +734,13 @@ async function copyCode() {
 }
 
 $("add-button").addEventListener("click", () => openModal("form"));
+$("nav-devices").addEventListener("click", () => setView("devices"));
+$("nav-batches").addEventListener("click", () => setView("batches"));
+$("pause-button").addEventListener("click", () => {
+  state.paused = !state.paused;
+  $("pause-button").textContent = state.paused ? "继续刷新" : "暂停刷新";
+  if (!state.paused) refreshBatches();
+});
 $("cancel-button").addEventListener("click", closeModal);
 $("done-button").addEventListener("click", closeModal);
 $("create-button").addEventListener("click", createDevice);
@@ -376,7 +750,10 @@ document.addEventListener("keydown", (event) => { if (event.key === "Escape" && 
 $("modal").addEventListener("click", (event) => { if (event.target === $("modal")) closeModal(); });
 
 refresh();
-setInterval(refresh, 3000);
+setInterval(() => {
+  refresh();
+  if (state.view === "batches") refreshBatches();
+}, 2000);
 </script>
 </body>
 </html>

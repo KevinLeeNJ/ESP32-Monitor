@@ -43,10 +43,10 @@ import (
 	"unsafe"
 )
 
-func readSMC(model string) (map[string]float64, map[string]float64, []float64) {
+func readSMC(model string) (map[string]float64, map[string]float64) {
 	c := C.smc_open()
 	if c == 0 {
-		return nil, nil, nil
+		return nil, nil
 	}
 	defer C.IOServiceClose(c)
 	read := func(key string) (float64, bool) {
@@ -69,15 +69,7 @@ func readSMC(model string) (map[string]float64, map[string]float64, []float64) {
 			gpu[key] = v
 		}
 	}
-	fans := []float64{}
-	if count, ok := read("FNum"); ok && count >= 0 && count <= 16 {
-		for i := 0; i < int(count); i++ {
-			if v, ok := read(fmt.Sprintf("F%dAc", i)); ok && v >= 0 {
-				fans = append(fans, v)
-			}
-		}
-	}
-	return cpu, gpu, fans
+	return cpu, gpu
 }
 func sensorKeys(model string) ([]string, []string) {
 	if strings.Contains(model, "M5") {

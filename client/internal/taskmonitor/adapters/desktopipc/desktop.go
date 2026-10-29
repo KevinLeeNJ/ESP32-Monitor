@@ -38,7 +38,7 @@ type desktopState struct {
 
 // Observer is an opt-in, passive follower of internal desktop IPC v11.
 // It never starts/resumes turns, handles approvals, or claims task ownership.
-// Scope is only the explicitly selected local threads, not all desktop tasks.
+// Without an explicit thread selection it observes only the latest local thread.
 type Observer struct {
 	mu          sync.Mutex
 	writeMu     sync.Mutex
@@ -46,7 +46,9 @@ type Observer struct {
 	threadIDs   []string
 	selectedID  string
 	resyncTimes map[string]time.Time
+	home        string
 	path        string
+	auto        bool
 	now         func() time.Time
 	ready       chan struct{}
 	readyOnce   sync.Once
@@ -67,13 +69,9 @@ func New(home string, ids []string, now func() time.Time) *Observer {
 			home = filepath.Join(userHome, ".codex")
 		}
 	}
-	d := &Observer{states: map[string]*desktopState{}, resyncTimes: map[string]time.Time{}, path: filepath.Join(home, "ipc", "ipc.sock"), now: now, ready: make(chan struct{})}
-	if !filepath.IsAbs(home) {
-		d.code = "desktop_home_must_be_absolute"
-	}
-	if len(ids) == 0 {
-		d.code = "desktop_task_selection_required"
-	}
+	path, code := desktopEndpoint(home)
+	d := &Observer{states: map[string]*desktopState{}, resyncTimes: map[string]time.Time{}, home: home, path: path, auto: len(ids) == 0, now: now, ready: make(chan struct{})}
+	d.code = code
 	if len(ids) > 128 {
 		d.code = "desktop_task_limit_exceeded"
 	}
@@ -116,20 +114,23 @@ func (d *Observer) Run(ctx context.Context) {
 	}
 	failures := 0
 	for ctx.Err() == nil {
-		err := validateDesktopSocket(d.path)
 		var conn net.Conn
-		if err == nil {
-			dialer := net.Dialer{Timeout: 3 * time.Second}
-			conn, err = dialer.DialContext(ctx, "unix", d.path)
-			if err != nil {
-				err = errors.New("desktop_socket_unavailable")
+		var err error
+		if d.auto {
+			var id string
+			if id, err = discoverThread(d.home); err == nil {
+				d.selectThread(id)
+				conn, err = connectDesktop(ctx, d.path)
 			}
+		} else {
+			conn, err = connectDesktop(ctx, d.path)
 		}
 		if err == nil {
 			err = d.serve(ctx, conn)
 			conn.Close()
 		}
 		d.mu.Lock()
+		wasConnected := d.connected
 		d.connected = false
 		d.code = safeDesktopError(err)
 		for id := range d.states {
@@ -140,8 +141,15 @@ func (d *Observer) Run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		if wasConnected {
+			failures = 0
+		}
 		delay := time.Second * time.Duration(1<<min(failures, 4))
-		failures++
+		if d.auto && err != nil && (err.Error() == "desktop_task_not_found" || err.Error() == "desktop_session_index_unavailable") {
+			delay = 2 * time.Second
+		} else {
+			failures++
+		}
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
@@ -156,7 +164,7 @@ func safeDesktopError(err error) string {
 		return "desktop_disconnected"
 	}
 	switch err.Error() {
-	case "desktop_platform_unsupported", "desktop_socket_unavailable", "desktop_socket_permission_denied", "desktop_registration_rejected", "desktop_frame_invalid", "desktop_stream_version_unsupported":
+	case "desktop_platform_unsupported", "desktop_socket_unavailable", "desktop_socket_permission_denied", "desktop_registration_rejected", "desktop_frame_invalid", "desktop_stream_version_unsupported", "desktop_task_not_found", "desktop_session_index_unavailable":
 		return err.Error()
 	}
 	return "desktop_disconnected"
@@ -202,7 +210,32 @@ func (d *Observer) send(conn net.Conn, value any) error {
 func (d *Observer) follow(conn net.Conn, id string, on bool) error {
 	return d.send(conn, map[string]any{"type": "broadcast", "method": "thread-stream-following-changed", "version": 1, "params": map[string]any{"conversationId": id, "hostId": "local", "following": on}})
 }
-func (d *Observer) ids() []string { return d.threadIDs }
+func (d *Observer) ids() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string{}, d.threadIDs...)
+}
+func (d *Observer) currentID() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.selectedID
+}
+func (d *Observer) selectThread(id string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.selectedID == id {
+		if _, ok := d.states[id]; ok {
+			return false
+		}
+	}
+	d.states = map[string]*desktopState{id: {task: taskmonitor.Task{ID: id, State: taskmonitor.Unknown}}}
+	d.threadIDs = []string{id}
+	d.selectedID = id
+	d.resyncTimes = map[string]time.Time{}
+	d.code = ""
+	d.success = nil
+	return true
+}
 func (d *Observer) serve(ctx context.Context, conn net.Conn) error {
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
@@ -227,18 +260,30 @@ func (d *Observer) serve(ctx context.Context, conn net.Conn) error {
 			return
 		case <-startRefresh:
 		}
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
+		followTicker := time.NewTicker(10 * time.Second)
+		defer followTicker.Stop()
+		var discoverC <-chan time.Time
+		if d.auto {
+			discoverTicker := time.NewTicker(2 * time.Second)
+			defer discoverTicker.Stop()
+			discoverC = discoverTicker.C
+		}
 		for {
 			select {
 			case <-refreshCtx.Done():
 				return
-			case <-ticker.C:
+			case <-followTicker.C:
 				for _, id := range d.ids() {
 					if d.follow(conn, id, false) != nil || d.follow(conn, id, true) != nil {
 						conn.Close()
 						return
 					}
+				}
+			case <-discoverC:
+				id, err := discoverThread(d.home)
+				if err == nil && id != d.currentID() {
+					conn.Close()
+					return
 				}
 			}
 		}
@@ -406,7 +451,7 @@ func (d *Observer) accept(method string, version int, owner string, raw json.Raw
 	if !terminal(previous.State) {
 		previous.ObservedAt = now
 	}
-	s.task = desktopTask(p.ID, s.projection, previous)
+	s.task = desktopTask(p.ID, s.projection, previous, now)
 	runtime, _ := s.projection["threadRuntimeStatus"].(map[string]any)
 	if !terminal(s.task.State) || runtime["type"] == "systemError" {
 		s.task.ObservedAt = now
@@ -437,13 +482,17 @@ func (d *Observer) Snapshot() taskmonitor.Tasks {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	now := d.now()
-	out := taskmonitor.Tasks{Adapter: d.ID(), Scope: "desktop_selected_threads", State: taskmonitor.Unknown, Health: providers.Health{State: providers.Starting, ObservedAt: now, SourceVersion: "codex-desktop-ipc-v11"}, Items: []taskmonitor.Task{}}
+	scope := "desktop_selected_threads"
+	if d.auto {
+		scope = "desktop_latest_thread"
+	}
+	out := taskmonitor.Tasks{Adapter: d.ID(), Scope: scope, State: taskmonitor.Unknown, Health: providers.Health{State: providers.Starting, ObservedAt: now, SourceVersion: "codex-desktop-ipc-v11"}, Items: []taskmonitor.Task{}}
 	if d.success != nil {
 		v := *d.success
 		out.Health.LastSuccessAt = &v
 	}
 	code := d.code
-	for _, id := range d.ids() {
+	for _, id := range d.threadIDs {
 		s := d.states[id]
 		task := s.task
 		if code == "" && s.code != "" {

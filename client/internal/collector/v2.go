@@ -9,12 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 type V2Metric struct {
 	Metric    string   `json:"metric"`
 	Objects   []uint16 `json:"objects,omitempty"`
-	Detail    []uint16 `json:"detail,omitempty"`
 	Fixed     bool     `json:"fixed"`
 	Available bool     `json:"available"`
 	Required  bool     `json:"required"`
@@ -32,27 +32,36 @@ type V2Object struct {
 }
 type v2Binding struct{ source, field, kind string }
 
-var v2Bindings = map[string]v2Binding{
-	"cpu.usage": {"cpu", "usage_active", ""}, "memory.usage": {"mem", "used_percent", ""}, "system.uptime": {"system", "uptime", ""},
-	"cpu.load1": {"system", "load1", ""}, "cpu.load5": {"system", "load5", ""}, "cpu.load15": {"system", "load15", ""},
-	"cpu.temperature": {"darwin_cpu", "temperature_celsius", ""}, "core.usage": {"cpu", "usage_active", "core"},
-	"memory.used": {"mem", "used", ""}, "memory.app": {"darwin_memory", "app_bytes", ""}, "memory.wired": {"darwin_memory", "wired_bytes", ""}, "memory.compressed": {"darwin_memory", "compressed_bytes", ""},
-	"memory.swap_total": {"swap", "total", ""}, "memory.swap_used": {"swap", "used", ""}, "memory.pressure": {"darwin_memory", "pressure_level", ""},
-	"gpu.usage": {"darwin_gpu", "usage_percent", "gpu"}, "gpu.temperature": {"darwin_gpu", "temperature_celsius", "gpu"},
-	"drive.read_rate": {"diskio", "read_bytes_per_second", "drive"}, "drive.write_rate": {"diskio", "write_bytes_per_second", "drive"}, "drive.used": {"darwin_disk_usage", "used", "drive"},
-	"drive.smart_health": {"darwin_disk", "smart_healthy", "drive"}, "drive.smart_attribute": {"darwin_disk", "", "drive"},
-	"interface.upload_rate": {"net", "upload_bytes_per_second", "interface"}, "interface.download_rate": {"net", "download_bytes_per_second", "interface"},
-	"interface.up": {"darwin_network", "connected", "interface"}, "interface.ipv4": {"darwin_network", "connected", "interface"}, "network.public_ipv4": {"darwin_public_ip", "present", ""},
-	"battery.level": {"darwin_battery", "charge_percent", "battery"}, "battery.charging": {"darwin_battery", "charging", "battery"}, "fan.rpm": {"darwin_fan", "speed_rpm", "fan"},
+// Native-backed bindings resolve to this platform's source IDs. A missing role
+// (e.g. macOS memory breakdown on Windows) binds to "" and stays unavailable.
+var v2Bindings = buildV2Bindings()
+
+func buildV2Bindings() map[string]v2Binding {
+	return map[string]v2Binding{
+		"cpu.usage": {"cpu", "usage_active", ""}, "memory.usage": {"mem", "used_percent", ""}, "system.uptime": {"system", "uptime", ""},
+		"cpu.load1": {nativeLoadSource(), "load1", ""}, "cpu.load5": {nativeLoadSource(), "load5", ""}, "cpu.load15": {nativeLoadSource(), "load15", ""},
+		"cpu.temperature": {nativeSourceID("cpu"), "temperature_celsius", ""}, "core.usage": {"cpu", "usage_active", "core"},
+		"memory.used": {"mem", "used", ""}, "memory.app": {nativeSourceID("memory"), "app_bytes", ""}, "memory.wired": {nativeSourceID("memory"), "wired_bytes", ""}, "memory.compressed": {nativeSourceID("memory"), "compressed_bytes", ""},
+		"memory.swap_total": {"swap", "total", ""}, "memory.swap_used": {"swap", "used", ""}, "memory.pressure": {nativeSourceID("memory"), "pressure_level", ""},
+		"gpu.usage": {nativeSourceID("gpu"), "usage_percent", "gpu"}, "gpu.temperature": {nativeSourceID("gpu"), "temperature_celsius", "gpu"},
+		"drive.read_rate": {"diskio", "read_bytes_per_second", "drive"}, "drive.write_rate": {"diskio", "write_bytes_per_second", "drive"}, "drive.used": {nativeSourceID("disk_usage"), "used", "drive"},
+		"drive.smart_health": {nativeSourceID("disk"), "smart_healthy", "drive"},
+		"interface.upload_rate": {"net", "upload_bytes_per_second", "interface"}, "interface.download_rate": {"net", "download_bytes_per_second", "interface"},
+		"interface.up": {nativeSourceID("network"), "connected", "interface"}, "interface.ipv4": {nativeSourceID("network"), "connected", "interface"}, "network.public_ipv4": {nativeSourceID("public_ip"), "present", ""},
+		"battery.level": {nativeSourceID("battery"), "charge_percent", "battery"}, "battery.charging": {nativeSourceID("battery"), "charging", "battery"},
+	}
 }
+
 var v2Static = map[string]string{
 	"cpu.model": "", "cpu.physical_cores": "", "cpu.logical_cores": "", "cpu.performance_cores": "", "cpu.efficiency_cores": "", "memory.total": "", "system.os": "", "system.product": "",
 	"drive.model": "drive", "drive.total": "drive", "interface.medium": "interface",
 }
-var smartFields = []string{"smart_percent_used", "smart_available_spare_percent", "smart_spare_threshold_percent", "smart_media_errors", "smart_power_on_hours", "smart_unsafe_shutdowns"}
 
 type v2State struct {
-	IDs       map[string]uint16 `json:"ids"`
+	IDs map[string]uint16 `json:"ids"`
+	// Names holds GUI display names (GPU/disk model) keyed like IDs. Object
+	// keys stay stable device identifiers.
+	Names     map[string]string `json:"names,omitempty"`
 	Next      uint32            `json:"next"`
 	Endpoint  string            `json:"endpoint"`
 	Profile   *v2.Profile       `json:"profile,omitempty"`
@@ -135,8 +144,6 @@ func objectKey(kind string, m Metric) string {
 		key = m.Tags["interface"]
 	case "battery":
 		key = "0"
-	case "fan":
-		key = m.Tags["fan"]
 	}
 	if key == "" {
 		return ""
@@ -144,10 +151,23 @@ func objectKey(kind string, m Metric) string {
 	return kind + ":" + key
 }
 func (s *v2State) object(kind string, m Metric) uint16 { return s.IDs[objectKey(kind, m)] }
+func objectDisplayName(kind string, m Metric) string {
+	switch kind {
+	case "gpu", "drive":
+		return strings.TrimSpace(m.Tags["model"])
+	}
+	return ""
+}
 func (s *v2State) allocate(kind string, m Metric) (uint16, error) {
 	key := objectKey(kind, m)
 	if key == "" {
 		return 0, errors.New("invalid_v2_object")
+	}
+	if name := objectDisplayName(kind, m); name != "" {
+		if s.Names == nil {
+			s.Names = map[string]string{}
+		}
+		s.Names[key] = name
 	}
 	if id := s.IDs[key]; id != 0 {
 		return id, nil

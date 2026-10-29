@@ -1,7 +1,7 @@
 /** Mirror of the Go uploadv2 wire contract (client/internal/collector/uploadv2).
  * uint64 fields marked `,string` on the Go side arrive as decimal strings. */
 
-export type UploadSelection = { metric: string; objects?: number[]; detail?: number[] };
+export type UploadSelection = { metric: string; objects?: number[] };
 export interface UploadConfig { enabled: boolean; interval_seconds: number; optional: UploadSelection[] }
 
 export interface Profile { version: number; interval_seconds: number; enabled: UploadSelection[]; inventory: Inventory }
@@ -16,11 +16,10 @@ export interface OSInfo { family: string; name: string; version: string; build?:
 export interface CPUInfo { model?: string; physical_cores?: number; logical_cores?: number; performance_cores?: number; efficiency_cores?: number }
 export interface ObjectInfo { id: number }
 export interface CoreInfo { id: number; index: number; kind?: string }
-export interface DriveInfo { id: number; model?: string; total?: string; smart?: SMARTAttributeInfo[] }
+export interface DriveInfo { id: number; model?: string; total?: string }
 export interface VolumeInfo { id: number; drives?: number[]; filesystem?: string; total?: string }
 export interface InterfaceInfo { id: number; medium?: string }
 export interface FanInfo { id: number; scope: string; gpu?: number }
-export interface SMARTAttributeInfo { id: number; key: string; unit: string; scale10: number; source: string }
 
 export interface SampleBatch { r: number; id: string; s: Sample[] }
 export interface Sample {
@@ -36,7 +35,7 @@ export interface MemorySample { u?: string; a?: string; w?: string; c?: string; 
 export interface CoreSample { i: number; u?: number }
 export interface GPUSample { i: number; u?: number; t?: number }
 export interface DriveSample { i: number; u?: string; r?: string; w?: string; sm?: SMARTSample }
-export interface SMARTSample { t: number; h?: boolean; v?: Record<string, string> }
+export interface SMARTSample { t: number; h?: boolean }
 export interface VolumeSample { i: number; u?: string }
 export interface InterfaceSample { i: number; up?: boolean; tx?: string; rx?: string; ip?: string[] }
 export interface IPv4Observation { t: number; v: string }

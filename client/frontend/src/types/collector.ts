@@ -4,10 +4,10 @@ import type { Sample } from "./uploadv2.js";
 export type Tags = Record<string, string>;
 export type CapabilityState = "available" | "partial" | "missing_dependency" | "permission_required" | "unsupported";
 export interface CollectorSelection { id: string; objects?: Tags[] }
-export interface CollectorUploadSelection { metric: string; objects?: number[]; detail?: number[] }
+export interface CollectorUploadSelection { metric: string; objects?: number[] }
 export interface CollectorUploadConfig { enabled: boolean; interval_seconds?: number; optional: CollectorUploadSelection[] }
 export interface CollectorV2Metric {
-  metric: string; objects?: number[]; detail?: number[];
+  metric: string; objects?: number[];
   fixed: boolean; available: boolean; required: boolean; reason?: string;
 }
 export interface CollectorV2Capabilities {
@@ -26,6 +26,7 @@ export interface CollectorCapabilities {
     id: string; collector: "core" | "native"; state: CapabilityState; reason?: string; metrics: CollectorMetric[];
   }> }>;
   v2?: CollectorV2Capabilities;
+  hardware_monitor?: { backend: string; state: "missing_dependency" | "permission_required"; code?: string; message?: string };
 }
 export interface CollectorBatch {
   metrics: Array<{ name: string; tags: Tags; fields: Record<string, number>; exact?: Record<string, string>; timestamp: number }>;

@@ -4,3 +4,9 @@
 /frontend/dist/
 /frontend/dist-web/
 /internal/guiassets/assets/
+/monitor-agent.exe
+/monitor-client.exe
+*.syso
+/tools/lhm-helper/bin/
+/tools/lhm-helper/obj/
+/packaging/windows/resources/version.h

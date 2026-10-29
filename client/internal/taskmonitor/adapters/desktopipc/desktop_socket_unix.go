@@ -3,11 +3,21 @@
 package desktopipc
 
 import (
+	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 )
+
+func desktopEndpoint(home string) (string, string) {
+	if !filepath.IsAbs(home) {
+		return "", "desktop_home_must_be_absolute"
+	}
+	return filepath.Join(home, "ipc", "ipc.sock"), ""
+}
 
 func validateDesktopSocket(path string) error {
 	file, err := os.Lstat(path)
@@ -24,4 +34,16 @@ func validateDesktopSocket(path string) error {
 		return errors.New("desktop_socket_permission_denied")
 	}
 	return nil
+}
+
+func connectDesktop(ctx context.Context, path string) (net.Conn, error) {
+	if err := validateDesktopSocket(path); err != nil {
+		return nil, err
+	}
+	dialer := net.Dialer{Timeout: 3 * time.Second}
+	conn, err := dialer.DialContext(ctx, "unix", path)
+	if err != nil {
+		return nil, errors.New("desktop_socket_unavailable")
+	}
+	return conn, nil
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { companionService } from "../services/bridge.js";
 import type { GitHubSession } from "../types/companion.js";
 import { cloneSettings, refreshCompanion, saveSettings, store, toast } from "../store.js";
@@ -105,10 +105,28 @@ function fmtClock(seconds?: number | null): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+// The snapshot carries the position at position_observed_at; advance it locally
+// so the text tracks playback between the 5s companion polls.
+const nowTick = ref(Date.now());
+let clockTimer: ReturnType<typeof setInterval> | undefined;
+const musicPosition = computed(() => {
+  const current = music.value?.current;
+  if (!current || current.position === null || current.position === undefined) return null;
+  if (current.state !== "playing" || !current.position_observed_at) return current.position;
+  const observed = Date.parse(current.position_observed_at);
+  if (!Number.isFinite(observed)) return current.position;
+  const value = current.position + Math.max(0, (nowTick.value - observed) / 1000);
+  return current.duration != null ? Math.min(value, current.duration) : value;
+});
+
+onMounted(() => { clockTimer = setInterval(() => { nowTick.value = Date.now(); }, 1000); });
 watch(() => store.page, page => {
   if (page !== "companion") { clearTimeout(pollTimer); session.value = null; }
 });
-onUnmounted(() => clearTimeout(pollTimer));
+onUnmounted(() => {
+  clearTimeout(pollTimer);
+  clearInterval(clockTimer);
+});
 </script>
 
 <template>
@@ -191,7 +209,7 @@ onUnmounted(() => clearTimeout(pollTimer));
             <div><strong>{{ music.current.title || "未知曲目" }}</strong><small>{{ music.current.artist || "未知艺术家" }}</small></div>
           </div>
           <div class="music-source">{{ music.current.source || music.adapter }}</div>
-          <div class="music-times"><span>{{ fmtClock(music.current.position) }}</span><span>{{ fmtClock(music.current.duration) }}</span></div>
+          <div class="music-times"><span>{{ fmtClock(musicPosition) }}</span><span>{{ fmtClock(music.current.duration) }}</span></div>
         </template>
         <template v-else>
           <div class="source-empty compact">

@@ -17,12 +17,13 @@ type Collector interface {
 }
 type source struct{ id, category, collector string }
 
-var sources = []source{
+var coreSources = []source{
 	{"cpu", "cpu", "core"}, {"mem", "memory", "core"}, {"swap", "memory", "core"},
 	{"disk", "disk", "core"}, {"diskio", "disk", "core"}, {"net", "network", "core"},
 	{"system", "system", "core"},
-	{"darwin_cpu", "cpu", "native"}, {"darwin_memory", "memory", "native"}, {"darwin_gpu", "gpu", "native"}, {"darwin_disk", "disk", "native"}, {"darwin_disk_usage", "disk", "native"}, {"darwin_network", "network", "native"}, {"darwin_battery", "battery", "native"}, {"darwin_fan", "cpu", "native"}, {"darwin_public_ip", "network", "native"}, {"darwin_system", "system", "native"},
 }
+
+var sources = append(append([]source{}, coreSources...), nativeSources...)
 
 func allSources() []string {
 	out := []string{}
@@ -44,10 +45,13 @@ func selectedSources(c Config) []string {
 func gather(ctx context.Context, core, native Collector, ids []string) (Batch, map[string]string) {
 	out := Batch{Metrics: []Metric{}}
 	reasons := map[string]string{}
+	// Native last-used ordering: collect platform sensors first so the cheap
+	// core batch (which carries the required CPU/memory/uptime values) is as
+	// fresh as possible when the whole gather takes a while.
 	for _, provider := range []struct {
 		name      string
 		collector Collector
-	}{{"core", core}, {"native", native}} {
+	}{{"native", native}, {"core", core}} {
 		selected := []string{}
 		for _, src := range sources {
 			if src.collector == provider.name && slices.Contains(ids, src.id) {
@@ -84,8 +88,14 @@ func capabilitiesFrom(batch Batch, reasons map[string]string) Capabilities {
 			if c.Reason != "" {
 				c.State = "partial"
 			}
-		} else if c.Reason == "permission_required" {
+		} else if c.Reason == "permission_required" || c.Reason == "lhm_permission_required" {
 			c.State = "permission_required"
+		} else if c.Reason == "dotnet_framework_472_required" || c.Reason == "lhm_helper_missing" {
+			c.State = "missing_dependency"
+		} else if src.id == nativeSourceID("public_ip") {
+			// Scans never make the external request; selection is the trigger.
+			c.State = "available"
+			c.Reason = "not_probed_until_selected"
 		}
 		for i := range caps.Categories {
 			if caps.Categories[i].ID == src.category {
@@ -93,6 +103,7 @@ func capabilitiesFrom(batch Batch, reasons map[string]string) Capabilities {
 			}
 		}
 	}
+	caps.HardwareMonitor = hardwareMonitorStatus(reasons)
 	return caps
 }
 func gatherReason(err error) string {
@@ -106,7 +117,8 @@ func gatherReason(err error) string {
 }
 
 // NativeCollector is the platform extension point for platform-owned metrics.
-// Platform constructors intentionally return this stub until native adapters exist.
+// Platforms without a native adapter return this stub and report every source
+// as unavailable instead of inventing samples.
 type NativeCollector struct{ Platform string }
 
 func (n *NativeCollector) Gather(ctx context.Context, ids []string) (Batch, map[string]string) {

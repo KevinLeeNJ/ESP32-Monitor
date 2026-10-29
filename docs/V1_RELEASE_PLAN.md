@@ -1,6 +1,6 @@
 # V1 计划
 
-核对日期：2026-10-28。以当前工作区 Client 实现为基线，**V1 尚未达到整体发布条件**。~~删除线~~仅表示对应代码子项已实现，不代表真实三平台、生产 Server 或板端验收完成。剩余事项保留未划线；不再沿用旧“受管 Telegraf、GUI/IPC均未实现”的基线。
+核对日期：2026-10-29。以当前工作区 Client 实现为基线，**V1 尚未达到整体发布条件**。~~删除线~~仅表示对应代码子项已实现，不代表真实三平台、生产 Server 或板端验收完成。剩余事项保留未划线；不再沿用旧“受管 Telegraf、GUI/IPC均未实现”的基线。
 
 当前事实详见 [Client整体能力表](CLIENT_CAPABILITIES.md)；接口只在 [Server–Client v2](SERVER_CLIENT_PROTOCOL_V2.md)、[ESP32–上位机协议](ESP32_COMPANION_PROTOCOL_V1.md) 维护；固件实现与目标见 [固件计划能力表](FIRMWARE_CAPABILITIES_PLAN.md)。本计划不另立冲突的路由、字段或指标清单。
 
@@ -22,14 +22,14 @@
 
 | 模块 | 已实现子项 | 仍需完成 / 退出条件 |
 | --- | --- | --- |
-| Agent/采集 | ~~Core/Native、七类能力、事务配置、固定缓存、v2档案差异与队列~~ | Windows/Linux Native缺口、真实权限/对象矩阵、生命周期恢复；不再安排Telegraf托管 |
-| GUI/IPC | ~~Wails宿主、Vue七页、绑定服务、Supervisor、Unix同UID认证IPC~~ | Windows IPC、三平台真实WebView/首次使用、关窗/唤出/退出与崩溃恢复 |
+| Agent/采集 | ~~Core/Native、七类能力、事务配置、固定缓存、v2档案差异与队列~~；Windows Native 采集与平台化 v2 映射已完成本机扫描/单测（含 CPU 负载估算、LHM 温度、WDDM GPU 温度） | Linux Native缺口、Windows 跨硬件矩阵（电池/温度/多GPU）、真实权限/对象矩阵、生命周期恢复；风扇转速已移除；不再安排Telegraf托管 |
+| GUI/IPC | ~~Wails宿主、Vue七页、绑定服务、Supervisor、Unix同UID认证IPC、Windows Named Pipe IPC、Windows构建脚本与绿色包~~ | 三平台真实WebView/首次使用、托盘点击/登录自启验收、安装器/签名、关窗/唤出/退出与崩溃恢复 |
 | Server连接 | ~~Client验证码换Token、私有文件保存、v2上传；本地模拟器~~ | 正式Server注册/管理、SQLite版本化Profile/样本/幂等、Dashboard与摘要投影 |
 | GitHub | ~~Device Flow、日历、缓存、应用私有凭据文件、GUI绑定~~ | 三平台授权/过期/跨进程复用和真实GUI验证、发布OAuth配置 |
-| Codex | ~~额度读取、任务Adapter/实验desktop IPC、统一状态~~ | 账号关联、任务全状态/重连、Windows任务来源、用户明确启用与兼容矩阵 |
-| 播放 | ~~统一playing/not_playing、MediaRemote/GSMTC/MPRIS代码与快照~~ | 三平台本地来源变化、权限、系统升级/分发兼容与恢复 |
+| Codex | ~~额度读取、任务Adapter/实验desktop IPC、统一状态~~ | 账号关联、任务全状态/重连、Windows任务原生证据、用户明确启用与兼容矩阵 |
+| 播放 | ~~统一playing/not_playing、MediaRemote/GSMTC/MPRIS代码与快照~~；Windows GSMTC 适配器健康/无源路径已本机冒烟 | 三平台本地来源变化、真实播放元数据/暂停/切歌、权限、系统升级/分发兼容与恢复 |
 | Companion | ~~Protobuf wire v2、发现/双确认配对、MQTT、串口认证/加密、代理、模拟Monitor~~ | 物理串口、首次配对完整交互、真实固件、休眠/DHCP/故障恢复矩阵 |
-| 启动与诊断 | ~~设置、Agent重启/清理、脱敏报告与页面~~ | 真正登录自启、托盘/重新唤出、系统服务、诊断导出、升级/卸载 |
+| 启动与诊断 | ~~设置、Agent重启/清理、脱敏报告与页面~~；Windows关窗后台已本机验证 | 三平台真正登录自启、托盘点击/重新唤出完整验收、系统服务、诊断导出、升级/卸载 |
 | 固件显示 | ~~共享第一页、activity演示页/切页、I1差分、HPM/LPM、刷新/调度基础~~ | 第二页真实数据与空/错/过期态、模式控制、接收器与电源闭环 |
 | 正式Server | ~~v1摄取、SQLite、摘要、Token/TUI、探针~~ | 下节全部生产管理与v2工作；旧Server不能直接接当前Client |
 
@@ -40,7 +40,7 @@
 ### 3.1 对齐当前Client
 
 - 实现6位数字码、10分钟、单次兑换的注册流程，按v2协议下发设备Token，支持重新发码、令牌轮换与删除撤销。废弃旧计划中另一套5分钟配对码/`clients/enroll`作为当前Client默认注册路线。
-- 实现Profile GET/PUT/PATCH、ETag条件更新、单调revision、SQLite原子提交与恢复；支持当前全部语义ID/对象/SMART细项，不把任意平台标签写入协议。
+- 实现Profile GET/PUT/PATCH、ETag条件更新、单调revision、SQLite原子提交与恢复；支持当前全部语义ID/对象，不把任意平台标签写入协议。
 - 样本严格校验、批次幂等、时间窗口、乱序latest、历史关联原revision、停用投影立即隐藏、旧补传不续在线；每项按协议验收。
 - 解决物理盘新口径与既有挂载点DISK投影的迁移；为代表磁盘建立明确选择。保留ESP32既有四卡/4096字节摘要结构。
 - 既有外部Telegraf v1入口可继续兼容；同一设备的v1/v2写入模式必须明确，迁移时防止两种latest混合。当前Client不加静默v1降级。
@@ -71,7 +71,7 @@ SQLite迁移需版本管理、失败保全与可恢复备份；单实例WAL，�
 | M0 支持矩阵 | OS/架构、WebView依赖、Codex/播放权限、USB/日志/供电、功耗基线 | 每个必选平台/来源有真实证据或明确缺口；不把交叉构建当原生验证 |
 | M1 契约对齐 | ~~当前v2 DTO/编码、Companion protobuf schema、GUI服务/Unix IPC~~；生产Server与板端对齐 | 字段/版本/来源/时效无冲突，固定向量与错误矩阵通过 |
 | M2 Server | 上节v2+管理/迁移/备份 | 当前Client注册→Profile→样本→SQLite→Dashboard/摘要闭环；故障后可恢复 |
-| M3 Client产品化 | ~~GUI/采集与注册代码~~；Windows IPC、Native矩阵、自启、关窗/托盘、诊断 | 三平台干净安装和真实操作；权限失败/崩溃/重新绑定均可定位 |
+| M3 Client产品化 | ~~GUI/采集与注册代码~~；Windows IPC、Windows Native矩阵、自启、关窗/托盘、诊断 | 三平台干净安装和真实操作；Windows 跨硬件电池/温度/多GPU矩阵；权限失败/崩溃/重新绑定均可定位 |
 | M4 上位机 | ~~提供者/传输/代理与模拟端~~；账号关联、任务/播放全状态、物理链路 | LAN/串口配对、恢复/撤销、休眠唤醒、重连/版本不兼容实测 |
 | M5 固件 | 模式管理、协议接收、真实第二页、数据/电源切换 | 模拟器+板端日志+屏幕观察+电池接口功耗证据齐备 |
 | M6 健康与运维 | 故障定位、审计、备份、迁移/升级/卸载、诊断 | 断网/拔线/磁盘故障等不误报完成或在线 |

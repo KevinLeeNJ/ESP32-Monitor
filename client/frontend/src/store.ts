@@ -68,13 +68,8 @@ export async function refreshStatus() {
 }
 
 export async function refreshCompanion() {
-  // Skip polling a disabled provider; the Agent rejects it with an error and
-  // Wails logs every failed binding call, so don't ask when it's off.
-  if (store.settings && !store.settings.companion.enabled) {
-    store.companion = null;
-    store.companionError = "";
-    return;
-  }
+  // GitHub, Codex and system playback run independently of the ESP32 companion
+  // service; the Agent answers with disabled sections for providers that are off.
   try {
     store.companion = await companionService.snapshot();
     store.companionError = "";
@@ -102,6 +97,7 @@ export async function saveSettings(settings: GuiSettings) {
   try {
     store.settings = await appService.saveSettings(settings);
     await refreshStatus();
+    void collector.refresh();
   } finally {
     store.restarting = false;
   }

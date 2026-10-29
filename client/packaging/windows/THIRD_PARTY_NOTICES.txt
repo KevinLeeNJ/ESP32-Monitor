@@ -1,0 +1,40 @@
+ESP32 Monitor — Third-Party Notices
+===================================
+
+This package includes the following third-party components. Full license texts
+are available at the project URLs below.
+
+1. Wails v3 (MIT)
+   https://github.com/wailsapp/wails
+   Copyright (c) 2018-Present Lea Anthony
+
+2. gopsutil v4 (BSD-3-Clause)
+   https://github.com/shirou/gopsutil
+   Copyright (c) 2014, WAKAYAMA Shirou
+
+3. LibreHardwareMonitorLib 0.9.4 (MPL-2.0)
+   https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
+   Used by helpers/lhm-helper for read-only CPU/GPU/storage sensors.
+   Source for the MPL-2.0 component is available at the URL above.
+
+4. HidSharp 2.1.0 (Apache-2.0)
+   https://github.com/ffhighwind/HidSharp
+
+5. Microsoft go-winio (MIT)
+   https://github.com/microsoft/go-winio
+
+6. mochi-mqtt server v2 (MIT)
+   https://github.com/mochi-mqtt/server
+
+7. go.bug.st/serial (BSD-3-Clause)
+   https://github.com/bugst/go-serial
+
+8. Google Protobuf for Go (BSD-3-Clause)
+   https://github.com/protocolbuffers/protobuf-go
+
+9. Microsoft Edge WebView2 Runtime is a prerequisite installed separately and
+   is not redistributed with this package.
+
+The ESP32 Monitor project itself does not currently declare a distribution
+license in its source tree. This file does not grant additional rights to the
+project source; consult the repository owner before redistribution.

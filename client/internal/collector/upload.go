@@ -83,7 +83,9 @@ func (m *Manager) deliver() {
 	defer m.delivery.Unlock()
 	m.mu.Lock()
 	m.trimQueueLocked(time.Now())
-	if len(m.queue) == 0 || time.Now().Before(m.queue[0].next) || m.snapshot.UploadError == "upload_auth_required" {
+	// A 401/403 only delays delivery: the token file is re-read on every
+	// request, so a re-registration recovers on the next attempt.
+	if len(m.queue) == 0 || time.Now().Before(m.queue[0].next) {
 		m.mu.Unlock()
 		return
 	}
@@ -112,6 +114,13 @@ func (m *Manager) finishDelivery(q queued, status int, headers http.Header) {
 		m.snapshot.UploadError = ""
 		m.queue = m.queue[1:]
 	case status == 401 || status == 403:
+		// Retryable: the credential file is re-read per request, so a
+		// re-registered token is picked up without an agent restart. The cap
+		// keeps re-registration recovery under ~16s; healthy delivery runs at
+		// the sample interval anyway.
+		m.queue[0].attempt++
+		attempt := min(m.queue[0].attempt, 4)
+		m.queue[0].next = time.Now().Add(time.Duration(1<<attempt)*time.Second + time.Duration(rand.IntN(500))*time.Millisecond)
 		m.snapshot.UploadError = "upload_auth_required"
 	case status == 0 || status == 429 || status >= 500:
 		m.queue[0].attempt++

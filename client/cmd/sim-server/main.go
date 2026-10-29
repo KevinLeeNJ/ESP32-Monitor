@@ -3,7 +3,9 @@
 // client/docs/COLLECTOR_UPLOAD_V2.md (profile GET/PUT/PATCH with ETag
 // conditions, sample batches with idempotency and validation) plus the WebUI
 // device registration flow: add a device, receive a six-digit code, and let the
-// Client exchange it for a bearer token. With -esp32-listen it also runs the LAN
+// Client exchange it for a bearer token. The WebUI also shows the metric
+// batches uploaded by the Client under the 指标包 tab (/api/batches feed). With
+// -esp32-listen it also runs the LAN
 // pairing behavior of cmd/sim-esp32 in the same process. Every request and
 // protocol event is logged to stdout as JSON lines.
 package main

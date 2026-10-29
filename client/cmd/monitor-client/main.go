@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync"
 	"syscall"
 
@@ -48,10 +49,15 @@ func (t *trayController) Apply(settings guibridge.Settings) {
 		return
 	}
 	tray := t.app.SystemTray.New()
-	tray.SetTemplateIcon(guibridge.MenuBarIcon())
+	if runtime.GOOS == "windows" {
+		tray.SetIcon(guibridge.TrayAppIcon())
+		tray.OnClick(t.showWindow)
+	} else {
+		tray.SetTemplateIcon(guibridge.MenuBarIcon())
+	}
 	tray.SetTooltip("ESP32 Monitor")
 	menu := application.NewMenu()
-	menu.Add("打开控制台").OnClick(func(*application.Context) { t.showWindow() })
+	menu.Add("打开主窗口").OnClick(func(*application.Context) { t.showWindow() })
 	menu.AddSeparator()
 	menu.Add("退出 ESP32 Monitor").OnClick(func(*application.Context) { t.app.Quit() })
 	tray.SetMenu(menu)
@@ -66,6 +72,9 @@ func (t *trayController) showWindow() {
 func main() {
 	loginItem := flag.Bool("login-item", false, "start from the login item without showing the window")
 	flag.Parse()
+	if err := ensureWebView2(); err != nil {
+		log.Fatal(err)
+	}
 	if err := run(*loginItem); err != nil {
 		log.Fatal(err)
 	}
@@ -93,6 +102,7 @@ func run(loginItem bool) error {
 		macOptions.ActivationPolicy = application.ActivationPolicyAccessory
 	}
 	app := application.New(application.Options{Name: "ESP32-Monitor",
+		Icon: guibridge.AppIcon(),
 		Services: []application.Service{
 			application.NewService(appService),
 			application.NewService(guibridge.NewCollectorService(supervisor)),
@@ -115,6 +125,12 @@ func run(loginItem bool) error {
 		URL:             "/",
 		Hidden:          loginItem,
 		DevToolsEnabled: os.Getenv("MONITOR_CLIENT_DEVTOOLS") == "1",
+	})
+	window.RegisterHook(events.Common.WindowClosing, func(event *application.WindowEvent) {
+		if supervisor.CurrentSettings().Launch.CloseToBackground {
+			event.Cancel()
+			window.Hide()
+		}
 	})
 	window.OnWindowEvent(events.Common.WindowClosing, func(*application.WindowEvent) {
 		if !supervisor.CurrentSettings().Launch.CloseToBackground {

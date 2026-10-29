@@ -25,7 +25,13 @@ func secureStoreDirectory(path string) error {
 		return e
 	}
 	owner, _, e := current.Owner()
-	if e != nil || !owner.Equals(user.User.Sid) {
+	if e != nil {
+		return e
+	}
+	// An elevated Agent creates the vault with the Administrators group as
+	// owner. The DACL below still limits access to this user and SYSTEM.
+	administrators, sidErr := windows.StringToSid("S-1-5-32-544")
+	if !owner.Equals(user.User.Sid) && (sidErr != nil || !owner.Equals(administrators)) {
 		return errors.New("credential_directory_owner_mismatch")
 	}
 	sd, e := windows.SecurityDescriptorFromString("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;" + user.User.Sid.String() + ")")

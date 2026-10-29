@@ -21,7 +21,7 @@ func linuxAutostartPath() (string, error) {
 	return filepath.Join(home, ".config", "autostart", "esp32-monitor-client.desktop"), nil
 }
 
-func setLaunchAtLogin(enabled bool) error {
+func setLaunchAtLogin(enabled bool, _ func(bool) error) error {
 	path, err := linuxAutostartPath()
 	if err != nil {
 		return err

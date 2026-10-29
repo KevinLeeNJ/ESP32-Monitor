@@ -44,11 +44,11 @@ Unix 下应用私有目录为 `0700`、Token 文件为 `0600`；Agent 每次请�
 
 周期范围为 5–60 秒，默认 10 秒。`upload.interval_seconds` 归一化后也作为采集周期。`upload.enabled=false` 停止样本上传；`optional=[]` 仍上传三项必选值，以及可获取的内存总量和已用量。
 
-选择对象：`{"metric":"drive.read_rate","objects":[3]}`；SMART 细项另带 `detail`。对象字段必须列非零 uint16 ID，空数组不代表所有对象；非对象字段不得带对象。逐核 CPU 例外：开启 `core.usage` 时覆盖全部可获取逻辑核，不支持只上传部分核。必选项不写入 optional；未知、重复、不可用的选择会报错。
+选择对象：`{"metric":"drive.read_rate","objects":[3]}`。对象字段必须列非零 uint16 ID，空数组不代表所有对象；非对象字段不得带对象。逐核 CPU 例外：开启 `core.usage` 时覆盖全部可获取逻辑核，不支持只上传部分核。必选项不写入 optional；未知、重复、不可用的选择会报错。
 
-Client 按能力展开同组字段：CPU 型号/核数、负载、内存构成、Swap、磁盘信息、磁盘读写、网络连接、网络速率、IP、电池、系统信息。只加入本机可获取的字段；电池电量和充电状态成对。网络速率/IP 依赖同一网卡连接组，GPU 温度依赖同一 GPU 占用率，磁盘读写/SMART 依赖同一磁盘信息组。选择范围最多 256 项，展开后的 `(metric, object, detail)` 最多 1024 项。
+Client 按能力展开同组字段：CPU 型号/核数、负载、内存构成、Swap、磁盘信息、磁盘读写、网络连接、网络速率、IP、电池、系统信息。只加入本机可获取的字段；电池电量和充电状态成对。网络速率/IP 依赖同一网卡连接组，GPU 温度依赖同一 GPU 占用率，磁盘读写/SMART 健康状态依赖同一磁盘信息组。选择范围最多 256 项，展开后的 `(metric, object)` 最多 1024 项。
 
-当前廉价本地预览会采集未选上传的指标；**上传开关不等于本机完全停止读取**。SMART 与公网 IP 单独按选择启用；公网 IP 能力扫描不发起外部查询。旧 `volume.*` 选择在配置恢复/应用时移除，不推断成物理磁盘选择。分组和依赖以 [v2_config.go](../client/internal/collector/v2_config.go) 为准。
+GUI 在线轮询快照时，本地预览会采集所有可获取指标（含 SMART 健康状态与缓存公网 IP），未选上传项只用于展示；GUI 停止轮询超过 15 秒后只采集已选上传项与必选项。**上传开关不等于本机完全停止读取**。公网 IP 能力扫描不发起外部查询。旧 `volume.*` 选择在配置恢复/应用时移除，不推断成物理磁盘选择。分组和依赖以 [v2_config.go](../client/internal/collector/v2_config.go) 为准。
 
 ## 4. 设备档案 Profile
 
@@ -60,7 +60,7 @@ Client 按能力展开同组字段：CPU 型号/核数、负载、内存构成�
 | --- | --- |
 | `version` | uint8，固定 2 |
 | `interval_seconds` | uint16，5–60 |
-| `enabled` | 完整可选上传选择数组；元素为 `metric`、可选 `objects`、可选 `detail` |
+| `enabled` | 完整可选上传选择数组；元素为 `metric`、可选 `objects` |
 | `inventory` | 已选固定信息，以及动态指标所需的最小对象目录 |
 
 Inventory 字段全部可省略：
@@ -78,7 +78,7 @@ Inventory 字段全部可省略：
 | `interfaces[]` | `id`，可选 `medium`（wifi/ethernet/other） |
 | `fans[]` | `id`、`scope`（cpu/gpu/system），可选所属 `gpu` ID |
 
-`volumes` 类型仅为历史状态解码兼容保留，当前 Client 不生成卷档案或卷样本。风扇无法确认归属时标为 system，不猜测 CPU/GPU 归属。
+`volumes` 类型仅为历史状态解码兼容保留，当前 Client 不生成卷档案或卷样本。`fans[]`/`fan.rpm` 同样仅为协议兼容保留：2026-10-29 起所有平台已移除风扇转速采集，Client 不再生成风扇档案或样本。
 
 对象 ID 在本机状态目录持久化、非零、不复用；当前按采集源对象键关联（如设备名/接口名），不能承诺任意设备重命名后仍能识别为同一硬件。ID 耗尽时报错；不要用另一设备身份共享状态目录。原始序列号、MAC、接口名等本机对象标签不作为远端通用 tags 上传。
 
@@ -113,25 +113,24 @@ Inventory 字段全部可省略：
 | `drive.used` | `disk[].u` | 物理磁盘已用字节，uint64 字符串 |
 | `drive.read_rate` / `drive.write_rate` | `disk[].r/w` | B/s，uint64 字符串；对象键 `i` |
 | `drive.smart_health` | `disk[].sm.{t,h}` | 实际读取 Unix 秒、健康 bool；false 表示已知故障 |
-| `drive.smart_attribute` | `disk[].sm.v` | 细项 ID 字符串 → 十进制整数文本，单位由档案声明 |
 | `interface.medium` | Inventory `interfaces[].medium` | 固定介质类型 |
 | `interface.up` | `net[].up` | bool；对象键 `i` |
 | `interface.upload_rate` / `interface.download_rate` | `net[].tx/rx` | B/s，uint64 字符串 |
 | `interface.ipv4` | `net[].ip` | IPv4 字符串数组，`[]` 表示确认无地址 |
 | `network.public_ipv4` | `ip.{t,v}` | 实际查询 Unix 秒、有效公网 IPv4 |
 | `battery.level` / `battery.charging` | `bat[{i,l,c}]` | 百分比 ×100、bool，两值同时存在且非 null |
-| `fan.rpm` | `fan[{i,r}]` | uint32 RPM |
+| `fan.rpm` | `fan[{i,r}]` | uint32 RPM；协议兼容保留，当前 Client 已不产生 |
 | `system.os` / `system.product` | Inventory `os/product` | 固定信息 |
 
-当前 SMART 可选择细项由 Client 的 `smartFields` 定义，不能把类型中可容纳的 128 个细项理解为当前已实现 128 项采集。
+SMART 所有平台只探测并上传健康状态，不支持细项或 `detail` 选择。
 
-值缺失时省略可选字段，不能发送 null 或虚构 0。真实 `0`、`false`、空 IP 列表必须保留。三项必选任一不可获取时整轮不生成上传样本。空组、只有 ID 的对象不发送。百分比/温度/负载编码前取整并检查范围；字节、B/s、SMART 使用精确文本避免浮点精度丢失。
+值缺失时省略可选字段，不能发送 null 或虚构 0。真实 `0`、`false`、空 IP 列表必须保留。三项必选任一不可获取时整轮不生成上传样本。空组、只有 ID 的对象不发送。百分比/温度/负载编码前取整并检查范围；字节与 B/s 使用精确文本避免浮点精度丢失。
 
-速率依赖两个有效计数器采样，首次无基线、计数器倒退或间隔过长时省略；成对读写/上下行按有效性处理。内存百分比沿用平台 used/total 口径，App/Wired/压缩之和不保证等于 used。磁盘已用量当前仅 macOS 可可靠归属的单物理盘 APFS 容器汇总；共享容器不重复计数，跨盘/混合分区/无法归属时省略，不能报 0。不再采集挂载点容量。
+速率依赖两个有效计数器采样，首次无基线、计数器倒退或间隔过长时省略；成对读写/上下行按有效性处理。内存百分比沿用平台 used/total 口径，App/Wired/压缩之和不保证等于 used。磁盘已用量当前由 macOS 可归属的 APFS 容器和 Windows 卷符唯一归属单盘的分区提供；共享容器不重复计数，跨盘/混合分区/无法归属时省略，不能报 0。不再采集挂载点容量。
 
 Client入队时仅在SMART、Used、读速率和写速率均缺失时省略磁盘对象；只有`disk[].u`也会上传，真实0字节仍保留。SMART缓存去重不会清掉同轮已用量，相关HTTP回归测试见 [v2_disk_upload_test.go](../client/internal/collector/v2_disk_upload_test.go)。
 
-SMART 和公网 IPv4 默认缓存 5 分钟，携带真实观测时间，同一观测只入队一次；重试原样保留。不用每轮采集时间伪装缓存刷新。
+SMART 健康状态和公网 IPv4 默认缓存 5 分钟，携带真实观测时间，同一观测只入队一次；重试原样保留。不用每轮采集时间伪装缓存刷新。
 
 ## 6. Profile 同步、条件更新与样本确认
 
@@ -155,7 +154,7 @@ SMART 和公网 IPv4 默认缓存 5 分钟，携带真实观测时间，同一�
 3. Profile 确认后才给样本批次赋 revision、发送样本；没有 Profile 确认不发该配置样本。
 4. 网络失败/条件冲突等待退避，下一次对账重算；不能将本机配置保存成功显示成远端已生效。
 5. Sample 返回 `409 profile_required/profile_outdated` 时清除已确认档案缓存，对账后用新 ID 重新提交该样本。普通重试保持 ID、正文与时间戳不变。
-6. 停用上传时排队同步空 enabled / inventory 档案；离线时远端旧投影不能立即清除。仅档案同步成功不更新 `last_upload_at`。
+6. 每次配置提交（启用、修改、停用上传、Restore 恢复）都排队同步一次 Profile：启用时不再等第一轮样本才让 Server 认识设备。仅档案同步成功不更新 `last_upload_at`；停用时同步空 enabled / inventory 档案，离线时远端旧投影不能立即清除。
 
 状态机没有把内存中的样本队列持久化；Agent 退出可能丢失待发样本。崩溃后可从保存的配置/档案重新对账，不能宣称有持久化 outbox 或无损补传。
 
@@ -164,7 +163,7 @@ SMART 和公网 IPv4 默认缓存 5 分钟，携带真实观测时间，同一�
 | 结果 | 当前 Client 行为 |
 | --- | --- |
 | 2xx | 弹出队列；有样本时更新最近上传时间 |
-| 401/403 | `upload_auth_required`，暂停，需修复凭据/重新应用 |
+| 401/403 | `upload_auth_required`，指数退避重试（上限 16 秒加抖动）；token 文件每次请求重读，重新注册后无需重启 Agent 即可恢复 |
 | 网络失败、429、5xx | 指数退避并加抖动；429 遵守 Retry-After，最长采用 24 小时 |
 | Profile 412 | 按可重试失败处理，下次 GET 重算差异 |
 | Sample 409 档案缺失/过期 | 重新对账 Profile，生成新批次 ID |
@@ -175,8 +174,8 @@ SMART 和公网 IPv4 默认缓存 5 分钟，携带真实观测时间，同一�
 
 以下为正式 Server 的实现/验收要求，**不是当前生产 Server 已具备的能力**：
 
-- Profile、revision、batch 去重及样本原子持久化到 SQLite；revision 设备内递增，无语义变化不增版。PATCH 最多 2048 操作，重建后的 Profile 也限 256 KiB；每类对象最多 256、每盘 SMART 最多 128、展开选择最多 1024。
-- 批次 1–30 轮，先校验全部再提交。验证已选字段、对象、细项与范围，隐式允许 memory.total/used；拒绝未知字段、重复 key/ID、非法 null/整数/IP，不部分接收。
+- Profile、revision、batch 去重及样本原子持久化到 SQLite；revision 设备内递增，无语义变化不增版。PATCH 最多 2048 操作，重建后的 Profile 也限 256 KiB；每类对象最多 256、展开选择最多 1024。
+- 批次 1–30 轮，先校验全部再提交。验证已选字段、对象与范围，隐式允许 memory.total/used；拒绝未知字段、重复 key/ID、非法 null/整数/IP，不部分接收。
 - 以 `(device_id,batch_id)` 保存摘要及成功结果至少 24 小时。同 ID 同正文返回 204，不重复写历史/刷新在线；同 ID 不同正文为 `409 batch_id_conflict`。去重应先于 active revision 检查。
 - 样本时间窗口 `server_now−86400 ≤ t ≤ server_now+30`；未来/过旧分别报告 `timestamp_in_future/timestamp_too_old` 并提供 Server 时间。慢观测不晚于样本时间，有效窗口 15 分钟。
 - 旧 revision 返回 409；未启用字段返回 422。最新值只由更新采样时间替换；相同时间冲突需明确拒绝。历史记录按原 revision 解释。

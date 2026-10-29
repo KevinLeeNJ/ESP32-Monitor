@@ -4,7 +4,6 @@ import (
 	"errors"
 	v2 "esp32-monitor/client/internal/collector/uploadv2"
 	"math"
-	"math/big"
 	"net"
 	"reflect"
 	"slices"
@@ -89,27 +88,11 @@ func (m *Manager) sampleV2(c Config, b Batch) (v2.Sample, error) {
 			if binding.kind == "" && binding.source == "cpu" && v.Tags["cpu"] != "cpu-total" {
 				continue
 			}
-			if strings.HasPrefix(sel.Metric, "drive.smart_") || sel.Metric == "network.public_ipv4" {
+			if sel.Metric == "drive.smart_health" || sel.Metric == "network.public_ipv4" {
 				if v.Timestamp < out.Timestamp-900 || v.Timestamp > out.Timestamp {
 					continue
 				}
 			} else if v.Timestamp < out.Timestamp-3 || v.Timestamp > out.Timestamp {
-				continue
-			}
-			if sel.Metric == "drive.smart_attribute" {
-				dst := sampleDrive(&out, id)
-				if dst.SMART == nil {
-					dst.SMART = &v2.SMARTSample{Timestamp: v.Timestamp}
-				}
-				for _, detail := range sel.Detail {
-					field := smartFields[int(detail)-1]
-					if raw, ok := smartInteger(v, field); ok {
-						if dst.SMART.Values == nil {
-							dst.SMART.Values = map[uint16]string{}
-						}
-						dst.SMART.Values[detail] = raw
-					}
-				}
 				continue
 			}
 			m.fillV2Sample(&out, sel.Metric, v, id)
@@ -120,10 +103,9 @@ func (m *Manager) sampleV2(c Config, b Batch) (v2.Sample, error) {
 }
 
 // previewSampleV2 fills every metric present in the batch so the GUI can show
-// live values for available metrics the user has not selected. Uploaded
-// samples are built by sampleV2 and stay restricted to the user's choices;
-// SMART and public IP only appear here because v2PreviewConfig gathers their
-// sources solely when the user selects them.
+// live values for metrics the user has not selected. Uploaded samples are built
+// by sampleV2 and stay restricted to the user's choices; the public IPv4 source
+// is cached by the platform collector, so previewing it does not query per tick.
 func (m *Manager) previewSampleV2(b Batch) (v2.Sample, error) {
 	out, err := requiredV2Sample(b)
 	if err != nil {
@@ -141,7 +123,7 @@ func (m *Manager) previewSampleV2(b Batch) (v2.Sample, error) {
 				continue
 			}
 			window := int64(3)
-			if key == "drive.smart_health" || key == "drive.smart_attribute" || key == "network.public_ipv4" {
+			if key == "drive.smart_health" || key == "network.public_ipv4" {
 				window = 900
 			}
 			if v.Timestamp < out.Timestamp-window || v.Timestamp > out.Timestamp {
@@ -150,21 +132,9 @@ func (m *Manager) previewSampleV2(b Batch) (v2.Sample, error) {
 			id := uint16(0)
 			if binding.kind != "" {
 				id = m.v2.object(binding.kind, v)
-			}
-			if key == "drive.smart_attribute" {
-				dst := sampleDrive(&out, id)
-				if dst.SMART == nil {
-					dst.SMART = &v2.SMARTSample{Timestamp: v.Timestamp}
+				if id == 0 {
+					continue
 				}
-				for index, field := range smartFields {
-					if raw, ok := smartInteger(v, field); ok {
-						if dst.SMART.Values == nil {
-							dst.SMART.Values = map[uint16]string{}
-						}
-						dst.SMART.Values[uint16(index+1)] = raw
-					}
-				}
-				continue
 			}
 			m.fillV2Sample(&out, key, v, id)
 		}
@@ -192,8 +162,6 @@ func (m *Manager) fillV2Sample(out *v2.Sample, key string, v Metric, id uint16) 
 		scale, lo, hi = 10, -273.1, 3276.7
 	case "cpu.load1", "cpu.load5", "cpu.load15":
 		scale, hi = 1000, float64(math.MaxUint32)/1000
-	case "fan.rpm":
-		hi = math.MaxUint32
 	case "memory.pressure":
 		hi = 4
 	case "battery.charging", "interface.up", "drive.smart_health":
@@ -320,8 +288,6 @@ func (m *Manager) fillV2Sample(out *v2.Sample, key string, v Metric, id uint16) 
 		} else {
 			dst.Charging = ptr(n == 1)
 		}
-	case "fan.rpm":
-		out.Fans = append(out.Fans, v2.FanSample{ID: id, RPM: ptr(uint32(n))})
 	}
 }
 
@@ -354,7 +320,7 @@ func finalizeV2Sample(out *v2.Sample, selected func(key string, id uint16) bool)
 	// Failed SMART reads must not create an object containing only an ID/time.
 	for n := len(out.Drives) - 1; n >= 0; n-- {
 		d := &out.Drives[n]
-		if d.SMART != nil && d.SMART.Healthy == nil && len(d.SMART.Values) == 0 {
+		if d.SMART != nil && d.SMART.Healthy == nil {
 			d.SMART = nil
 		}
 		if d.SMART == nil && d.Used == nil && d.ReadRate == nil && d.WriteRate == nil {
@@ -376,7 +342,6 @@ func sortSampleObjects(out *v2.Sample) {
 	slices.SortFunc(out.Drives, func(a, b v2.DriveSample) int { return less(a.ID, b.ID) })
 	slices.SortFunc(out.Interfaces, func(a, b v2.InterfaceSample) int { return less(a.ID, b.ID) })
 	slices.SortFunc(out.Batteries, func(a, b v2.BatterySample) int { return less(a.ID, b.ID) })
-	slices.SortFunc(out.Fans, func(a, b v2.FanSample) int { return less(a.ID, b.ID) })
 }
 
 func v2ObjectSelected(c Config, key string, id uint16) bool {
@@ -433,17 +398,4 @@ func byteMetric(key string) bool {
 		return true
 	}
 	return false
-}
-func smartInteger(m Metric, key string) (string, bool) {
-	if raw, ok := m.Exact[key]; ok {
-		n, valid := new(big.Int).SetString(raw, 10)
-		if valid && n.Sign() >= 0 && n.BitLen() <= 128 {
-			return n.String(), true
-		}
-		return "", false
-	}
-	if n := number(m, key); n != nil {
-		return strconv.FormatUint(*n, 10), true
-	}
-	return "", false
 }

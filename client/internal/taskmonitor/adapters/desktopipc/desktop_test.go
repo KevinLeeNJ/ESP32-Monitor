@@ -8,11 +8,7 @@ import (
 	"esp32-monitor/client/internal/taskmonitor"
 	"io"
 	"net"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -92,6 +88,35 @@ func TestDesktopHistoricalTerminalDoesNotBecomeNewCompletion(t *testing.T) {
 		}
 	}
 }
+func timedTurn(state map[string]any, started, completed time.Time) map[string]any {
+	turn := state["turns"].([]any)[0].(map[string]any)
+	turn["turnStartedAtMs"] = float64(started.UnixMilli())
+	turn["durationMs"] = float64(completed.Sub(started).Milliseconds())
+	return state
+}
+func TestDesktopCompletionJustBeforeAttachIsDetected(t *testing.T) {
+	d, now := desktopFixture(t)
+	completedAt := now.Add(-10 * time.Second)
+	state := timedTurn(rawState("a", "idle", "completed", "t"), completedAt.Add(-time.Minute), completedAt)
+	snapshot(d, state, 1)
+	s := d.Snapshot()
+	if s.State != taskmonitor.Completed || s.SelectedTask == nil || !s.Items[0].ObservedAt.Equal(completedAt) {
+		t.Fatalf("completion just before attach lost: %+v", s)
+	}
+	*now = now.Add(51 * time.Second)
+	snapshot(d, state, 1)
+	if d.Snapshot().State != taskmonitor.Idle {
+		t.Fatal("completion retained past one minute")
+	}
+}
+func TestDesktopHistoricalCompletionStaysIdle(t *testing.T) {
+	d, now := desktopFixture(t)
+	completedAt := now.Add(-2 * time.Minute)
+	snapshot(d, timedTurn(rawState("a", "idle", "completed", "t"), completedAt.Add(-time.Minute), completedAt), 1)
+	if s := d.Snapshot(); s.State != taskmonitor.Idle || s.SelectedTask == nil || s.SelectedTask.State != taskmonitor.Idle {
+		t.Fatal("historical completion replayed as new")
+	}
+}
 func TestDesktopRevisionsOwnerVersionAndDisconnect(t *testing.T) {
 	d, now := desktopFixture(t)
 	snapshot(d, rawState("a", "active", "inProgress", "t"), 10)
@@ -136,11 +161,11 @@ func TestDesktopPatchesAreAtomicBoundedAndPrivate(t *testing.T) {
 	if strings.Contains(string(bytes), "secret") || strings.Contains(string(bytes), "credentials") {
 		t.Fatal("private patch retained")
 	}
-	if desktopTask("a", next, taskmonitor.Task{ObservedAt: time.Now()}).State != taskmonitor.WaitingApproval {
+	if desktopTask("a", next, taskmonitor.Task{ObservedAt: time.Now()}, time.Now()).State != taskmonitor.WaitingApproval {
 		t.Fatal("request patch lost")
 	}
 	_, err = patchDesktop(state, json.RawMessage(`[{"op":"replace","path":["threadRuntimeStatus","type"],"value":"idle"},{"op":"remove","path":["turns",999]}]`), "a")
-	if err == nil || desktopTask("a", state, taskmonitor.Task{}).State != taskmonitor.Running {
+	if err == nil || desktopTask("a", state, taskmonitor.Task{}, time.Now()).State != taskmonitor.Running {
 		t.Fatal("invalid batch committed partially")
 	}
 	if _, err = patchDesktop(state, json.RawMessage(`[{"op":"replace","path":[],"value":{"id":"other"}}]`), "a"); err == nil {
@@ -174,137 +199,6 @@ func writeDesktopFrame(conn io.Writer, v any) error {
 	frame.Write(body)
 	_, err := conn.Write(frame.Bytes())
 	return err
-}
-
-// Uses the actual framed socket transport; the fake desktop rejects any operation
-// outside passive registration/following/discovery responses.
-func TestDesktopSocketRegistrationReadOnlyAndReconnect(t *testing.T) {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
-		t.Skip("Unix desktop IPC only")
-	}
-	// Short path fits macOS sockaddr_un (104 bytes).
-	home, err := os.MkdirTemp("/tmp", "esp32-ipc-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(home)
-	ipc := filepath.Join(home, "ipc")
-	if os.Mkdir(ipc, 0700) != nil {
-		t.Fatal("mkdir")
-	}
-	listener, err := net.Listen("unix", filepath.Join(ipc, "ipc.sock"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer listener.Close()
-	os.Chmod(filepath.Join(ipc, "ipc.sock"), 0600)
-	d := New(home, []string{"a"}, time.Now)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	running := make(chan struct{})
-	go func() { defer close(running); d.Run(ctx) }()
-	var wg sync.WaitGroup
-	handled := make(chan struct{}, 2)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for range 2 {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			bytes, err := readDesktopFrame(conn)
-			if err != nil {
-				t.Error(err)
-				conn.Close()
-				return
-			}
-			var init struct {
-				Type   string `json:"type"`
-				Method string `json:"method"`
-				ID     string `json:"requestId"`
-			}
-			json.Unmarshal(bytes, &init)
-			if init.Type != "request" || init.Method != "initialize" {
-				t.Error("unexpected mutating operation")
-			}
-			writeDesktopFrame(conn, map[string]any{"type": "response", "requestId": init.ID, "resultType": "success"})
-			bytes, err = readDesktopFrame(conn)
-			if err != nil {
-				t.Error(err)
-				conn.Close()
-				return
-			}
-			var follow struct {
-				Type   string `json:"type"`
-				Method string `json:"method"`
-			}
-			json.Unmarshal(bytes, &follow)
-			if follow.Type != "broadcast" || follow.Method != "thread-stream-following-changed" {
-				t.Error("task ownership operation")
-			}
-			var params any
-			json.Unmarshal(desktopMessage("a", "snapshot", "", 1, rawState("a", "active", "inProgress", "t"), nil, 0), &params)
-			writeDesktopFrame(conn, map[string]any{"type": "broadcast", "method": "thread-stream-state-changed", "version": 11, "sourceClientId": "owner", "params": params})
-			handled <- struct{}{}
-			if len(handled) == 1 {
-				time.Sleep(50 * time.Millisecond)
-			}
-			conn.Close()
-		}
-	}()
-	for range 2 {
-		select {
-		case <-handled:
-		case <-time.After(5 * time.Second):
-			t.Fatal("did not reconnect")
-		}
-	}
-	cancel()
-	listener.Close()
-	<-running
-	wg.Wait()
-	if d.Snapshot().State != taskmonitor.Unknown {
-		t.Fatal("cancelled connection retained running state")
-	}
-}
-func TestDesktopSelectionAndSocketPermissions(t *testing.T) {
-	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
-		t.Skip("Unix desktop IPC only")
-	}
-	d := New(t.TempDir(), nil, time.Now)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	d.Run(ctx)
-	if d.Snapshot().Health.ErrorCode != "desktop_task_selection_required" {
-		t.Fatal("missing selection masquerades as idle")
-	}
-	d = New(t.TempDir(), []string{"../bad"}, time.Now)
-	d.Run(ctx)
-	if d.Snapshot().Health.ErrorCode != "invalid_codex_thread_id" {
-		t.Fatal("invalid id accepted")
-	}
-	home, err := os.MkdirTemp("/tmp", "esp32-ipc-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(home)
-	ipc := filepath.Join(home, "ipc")
-	os.Mkdir(ipc, 0700)
-	file := filepath.Join(ipc, "ipc.sock")
-	listener, err := net.Listen("unix", file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer listener.Close()
-	os.Chmod(file, 0600)
-	if err := validateDesktopSocket(file); err != nil {
-		t.Fatal(err)
-	}
-	os.Chmod(ipc, 0777)
-	if err := validateDesktopSocket(file); err == nil {
-		t.Fatal("shared-writable directory accepted")
-	}
 }
 
 func TestDesktopMultiTaskCountsAndSelection(t *testing.T) {

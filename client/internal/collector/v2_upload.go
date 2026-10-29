@@ -64,52 +64,6 @@ func (m *Manager) enqueueV2Locked(g *generation, s v2.Sample, at time.Time) {
 	default:
 	}
 }
-func (m *Manager) validateV2Selection(c Config, b Batch) error {
-	for _, sel := range c.Upload.Optional {
-		bind, dynamic := v2Bindings[sel.Metric]
-		if !dynamic {
-			continue
-		}
-		found := map[uint16]bool{}
-		scalar := false
-		for _, v := range b.Metrics {
-			if v.Name != bind.source {
-				continue
-			}
-			present := false
-			if sel.Metric == "drive.smart_attribute" {
-				present = true
-				for _, detail := range sel.Detail {
-					if _, ok := smartInteger(v, smartFields[detail-1]); !ok {
-						present = false
-					}
-				}
-			} else {
-				_, present = v.Fields[bind.field]
-				if _, ok := v.Exact[bind.field]; ok {
-					present = true
-				}
-			}
-			if !present {
-				continue
-			}
-			if bind.kind != "" {
-				found[m.v2.object(bind.kind, v)] = true
-			} else {
-				scalar = true
-			}
-		}
-		if bind.kind == "" && !scalar {
-			return errors.New("v2_metric_unavailable")
-		}
-		for _, id := range sel.Objects {
-			if !found[id] {
-				return errors.New("v2_metric_object_unavailable")
-			}
-		}
-	}
-	return nil
-}
 func (m *Manager) requestV2(ctx context.Context, method, path string, body []byte, condition string) (int, http.Header, []byte, error) {
 	token, e := m.opts.UploadToken(ctx)
 	if e != nil || token == "" {

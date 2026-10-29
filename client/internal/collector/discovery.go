@@ -22,7 +22,7 @@ func (m *Manager) Discover(ctx context.Context) (Capabilities, error) {
 func (m *Manager) discover(ctx context.Context) (Capabilities, error) {
 	ctx, cancel := context.WithTimeout(ctx, m.opts.ApplyTimeout)
 	defer cancel()
-	ids := slices.DeleteFunc(allSources(), func(id string) bool { return id == "darwin_public_ip" })
+	ids := slices.DeleteFunc(allSources(), func(id string) bool { return id == nativeSourceID("public_ip") })
 	batch, reasons := gather(ctx, m.opts.CoreFactory(), m.opts.NativeFactory(), ids)
 	if ctx.Err() != nil {
 		return Capabilities{}, ctx.Err()
