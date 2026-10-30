@@ -25,20 +25,24 @@ func TestValidateRestartArgsAcceptsGUIFlags(t *testing.T) {
 	if err := validateRestartArgs(testSocket, args); err != nil {
 		t.Fatal(err)
 	}
+	args[4] = "http://nas.example.com/v2/collector/samples"
+	if err := validateRestartArgs(testSocket, args); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestValidateRestartArgsRejectsPrivilegeChanges(t *testing.T) {
 	for name, args := range map[string][]string{
-		"foreign socket":    {"--ipc-socket", `\\.\pipe\other`},
-		"unknown flag":      {"--ipc-socket", testSocket, "--codex-executable", `C:\evil.exe`},
-		"positional arg":    {"--ipc-socket", testSocket, "extra"},
-		"upload no collect": {"--ipc-socket", testSocket, "--collector-upload-url", "https://example.com/v2/collector/samples"},
-		"plain http":        {"--ipc-socket", testSocket, "--collector", "--collector-upload-url", "http://example.com/v2/collector/samples"},
-		"token outside":     {"--ipc-socket", testSocket, "--collector", "--collector-upload-token-file", filepath.Join(string(os.PathSeparator), "Windows", "System32", "config", "SAM")},
-		"bad login":         {"--ipc-socket", testSocket, "--github-user", "../octocat"},
-		"bad client id":     {"--ipc-socket", testSocket, "--github-client-id", "id with space"},
-		"ipv6 companion":    {"--ipc-socket", testSocket, "--companion", "--companion-ip", "::1"},
-		"unknown adapter":   {"--ipc-socket", testSocket, "--codex", "--codex-task-adapter", "arbitrary"},
+		"foreign socket":     {"--ipc-socket", `\\.\pipe\other`},
+		"unknown flag":       {"--ipc-socket", testSocket, "--codex-executable", `C:\evil.exe`},
+		"positional arg":     {"--ipc-socket", testSocket, "extra"},
+		"upload no collect":  {"--ipc-socket", testSocket, "--collector-upload-url", "https://example.com/v2/collector/samples"},
+		"unsupported scheme": {"--ipc-socket", testSocket, "--collector", "--collector-upload-url", "ftp://example.com/v2/collector/samples"},
+		"token outside":      {"--ipc-socket", testSocket, "--collector", "--collector-upload-token-file", filepath.Join(string(os.PathSeparator), "Windows", "System32", "config", "SAM")},
+		"bad login":          {"--ipc-socket", testSocket, "--github-user", "../octocat"},
+		"bad client id":      {"--ipc-socket", testSocket, "--github-client-id", "id with space"},
+		"ipv6 companion":     {"--ipc-socket", testSocket, "--companion", "--companion-ip", "::1"},
+		"unknown adapter":    {"--ipc-socket", testSocket, "--codex", "--codex-task-adapter", "arbitrary"},
 	} {
 		if err := validateRestartArgs(testSocket, args); err == nil {
 			t.Fatalf("%s accepted", name)

@@ -35,6 +35,22 @@ func Run(args []string, in io.Reader, out, errOut io.Writer, interactive bool, s
 		}
 		return configure(*path, charmUI{in: in, out: out}, out)
 	}
+	if action == "serve" {
+		original, e := config.Read(*path)
+		if e != nil {
+			return e
+		}
+		if original == nil {
+			c := config.Defaults()
+			c.ReadToken, e = config.GenerateToken()
+			if e != nil {
+				return e
+			}
+			if e = config.Save(*path, c, nil); e != nil {
+				return e
+			}
+		}
+	}
 	c, err := config.Load(*path)
 	if err != nil {
 		return err

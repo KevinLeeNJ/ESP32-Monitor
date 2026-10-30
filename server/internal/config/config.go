@@ -1,4 +1,5 @@
-// Package config owns the V1 configuration contract and secret-safe persistence.
+// Package config owns transport configuration and secret-safe persistence.
+// Legacy agents/panel fields decode for migration only; v2 identity is in SQLite.
 package config
 
 import (
@@ -51,7 +52,7 @@ type Device struct {
 }
 
 func Defaults() Config {
-	return Config{Listen: "127.0.0.1:8080", PublicBaseURL: "https://monitor.example.com", Database: "./data/monitor.db", OnlineTimeoutSeconds: 45, MetricTTLSeconds: 45, HistoryRetentionHours: 24}
+	return Config{Listen: "0.0.0.0:8080", PublicBaseURL: "https://monitor.example.com", Database: "./data/monitor.db", OnlineTimeoutSeconds: 45, MetricTTLSeconds: 45, HistoryRetentionHours: 24}
 }
 func DefaultDevice(id, name, mount string) Device {
 	return Device{ID: id, Name: name, DiskMountPath: mount, UptimeSource: Source{Measurement: "system", Tags: map[string]string{}, Field: "uptime"}}

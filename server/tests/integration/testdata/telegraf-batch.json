@@ -1,9 +1,0 @@
-{
-  "metrics": [
-    {"name":"cpu","tags":{"host":"claimed-host","cpu":"cpu-total"},"fields":{"usage_active":26.5,"usage_idle":73.5},"timestamp":1792454400},
-    {"name":"mem","tags":{"host":"claimed-host"},"fields":{"used_percent":42.1,"used":4096},"timestamp":1792454400},
-    {"name":"disk","tags":{"host":"claimed-host","path":"/data","device":"disk0","fstype":"ext4"},"fields":{"used_percent":61,"total":10000},"timestamp":1792454400},
-    {"name":"system","tags":{"host":"claimed-host"},"fields":{"uptime":1051200,"uptime_format":"12 days, 4:00"},"timestamp":1792454400},
-    {"name":"net","tags":{"host":"claimed-host"},"fields":{"bytes_recv":100},"timestamp":1792454400}
-  ]
-}

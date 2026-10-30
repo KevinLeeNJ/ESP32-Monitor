@@ -20,6 +20,12 @@ const callTimeout = 45 * time.Second
 
 func call[Out any](ctx context.Context, sup *Supervisor, fn func(ctx context.Context, client *ipc.Client) (Out, error)) (Out, error) {
 	var out Out
+	// An elevated Windows Agent acknowledges its restart before it exits.  Do
+	// not let the next GUI request talk to that old process, whose collector
+	// settings may still lack a just-configured Server endpoint.
+	if err := sup.awaitRestart(ctx); err != nil {
+		return out, err
+	}
 	err := sup.Call(func(client *ipc.Client) error {
 		callCtx, cancel := context.WithTimeout(ctx, callTimeout)
 		defer cancel()
@@ -35,6 +41,9 @@ func call[Out any](ctx context.Context, sup *Supervisor, fn func(ctx context.Con
 }
 
 func callVoid(ctx context.Context, sup *Supervisor, fn func(ctx context.Context, client *ipc.Client) error) error {
+	if err := sup.awaitRestart(ctx); err != nil {
+		return err
+	}
 	return sup.Call(func(client *ipc.Client) error {
 		callCtx, cancel := context.WithTimeout(ctx, callTimeout)
 		defer cancel()

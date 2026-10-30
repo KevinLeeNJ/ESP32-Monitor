@@ -101,210 +101,63 @@ func runWizard(t *testing.T, path string, steps ...step) (string, string, error)
 	}
 	return out.String(), u.seen.String(), err
 }
-func initial(t *testing.T) (string, config.Config) {
-	t.Helper()
+
+func TestConfigureV2AndSecretReveal(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "monitor.yaml")
-	out, _, err := runWizard(t, path, selectStep("base"), inputStep("0.0.0.0:18080", "./data/monitor.db", "https://monitor.example.com:1443"), selectStep("add"), inputStep("nas"), selectStep("show"), inputStep("NAS", "/vol1", "1"), selectStep("save"), confirmStep(true))
+	out, seen, err := runWizard(t, path, selectStep("base"), inputStep("127.0.0.1:18080", filepath.Join(t.TempDir(), "db"), "https://monitor.example.com"), selectStep("save"), confirmStep(false), selectStep("save"), confirmStep(true))
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, e := config.Load(path)
-	if e != nil {
-		t.Fatal(e)
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(out, c.ReadToken) || !strings.Contains(out, c.Agents[0].WriteToken) || strings.Contains(out, "[[outputs.http]]") {
-		t.Fatal("missing tokens or emitted client config")
+	if c.Listen != "127.0.0.1:18080" || len(c.Agents) != 0 {
+		t.Fatal(c.Listen)
 	}
-	return path, c
-}
-func load(t *testing.T, path string) config.Config {
-	t.Helper()
-	c, e := config.Load(path)
-	if e != nil {
-		t.Fatal(e)
+	if strings.Contains(seen, c.ReadToken) || !strings.Contains(out, c.ReadToken) {
+		t.Fatal("secret visibility")
 	}
-	return c
-}
-func read(t *testing.T, path string) []byte {
-	t.Helper()
-	b, e := os.ReadFile(path)
-	if e != nil {
-		t.Fatal(e)
+	before, _ := os.ReadFile(path)
+	_, seen, err = runWizard(t, path, selectStep("view-panel"), step{kind: "note"}, selectStep("rotate-panel"), confirmStep(false), selectStep("quit"))
+	if err != nil || !strings.Contains(seen, c.ReadToken) {
+		t.Fatal(err)
 	}
-	return b
-}
-func TestInitialConfigurationAndCheck(t *testing.T) {
-	path, c := initial(t)
-	if c.Listen != "0.0.0.0:18080" || c.Panel.Devices[0].DiskMountPath != "/vol1" {
-		t.Fatal("wrong config")
-	}
-	st, _ := os.Stat(path)
-	if st.Mode().Perm() != 0600 {
-		t.Fatal("unsafe permissions")
-	}
-	out := &bytes.Buffer{}
-	if e := Run([]string{"check-config", "--config", path}, nil, out, out, false, nil); e != nil || strings.Contains(out.String(), c.ReadToken) {
-		t.Fatal("check-config", e)
-	}
-	called := false
-	if e := Run([]string{"serve", "--config", path}, nil, out, out, false, func(got config.Config) error {
-		called = true
-		if got.ReadToken != c.ReadToken {
-			t.Fatal("wrong dispatch")
-		}
-		return errors.New("sentinel")
-	}); e == nil || !called {
-		t.Fatal("serve not dispatched")
+	after, _ := os.ReadFile(path)
+	if !bytes.Equal(before, after) {
+		t.Fatal("cancel changed config")
 	}
 }
-func TestEditPreservesTokensAndCancel(t *testing.T) {
-	path, c := initial(t)
-	out, seen, e := runWizard(t, path, selectStep("edit"), selectStep("nas"), selectStep("show"), inputStep("HOME", "/data", "1"), selectStep("save"), confirmStep(true))
-	got := load(t, path)
-	if e != nil || got.Panel.Devices[0].Name != "HOME" || got.ReadToken != c.ReadToken || got.Agents[0].WriteToken != c.Agents[0].WriteToken {
-		t.Fatal("edit failed", e)
+func TestConfigureCancellationAndConcurrentSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "monitor.yaml")
+	_, _, err := runWizard(t, path, selectStep("base"), step{kind: "input", err: huh.ErrUserAborted}, selectStep("quit"), confirmStep(true))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(out+seen, c.ReadToken) || strings.Contains(out+seen, c.Agents[0].WriteToken) {
-		t.Fatal("ordinary views exposed token")
+	if _, err = os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("cancel created file")
 	}
-	before := read(t, path)
-	_, _, e = runWizard(t, path, selectStep("rotate-agent"), selectStep("nas"), confirmStep(true), selectStep("rotate-panel"), confirmStep(true), selectStep("quit"), confirmStep(true))
-	if e != nil || !bytes.Equal(before, read(t, path)) {
-		t.Fatal("cancel wrote config", e)
-	}
-	_, _, e = runWizard(t, path, selectStep("base"), step{kind: "input", err: huh.ErrUserAborted}, selectStep("quit"))
-	if e != nil || !bytes.Equal(before, read(t, path)) {
-		t.Fatal("aborted form wrote config", e)
-	}
-}
-func TestRotateViewDelete(t *testing.T) {
-	path, c := initial(t)
-	out, _, e := runWizard(t, path, selectStep("rotate-agent"), selectStep("nas"), confirmStep(false), selectStep("rotate-panel"), confirmStep(false), selectStep("save"), confirmStep(true))
-	same := load(t, path)
-	if e != nil || same.ReadToken != c.ReadToken || same.Agents[0].WriteToken != c.Agents[0].WriteToken || strings.Contains(out, c.ReadToken) {
-		t.Fatal("declined rotation applied", e)
-	}
-	out, _, e = runWizard(t, path, selectStep("rotate-agent"), selectStep("nas"), confirmStep(true), selectStep("rotate-panel"), confirmStep(true), selectStep("save"), confirmStep(true))
-	rotated := load(t, path)
-	if e != nil || rotated.ReadToken == c.ReadToken || rotated.Agents[0].WriteToken == c.Agents[0].WriteToken || !strings.Contains(out, rotated.ReadToken) || !strings.Contains(out, rotated.Agents[0].WriteToken) {
-		t.Fatal("rotate failed", e)
-	}
-	_, seen, e := runWizard(t, path, selectStep("view-agent"), selectStep("nas"), step{kind: "note"}, selectStep("view-panel"), step{kind: "note"}, selectStep("quit"))
-	if e != nil || !strings.Contains(seen, rotated.ReadToken) || !strings.Contains(seen, rotated.Agents[0].WriteToken) {
-		t.Fatal("explicit reveal failed", e)
-	}
-	_, _, e = runWizard(t, path, selectStep("delete"), selectStep("nas"), confirmStep(false), selectStep("save"), confirmStep(true))
-	if e != nil || len(load(t, path).Agents) != 1 {
-		t.Fatal("declined delete applied", e)
-	}
-	_, _, e = runWizard(t, path, selectStep("delete"), selectStep("nas"), confirmStep(true), selectStep("save"), confirmStep(true))
-	deleted := load(t, path)
-	if e != nil || len(deleted.Agents) != 0 || len(deleted.Panel.Devices) != 0 {
-		t.Fatal("delete failed", e)
-	}
-}
-func TestAddReorderAndHide(t *testing.T) {
-	path, c := initial(t)
-	_, _, e := runWizard(t, path, selectStep("add"), inputStep("pc"), selectStep("show"), inputStep("PC", "C:", "1"), selectStep("save"), confirmStep(true))
-	got := load(t, path)
-	if e != nil || got.Panel.Devices[0].ID != "pc" || got.Panel.Devices[1].ID != "nas" || got.ReadToken != c.ReadToken {
-		t.Fatal("add failed", e)
-	}
-	_, _, e = runWizard(t, path, selectStep("edit"), selectStep("pc"), selectStep("hide"), selectStep("save"), confirmStep(true))
-	got = load(t, path)
-	if e != nil || len(got.Agents) != 2 || len(got.Panel.Devices) != 1 || got.Panel.Devices[0].ID != "nas" {
-		t.Fatal("hide failed", e)
-	}
-}
-func TestValidationAndRollback(t *testing.T) {
-	path, c := initial(t)
-	before := read(t, path)
-	_, seen, e := runWizard(t, path,
-		selectStep("add"), inputStep("nas"),
-		selectStep("base"), inputStep("bad", "./other.db", "https://example.com"),
-		selectStep("edit"), selectStep("nas"), selectStep("show"), inputStep("HOME", "/other", "9"),
-		selectStep("quit"))
-	if e != nil || !bytes.Equal(before, read(t, path)) || !strings.Contains(seen, "ID 已存在") {
-		t.Fatal("invalid changes applied", e)
-	}
-	if c.Panel.Devices[0].Name != "NAS" {
-		t.Fatal("baseline mutated")
-	}
-	for _, s := range []string{"", "中文", "123456789", "\x1b", "        "} {
-		if validName(s) == nil {
-			t.Errorf("accepted bad name %q", s)
-		}
-	}
-	for _, s := range []string{"", " ", "/a\x00", strings.Repeat("x", 129)} {
-		if validMount(s) == nil {
-			t.Errorf("accepted bad mount %q", s)
-		}
-	}
-	for _, s := range []string{"0", "5", "x"} {
-		if _, e := parsePosition(s, 4); e == nil {
-			t.Errorf("accepted bad order %q", s)
-		}
-	}
-}
-func TestPanelCapacityAndHiddenAgent(t *testing.T) {
-	path, c := initial(t)
-	for _, id := range []string{"b", "c", "d"} {
-		token, _ := config.GenerateToken()
-		c.Agents = append(c.Agents, config.Agent{ID: id, WriteToken: token})
-		c.Panel.Devices = append(c.Panel.Devices, config.DefaultDevice(id, id, "/"))
-	}
-	if e := config.Save(path, c, read(t, path)); e != nil {
-		t.Fatal(e)
-	}
-	_, seen, e := runWizard(t, path, selectStep("add"), inputStep("e"), selectStep("show"), selectStep("add"), inputStep("e"), selectStep("hide"), selectStep("save"), confirmStep(true))
-	got := load(t, path)
-	if e != nil || !strings.Contains(seen, "最多展示 4 台") || len(got.Agents) != 5 || len(got.Panel.Devices) != 4 {
-		t.Fatal("capacity/hidden add failed", e)
-	}
-}
-func TestEscapeUnsavedConfirmationAndEOF(t *testing.T) {
-	path, _ := initial(t)
-	before := read(t, path)
-	_, _, e := runWizard(t, path, selectStep("base"), inputStep("127.0.0.1:18081", "./new.db", "https://example.com"),
-		step{kind: "select", err: huh.ErrUserAborted}, confirmStep(false),
-		selectStep("save"), confirmStep(false),
-		selectStep("edit"), selectStep(""),
-		selectStep("quit"), step{kind: "confirm", err: huh.ErrUserAborted},
-		step{kind: "select", err: io.EOF})
-	if !errors.Is(e, io.EOF) || !bytes.Equal(before, read(t, path)) {
-		t.Fatal("EOF applied changes", e)
-	}
-	missing := filepath.Join(t.TempDir(), "new.yaml")
-	_, _, e = runWizard(t, missing, selectStep("quit"), confirmStep(true))
-	if e != nil {
-		t.Fatal(e)
-	}
-	if _, e = os.Stat(missing); !errors.Is(e, os.ErrNotExist) {
-		t.Fatal("cancel created config")
-	}
-}
-func TestConcurrentEditPreserved(t *testing.T) {
-	path, c := initial(t)
-	changed := clone(c)
-	changed.Listen = "127.0.0.1:18082"
-	_, _, e := runWizard(t, path, selectStep("base"), inputStep("127.0.0.1:18081", c.Database, c.PublicBaseURL), selectStep("save"), step{kind: "confirm", values: []string{"yes"}, hook: func() {
-		if e := config.Save(path, changed, read(t, path)); e != nil {
+	_, _, err = runWizard(t, path, selectStep("save"), step{kind: "confirm", values: []string{"yes"}, hook: func() {
+		if e := os.WriteFile(path, []byte("external"), 0600); e != nil {
 			t.Fatal(e)
 		}
 	}})
-	if e == nil || load(t, path).Listen != changed.Listen {
-		t.Fatal("external edit overwritten", e)
+	if err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Fatal("concurrent overwrite")
 	}
 }
-func TestNonInteractiveAndMissingConfig(t *testing.T) {
-	out := &bytes.Buffer{}
-	path := filepath.Join(t.TempDir(), "missing.yaml")
-	for _, args := range [][]string{nil, {"unknown"}, {"configure", "--config", path}, {"check-config", "--config", path}, {"serve", "--config", path}, {"serve", "extra"}} {
-		if e := Run(args, strings.NewReader(""), out, out, false, nil); e == nil {
-			t.Fatal("invalid command accepted", args)
-		}
+func TestCLIValidationAndFirstServe(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "monitor.yaml")
+	called := false
+	err := Run([]string{"serve", "--config", path}, strings.NewReader(""), io.Discard, io.Discard, false, func(c config.Config) error { called = true; return c.Validate() })
+	if err != nil || !called {
+		t.Fatal(err)
 	}
-	if _, e := os.Stat(path); !errors.Is(e, os.ErrNotExist) {
-		t.Fatal("created config")
+	st, err := os.Stat(path)
+	if err != nil || st.Mode().Perm() != 0600 {
+		t.Fatal("unsafe generated config")
+	}
+	if err = Run([]string{"configure", "--config", path}, strings.NewReader(""), io.Discard, io.Discard, false, nil); err == nil {
+		t.Fatal("noninteractive configure")
 	}
 }

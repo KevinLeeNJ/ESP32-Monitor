@@ -85,7 +85,7 @@ func (s *Store) initialize(ctx context.Context, ids []string, now int64) error {
 		if _, err = tx.ExecContext(ctx, schema); err != nil {
 			return err
 		}
-	case 1:
+	case 1, 2:
 	default:
 		return errors.New("unsupported database schema version")
 	}
@@ -282,3 +282,6 @@ func (s *Store) Cleanup(ctx context.Context, cutoff int64) (int64, error) {
 	}
 	return r.RowsAffected()
 }
+
+// Database is shared with the v2 repository; the Store owns its lifetime.
+func (s *Store) Database() *sql.DB { return s.db }

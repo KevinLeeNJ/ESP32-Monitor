@@ -124,12 +124,12 @@ func TestServerTestRoute(t *testing.T) {
 	client := newTestClient(t, socket)
 	ctx := context.Background()
 
-	result, err := client.ServerTest(ctx, "http://192.168.1.5:8080")
+	result, err := client.ServerTest(ctx, "ftp://example.com")
 	if err != nil {
 		t.Fatalf("ServerTest: %v", err)
 	}
-	if result.OK || result.Error != "https_or_loopback_required" {
-		t.Fatalf("plain HTTP to non-loopback must be rejected: %+v", result)
+	if result.OK || result.Error != "invalid_server_url" {
+		t.Fatalf("unsupported scheme must be rejected: %+v", result)
 	}
 
 	health := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

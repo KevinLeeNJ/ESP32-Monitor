@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ESP32 Monitor · Server</title><link rel="icon" href="/app-icon.png"><link rel="stylesheet" href="/icons/pixelart-icons-font.css"><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body><div class="shell" id="shell"><aside class="sidebar" id="sidebar" hidden>
+<div class="brand"><img class="logo brand-icon" src="/app-icon.png" alt=""><div><strong>ESP32 MONITOR</strong><small>SERVER CONSOLE</small></div></div>
+<div class="nav-label">工作空间</div><nav class="nav" aria-label="主导航">
+<button data-page="devices" class="active"><span class="nav-icon"><i class="pixelart-icons-font-server"></i></span>设备注册</button>
+<button data-page="metrics"><span class="nav-icon"><i class="pixelart-icons-font-chart-bar-big"></i></span>指标查看</button>
+<button data-page="token"><span class="nav-icon"><i class="pixelart-icons-font-lock"></i></span>Read Token</button>
+<button data-page="password"><span class="nav-icon"><i class="pixelart-icons-font-lock"></i></span>修改密码</button></nav>
+<div class="sidefoot">ESP32 MONITOR · V1<br>CONTROL PANEL / 服务控制台<div class="sidefoot-actions"><button id="logout" class="btn">退出登录</button></div></div></aside>
+<main class="main"><header class="topbar"><div id="crumb" class="crumb">工作空间　/　登录</div><div class="topright"><button id="logout-mobile" class="btn mobile-only">退出登录</button><span class="pill gray">SERVER</span></div></header><div class="content" id="content"></div></main></div>
+<div id="notice" class="toast" role="status" hidden></div><dialog id="confirm"><form method="dialog"><h2 id="confirm-title"></h2><p id="confirm-text"></p><div class="actions"><button class="btn" value="cancel" autofocus>取消</button><button class="btn primary" value="ok">确认</button></div></form></dialog></body></html>

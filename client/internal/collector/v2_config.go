@@ -303,6 +303,7 @@ func v2PreviewConfig(c Config) Config {
 }
 func (m *Manager) profileV2(c Config) v2.Profile {
 	p := v2.Profile{Version: 2, IntervalSeconds: uint16(c.IntervalSeconds), Enabled: []v2.UploadSelection{}}
+	p.Inventory.Objects = detached(m.v2.inventory.Objects)
 	if c.Upload == nil || !c.Upload.Enabled {
 		return p
 	}
@@ -418,10 +419,31 @@ func hasObject[T any](a []T, id uint16) bool {
 }
 
 func validateV2Profile(p v2.Profile) error {
+	counts := map[string]int{}
+	seen := map[uint16]bool{}
+	kinds := map[string]bool{"core": true, "drive": true, "gpu": true, "interface": true, "battery": true, "volume": true, "fan": true}
+	for _, o := range p.Inventory.Objects {
+		if o.ID == 0 || seen[o.ID] || !kinds[o.Kind] {
+			return errors.New("invalid_v2_object_directory")
+		}
+		seen[o.ID] = true
+		counts[o.Kind]++
+		if counts[o.Kind] > 256 {
+			return errors.New("too_many_v2_objects")
+		}
+		if o.Name == "" || catalogText(o.Name) != o.Name || (o.Model != nil && (*o.Model == "" || catalogText(*o.Model) != *o.Model)) {
+			return errors.New("invalid_v2_object_name")
+		}
+	}
+
 	inventory := reflect.ValueOf(p.Inventory)
 	for n := 0; n < inventory.NumField(); n++ {
 		field := inventory.Field(n)
-		if field.Kind() == reflect.Slice && field.Len() > 256 {
+		limit := 256
+		if inventory.Type().Field(n).Name == "Objects" {
+			limit = 2048
+		}
+		if field.Kind() == reflect.Slice && field.Len() > limit {
 			return errors.New("too_many_v2_objects")
 		}
 	}

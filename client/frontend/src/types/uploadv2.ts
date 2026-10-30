@@ -7,7 +7,9 @@ export interface UploadConfig { enabled: boolean; interval_seconds: number; opti
 export interface Profile { version: number; interval_seconds: number; enabled: UploadSelection[]; inventory: Inventory }
 export interface ProfileOperation { op: "add" | "replace" | "remove"; path: string; value?: unknown }
 
+export interface ObjectDescriptor { id: number; kind: "core" | "gpu" | "drive" | "interface" | "battery" | "volume" | "fan"; name: string; model?: string }
 export interface Inventory {
+  objects?: ObjectDescriptor[];
   os?: OSInfo; product?: string; cpu?: CPUInfo; memory_total?: string;
   cores?: CoreInfo[]; gpus?: ObjectInfo[]; drives?: DriveInfo[]; volumes?: VolumeInfo[];
   interfaces?: InterfaceInfo[]; batteries?: ObjectInfo[]; fans?: FanInfo[];

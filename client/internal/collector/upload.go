@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"math/rand/v2"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -31,9 +30,8 @@ func (m *Manager) initUploader() error {
 		if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Hostname() == "" || u.Path != "/v2/collector/samples" {
 			return errors.New("invalid_upload_url")
 		}
-		ip := net.ParseIP(u.Hostname())
-		if u.Scheme != "https" && (u.Scheme != "http" || ip == nil || !ip.IsLoopback()) {
-			return errors.New("upload_requires_https_or_loopback")
+		if u.Scheme != "https" && u.Scheme != "http" {
+			return errors.New("invalid_upload_url")
 		}
 		if m.opts.UploadToken == nil {
 			return errors.New("upload_token_required")
@@ -59,7 +57,15 @@ func queueMetrics(q []queued) int {
 	return n
 }
 func (m *Manager) trimQueueLocked(now time.Time) {
-	for len(m.queue) > 0 && (now.Sub(m.queue[0].at) > 5*time.Minute || queueMetrics(m.queue) > 1000 || queueBytes(m.queue) > maxBody) {
+	for len(m.queue) > 0 {
+		head := m.queue[0]
+		// With samples disabled this is the only chance to publish startup metadata.
+		// Keep the current profile retryable through a long first-connection outage.
+		onlyMetadata := len(m.queue) == 1 && head.v2 != nil && len(head.v2.Samples) == 0
+		expired := now.Sub(head.at) > 5*time.Minute && !onlyMetadata
+		if !expired && queueMetrics(m.queue) <= 1000 && queueBytes(m.queue) <= maxBody {
+			break
+		}
 		m.snapshot.DroppedMetrics += uint64(queueMetrics(m.queue[:1]))
 		m.queue = m.queue[1:]
 	}

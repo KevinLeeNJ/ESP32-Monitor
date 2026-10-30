@@ -1,12 +1,12 @@
 # Server 与 Client 通信协议（v2）
 
-核对日期：2026-10-28。以当前工作区 Client 实现为准；完整字段类型见 [uploadv2/types.go](../client/internal/collector/uploadv2/types.go)，指标映射见 [v2.go](../client/internal/collector/v2.go)，上传状态机见 [v2_upload.go](../client/internal/collector/v2_upload.go)。
+核对日期：2026-10-29。以当前工作区 Client 实现为准；完整字段类型见 [uploadv2/types.go](../client/internal/collector/uploadv2/types.go)，指标映射见 [v2.go](../client/internal/collector/v2.go)，上传状态机见 [v2_upload.go](../client/internal/collector/v2_upload.go)。
 
-**当前 Client 只支持 v2 指标上传。正式 `server/` 尚未实现 v2，不能直接与当前 Client 注册、上传；`client/cmd/sim-server` 用于本地联调。** 本文把 Client 已执行的行为与正式 Server 必须补齐的要求分开标明。ESP32 读取 Server 的既有摘要接口见第 9 节，ESP32 与 Client 的通信另见 [Companion 协议](ESP32_COMPANION_PROTOCOL_V1.md)。
+**Server 产品版本为 V1，Client 与正式 `server/` 之间使用的通信协议为 v2；协议版本不等同于产品版本。Server 不再提供 v1 HTTP 接口。** 正式 Server 已实现持久化注册、Profile/样本协议与认证 WebUI，部署与安全约定见 [Server WebUI](SERVER_WEBUI.md)。`client/cmd/sim-server` 仅用于本地联调。摘要读取方的迁移边界见第 9 节；ESP32 与 Client 的通信另见 [Companion 协议](ESP32_COMPANION_PROTOCOL_V1.md)。
 
 ## 1. 边界、地址与认证
 
-- Client 主动通过 HTTPS 访问 Server，无需开放 Client 的公网端口。仅数字回环地址允许 HTTP；不跳过证书校验，不跟随上传重定向。
+- Client 主动通过 HTTP 或 HTTPS 访问 Server，无需开放 Client 的公网端口。建议使用 HTTPS 保护验证码、令牌及指标；不跳过证书校验，不跟随上传重定向。
 - 上传 URL 必须为 `https://<host>/v2/collector/samples`，不能带 userinfo、query、fragment；当前 uploader 不支持部署到路径前缀下。Profile 使用同源 `/v2/collector/profile`。
 - Profile、Patch、SampleBatch 使用 UTF-8 JSON、`Content-Type: application/json`；业务请求携带 `Authorization: Bearer <device token>`。设备由 Token 绑定，正文不重复传 `device_id`。
 - 注册码、设备上传 Token、ESP32 只读 Token、管理员会话、Companion 配对密钥属于不同凭据。GitHub/Codex 凭据、播放内容和任务正文不进入此指标协议。
@@ -26,7 +26,7 @@ GUI 在「Server 连接」页输入基地址及 6 位验证码，由 Go 宿主�
 
 当前模拟器验证码有效期 10 分钟、单次使用，重新生成作废旧码；成功重新注册会轮换设备 Token。错误为 `404 invalid_code`、`410 code_expired`；GUI 对正式旧 Server 缺少注册路由显示不支持。模拟器数据仅在内存，重启后需重新注册。
 
-正式 Server 待实现：管理员认证、CSRF、验证码兑换限流、审计和持久化。模拟器的无认证管理网页仅供回环联调，不能作为生产管理面。
+正式 Server 已实现管理员认证、CSRF、验证码兑换限流、审计和 SQLite 持久化，详见 [Server WebUI](SERVER_WEBUI.md)。模拟器的无认证管理网页仅供回环联调，不能作为生产管理面。
 
 Unix 下应用私有目录为 `0700`、Token 文件为 `0600`；Agent 每次请求重新读取文件并校验，不要求用户手工复制 Token。默认路径由 `os.UserConfigDir()` 下的 `ESP32-Monitor` 目录确定。Windows 原生权限与完整 IPC 仍待验收。
 
@@ -67,22 +67,22 @@ Inventory 字段全部可省略：
 
 | 路径 | 内容 |
 | --- | --- |
+| `objects[]` | 完整启动对象目录：`id`、`kind`（core/gpu/drive/interface/battery；volume/fan 保留）、`name`、可选 `model`。名称/型号最多 512 UTF-8 字节，不含控制字符；每类最多 256 项，总共最多 2048 项。随 Profile 首次同步，独立于动态指标选择 |
 | `os` | `family`（darwin/windows/linux）、`name`、`version`，可选 `build` |
 | `product` | 产品名称字符串 |
 | `cpu` | 可选 `model`、`physical_cores`、`logical_cores`、`performance_cores`、`efficiency_cores`；核数为 uint16 |
 | `memory_total` | uint64 十进制字符串；可获取时隐式同步，无需 enabled 声明 |
 | `cores[]` | `id`、逻辑 CPU 序号 `index`、可选 `kind`（performance/efficiency/general） |
 | `gpus[]` / `batteries[]` | `id` |
-| `drives[]` | `id`，可选 `model`、`total`（uint64 字符串）、`smart[]` |
-| `drives[].smart[]` | `id`、`key`、`unit`、`scale10`、`source`；实际值 = 整数文本 × 10^scale10 |
+| `drives[]` | `id`，可选 `model`、`total`（uint64 字符串） |
 | `interfaces[]` | `id`，可选 `medium`（wifi/ethernet/other） |
 | `fans[]` | `id`、`scope`（cpu/gpu/system），可选所属 `gpu` ID |
 
 `volumes` 类型仅为历史状态解码兼容保留，当前 Client 不生成卷档案或卷样本。`fans[]`/`fan.rpm` 同样仅为协议兼容保留：2026-10-29 起所有平台已移除风扇转速采集，Client 不再生成风扇档案或样本。
 
-对象 ID 在本机状态目录持久化、非零、不复用；当前按采集源对象键关联（如设备名/接口名），不能承诺任意设备重命名后仍能识别为同一硬件。ID 耗尽时报错；不要用另一设备身份共享状态目录。原始序列号、MAC、接口名等本机对象标签不作为远端通用 tags 上传。
+对象 ID 在本机状态目录持久化、非零、不复用；当前按采集源对象键关联（如设备名/接口名），不能承诺任意设备重命名后仍能识别为同一硬件。ID 耗尽时报错；不要用另一设备身份共享状态目录。显示名和型号通过 `inventory.objects` 显式上传，例如网卡 `en0`/`以太网 2`、GPU 型号、磁盘型号、逻辑核心名称；不上传原始序列号、MAC 或 PNP 标识，也不把任意本机标签作为通用 tags 上传。
 
-固定信息每次 Manager/Agent 启动读取一次；重扫、预览和配置切换复用启动缓存。OS 升级、容量/拓扑或硬件变动需重启 Agent 更新。已确认档案和 revision 缓存在私有 `collector-v2.json`，同内容重启不重复上传。缓存绑定完整上传地址；切换 Server 不可直接混用旧状态目录。
+固定信息每次 Manager/Agent 启动读取一次；重扫、预览和配置切换复用启动缓存。OS 升级、容量/拓扑或硬件变动需重启 Agent 更新。已确认档案和 revision 缓存在私有 `collector-v2.json`，同内容重启不重复上传。档案确认缓存绑定完整上传地址和上传凭据的 SHA-256 验证值；切换 Server 或重新注册更换凭据时清除远端确认，保留本机稳定对象 ID。旧版本无凭据绑定的缓存会重新对账一次。该私有状态文件包含 ID/名称和确认档案，总量上限为 1 MiB；HTTP 正文和动态样本队列仍各限 256 KiB。
 
 ## 5. 样本、语义 ID 与单位
 
@@ -154,7 +154,7 @@ SMART 健康状态和公网 IPv4 默认缓存 5 分钟，携带真实观测时�
 3. Profile 确认后才给样本批次赋 revision、发送样本；没有 Profile 确认不发该配置样本。
 4. 网络失败/条件冲突等待退避，下一次对账重算；不能将本机配置保存成功显示成远端已生效。
 5. Sample 返回 `409 profile_required/profile_outdated` 时清除已确认档案缓存，对账后用新 ID 重新提交该样本。普通重试保持 ID、正文与时间戳不变。
-6. 每次配置提交（启用、修改、停用上传、Restore 恢复）都排队同步一次 Profile：启用时不再等第一轮样本才让 Server 认识设备。仅档案同步成功不更新 `last_upload_at`；停用时同步空 enabled / inventory 档案，离线时远端旧投影不能立即清除。
+6. 每次配置提交（启用、修改、停用上传、Restore 恢复）都排队同步一次 Profile：启用时不再等第一轮样本才让 Server 认识设备。首次注册后即使还没有采样配置，Agent Restore 也同步对象目录，不启用样本采集；仅档案同步成功不更新 `last_upload_at`；停用时同步空 enabled、仅保留对象目录的 inventory 档案，离线时远端旧投影不能立即清除。
 
 状态机没有把内存中的样本队列持久化；Agent 退出可能丢失待发样本。崩溃后可从保存的配置/档案重新对账，不能宣称有持久化 outbox 或无损补传。
 
@@ -170,17 +170,17 @@ SMART 健康状态和公网 IPv4 默认缓存 5 分钟，携带真实观测时�
 | Sample 422 | `upload_invalid_sample_or_clock`，丢弃该批，不自动改系统时间 |
 | 其他不可重试状态 | `upload_rejected_<status>`，丢弃并计数 |
 
-内存 FIFO 队列同时受 5 分钟、1000 轮样本、256 KiB 序列化样本总量限制，超过丢最旧并计数。当前 422 仅给出通用错误，尚无完整的时钟诊断/授权校时闭环。
+动态样本的内存 FIFO 队列同时受 5 分钟、1000 轮、256 KiB 序列化样本总量限制，超过丢最旧并计数。关闭样本时，唯一且仍属当前配置的 Profile 同步任务不会因 5 分钟年龄限制丢失，会持续退避重试；退出后由 Restore 根据启动固定信息重新排队。当前 422 仅给出通用错误，尚无完整的时钟诊断/授权校时闭环。
 
-以下为正式 Server 的实现/验收要求，**不是当前生产 Server 已具备的能力**：
+以下约束已在正式 Server 实现，验证与部署边界见 [Server WebUI](SERVER_WEBUI.md)：
 
-- Profile、revision、batch 去重及样本原子持久化到 SQLite；revision 设备内递增，无语义变化不增版。PATCH 最多 2048 操作，重建后的 Profile 也限 256 KiB；每类对象最多 256、展开选择最多 1024。
+- `inventory.objects` 为完整启动名称目录，未选动态指标的对象也可出现；按 ID 全局去重、kind 校验，已选对象必须与目录一致。旧 Client 缺少目录时仍按原字段显示。Profile、revision、batch 去重及样本原子持久化到 SQLite；revision 设备内递增，无语义变化不增版。PATCH 最多 2048 操作，重建后的 Profile 也限 256 KiB；每类对象最多 256、展开选择最多 1024。
 - 批次 1–30 轮，先校验全部再提交。验证已选字段、对象与范围，隐式允许 memory.total/used；拒绝未知字段、重复 key/ID、非法 null/整数/IP，不部分接收。
 - 以 `(device_id,batch_id)` 保存摘要及成功结果至少 24 小时。同 ID 同正文返回 204，不重复写历史/刷新在线；同 ID 不同正文为 `409 batch_id_conflict`。去重应先于 active revision 检查。
 - 样本时间窗口 `server_now−86400 ≤ t ≤ server_now+30`；未来/过旧分别报告 `timestamp_in_future/timestamp_too_old` 并提供 Server 时间。慢观测不晚于样本时间，有效窗口 15 分钟。
 - 旧 revision 返回 409；未启用字段返回 422。最新值只由更新采样时间替换；相同时间冲突需明确拒绝。历史记录按原 revision 解释。
 - 停用字段/删除对象在 Profile 提交事务中立即退出有效投影；仍启用值保留原时间和时效。新样本只有足够新（最近 `max(3×interval,30秒)`）才续在线，旧补传、重复批次、档案读写不续在线。
-- 管理认证、限流、审计、备份与重启恢复须单独验收；不要将模拟器行为等同完整严格校验或生产持久化。
+- 管理认证、限流和重启恢复有独立测试；备份采用 SQLite 一致性备份。真实公网部署和固件摘要读取迁移仍需单独验收。
 
 ## 8. 本地联调与验证入口
 
@@ -195,18 +195,10 @@ go run ./cmd/sim-server -listen 127.0.0.1:18080
 
 相关测试：[v2_test.go](../client/internal/collector/v2_test.go)、[registration_test.go](../client/internal/guibridge/registration_test.go)、[simserver 测试](../client/internal/transport/simserver/server_test.go)、[注册码测试](../client/internal/transport/simserver/register_test.go)。端到端回归可运行 `cd client && make test-collector-e2e`，使用 `cmd/sim-server` 验证注册、Profile 创建/PATCH、样本上传、重启复用档案且不访问 v1 入口。测试覆盖边界不等于真实 Server/三平台 GUI 验收。
 
-## 9. 既有 Server 与 ESP32 摘要兼容边界
+## 9. v2 摘要与读取方迁移
 
-正式 Server 当前路由见 [api.go](../server/internal/api/api.go)：
+Server 仅提供 `GET /v2/devices/summary`，使用独立只读 Bearer。旧 Telegraf 上报和 `/v1/devices/summary` 返回 404；`/healthz`、`/readyz` 为无认证探针。
 
-| 路径 | 当前实现 |
-| --- | --- |
-| `POST /v1/ingest/telegraf` | 既有外部 Telegraf JSON 上报，独立写 Token；当前 Client 已不支持此上传入口 |
-| `GET /v1/devices/summary` | ESP32/Companion 使用只读 Token 获取摘要 |
-| `GET /healthz` / `GET /readyz` | 存活 / SQLite 就绪探针 |
+摘要最多四台在线设备、4096 字节。`device_count` 与 `devices` 长度一致，每台含 `name`、`uptime`、`metric_count:3`、按 CPU/MEM/DISK 排列的 `metrics`；每项含 `name,value,percent`。名称/文本最多 8 字节，缺值为 `--`/null，离线设备省略。CPU/MEM 来自 v2 最新有效值，DISK 在 WebUI 显式选择物理磁盘 ID，以该盘已用量/总容量计算，不沿用挂载点映射。普通指标和在线时效取 `max(3×interval_seconds,30 秒)`。
 
-摘要使用 JSON，最多四台设备、4096 字节；`device_count` 与 `devices` 长度一致，每台为 `name`、`uptime`、`metric_count:3`、按 CPU/MEM/DISK 排列的 `metrics`。每项含 `name`、`value`、可空 `percent`。名称/显示文本最多 8 字节；缺值为 `--`/null，离线设备省略。默认 online timeout 与 metric TTL 均为 45 秒。
-
-投影先过滤时效，再选择采样时间最新的匹配序列；并列最新仍有歧义则显示缺失。不能沿用旧文档“先判重复再检查时效”的规则。实现见 [panel.go](../server/internal/panel/panel.go)。
-
-正式 v2 必须补齐到该摘要的投影并保持其精简结构；磁盘已改成物理盘口径，不能继续静默用旧挂载点配置映射，需新增明确选择和迁移。未实现前，不承诺当前 Client → 正式 Server → ESP32 全链路可用。
+**当前固件 monitor_devices.c 和 Client Companion 的 proxy.go 仍访问 `/v1/devices/summary`，本次 Server 开发没有修改这些读取方。** 接通摘要链路需另行将它们迁移到 `/v2/devices/summary`。当前验收包括真实 Client Agent → 正式 Server 的注册/档案/采样，不宣称固件摘要全链路已验收。

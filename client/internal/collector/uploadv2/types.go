@@ -31,18 +31,28 @@ type ProfileOperation struct {
 	Value json.RawMessage `json:"value,omitempty"` // remove 时禁止 value
 }
 
+// ObjectDescriptor maps a stable ID to its startup-cached display metadata.
+// It is implicit Profile metadata, independent of dynamic upload selections.
+type ObjectDescriptor struct {
+	ID    uint16  `json:"id"`
+	Kind  string  `json:"kind"`
+	Name  string  `json:"name"`
+	Model *string `json:"model,omitempty"`
+}
+
 type Inventory struct {
-	OS          *OSInfo         `json:"os,omitempty"`
-	Product     *string         `json:"product,omitempty"`
-	CPU         *CPUInfo        `json:"cpu,omitempty"`
-	MemoryTotal *uint64         `json:"memory_total,omitempty,string"`
-	Cores       []CoreInfo      `json:"cores,omitempty"`
-	GPUs        []ObjectInfo    `json:"gpus,omitempty"`
-	Drives      []DriveInfo     `json:"drives,omitempty"`
-	Volumes     []VolumeInfo    `json:"volumes,omitempty"`
-	Interfaces  []InterfaceInfo `json:"interfaces,omitempty"`
-	Batteries   []ObjectInfo    `json:"batteries,omitempty"`
-	Fans        []FanInfo       `json:"fans,omitempty"`
+	Objects     []ObjectDescriptor `json:"objects,omitempty"`
+	OS          *OSInfo            `json:"os,omitempty"`
+	Product     *string            `json:"product,omitempty"`
+	CPU         *CPUInfo           `json:"cpu,omitempty"`
+	MemoryTotal *uint64            `json:"memory_total,omitempty,string"`
+	Cores       []CoreInfo         `json:"cores,omitempty"`
+	GPUs        []ObjectInfo       `json:"gpus,omitempty"`
+	Drives      []DriveInfo        `json:"drives,omitempty"`
+	Volumes     []VolumeInfo       `json:"volumes,omitempty"`
+	Interfaces  []InterfaceInfo    `json:"interfaces,omitempty"`
+	Batteries   []ObjectInfo       `json:"batteries,omitempty"`
+	Fans        []FanInfo          `json:"fans,omitempty"`
 }
 
 type OSInfo struct {
