@@ -91,7 +91,6 @@ func (h *brokerHook) OnSubscribed(cl *mqtt.Client, p packets.Packet, codes []byt
 	if s == nil {
 		return
 	}
-	pre := prefix(h.backend.store.HostID(), s.pair.DeviceID, s.id) + "/down/"
 	for i, c := range codes {
 		if c > 1 {
 			cl.Stop(packets.ErrNotAuthorized)
@@ -107,7 +106,6 @@ func (h *brokerHook) OnSubscribed(cl *mqtt.Client, p packets.Packet, codes []byt
 			h.backend.mu.Unlock()
 		}
 	}
-	_ = pre
 }
 func (h *brokerHook) OnPublish(cl *mqtt.Client, p packets.Packet) (packets.Packet, error) {
 	if cl.Net.Inline {
@@ -182,27 +180,7 @@ func (h *brokerHook) OnDisconnect(cl *mqtt.Client, _ error, _ bool) {
 	}
 }
 func (b *Backend) sendMQTT(s *session, topic string, data any, qos byte) error {
-	now := time.Now()
-	switch x := data.(type) {
-	case wire.Heartbeat:
-		x.SentAt = now.Unix()
-		if x.Time != nil {
-			t := *x.Time
-			t.UnixMS = now.UnixMilli()
-			x.Time = &t
-		}
-		data = x
-	case wire.Snapshot:
-		x.SentAt = now.Unix()
-		if pd, ok := x.Sections.Proxy.Data.(wire.ProxyData); ok {
-			if td, ok := pd.Time.Data.(wire.TimeData); ok {
-				td.UnixMS = now.UnixMilli()
-				pd.Time.Data = td
-				x.Sections.Proxy.Data = pd
-			}
-		}
-		data = x
-	}
+	data = stampWallClock(data, time.Now())
 	payload, e := wire.Marshal(data)
 	if e != nil {
 		return wire.ErrMessage

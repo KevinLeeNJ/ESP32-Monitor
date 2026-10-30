@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	v2 "esp32-monitor/client/internal/collector/uploadv2"
+	"esp32-monitor/client/internal/platform"
 	"math"
 	"net/url"
 	"os"
@@ -111,31 +112,13 @@ func (m *Manager) initV2() error {
 }
 func (m *Manager) persistV2() error {
 	b, err := json.Marshal(m.v2)
-	if err == nil && len(b) > maxV2StateBody {
+	if err != nil {
+		return err
+	}
+	if len(b) > maxV2StateBody {
 		return errors.New("v2_state_too_large")
 	}
-	if err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(m.opts.StateDirectory, ".collector-v2-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	defer f.Close()
-	if err = f.Chmod(0600); err == nil {
-		_, err = f.Write(b)
-	}
-	if err == nil {
-		err = f.Sync()
-	}
-	if e := f.Close(); err == nil {
-		err = e
-	}
-	if err == nil {
-		err = os.Rename(f.Name(), filepath.Join(m.opts.StateDirectory, "collector-v2.json"))
-	}
-	return err
+	return platform.WriteFileAtomic(m.opts.StateDirectory, ".collector-v2-*", "collector-v2.json", b, 0600)
 }
 func objectKey(kind string, m Metric) string {
 	var key string

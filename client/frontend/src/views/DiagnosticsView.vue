@@ -2,10 +2,12 @@
 import { computed, ref } from "vue";
 import { appService } from "../services/bridge.js";
 import type { DiagnosticsReport } from "../types/app.js";
-import { toast } from "../store.js";
+import { restartAgent, toast } from "../store.js";
+import { fmtBytes, fmtTime } from "../services/format.js";
 
 const report = ref<DiagnosticsReport | null>(null);
 const loading = ref(false);
+const exporting = ref(false);
 
 const collector = computed(() => report.value?.collector ?? null);
 
@@ -20,8 +22,17 @@ async function load() {
   }
 }
 
-function fmtTime(value?: string | null): string {
-  return value ? new Date(value).toLocaleString("zh-CN") : "—";
+async function exportLogs() {
+  exporting.value = true;
+  try {
+    const result = await appService.exportLogs();
+    if (result.canceled) return;
+    toast(`已导出 ${fmtBytes(result.bytes)}：${result.path}`);
+  } catch (error) {
+    toast(`导出失败：${String(error)}`);
+  } finally {
+    exporting.value = false;
+  }
 }
 
 function statePill(state?: string): { text: string; cls: string } {
@@ -72,8 +83,8 @@ function statePill(state?: string): { text: string; cls: string } {
       </section>
       <section class="card span12">
         <div class="card-title"><h2>排障操作</h2></div>
-        <div class="row"><div><strong>重启 Agent</strong><small>重新加载采集器与能力检测；配置保持不变</small></div><div class="row-right"><button class="btn" @click="appService.restartAgent().then(() => toast('Agent 已重启')).catch(error => toast(`重启失败：${String(error)}`))">重启</button></div></div>
-        <div class="row"><div><strong>错误码说明</strong><small>错误码原样展示，可对照文档排查</small></div><div class="row-right"><span class="value muted">collector_disabled / unauthorized / not_found 等</span></div></div>
+        <div class="row"><div><strong>重启 Agent</strong><small>重新加载采集器与能力检测；配置保持不变</small></div><div class="row-right"><button class="btn" @click="restartAgent">重启</button></div></div>
+        <div class="row"><div><strong>导出日志</strong><small>遇到问题时，把最近的运行记录打包发给开发者协助排查</small></div><div class="row-right"><button class="btn" :disabled="exporting" @click="exportLogs">{{ exporting ? "导出中…" : "导出" }}</button></div></div>
       </section>
     </div>
   </div>

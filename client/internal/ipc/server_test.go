@@ -46,7 +46,6 @@ func newTestClient(t *testing.T, socket string) *Client {
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	t.Cleanup(func() { _ = client.Close() })
 	return client
 }
 

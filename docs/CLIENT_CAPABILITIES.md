@@ -182,7 +182,7 @@ make build
 
 macOS 应用构建入口为 `cd client && make build-app-darwin`，生成 `client/build/ESP32 Monitor.app`；脚本构建并嵌入前端、Agent与播放桥接库，执行本地签名。该入口不等于已有公证安装包。Windows 构建入口为 `cd client && powershell -ExecutionPolicy Bypass -File scripts/build-windows-app.ps1`，生成 `client/build/windows/ESP32-Monitor/` 与 `ESP32-Monitor-<version>-windows-amd64.zip`；需 Go、Node.js、.NET SDK 与 windres（无 windres 时使用已生成的 `.syso`），未安装 Inno Setup 时跳过安装器。纯Agent可通过 `--collector` 及私有状态目录运行；真实上传需先得到v2 Server签发的Token，GUI优先走验证码注册。
 
-可选模块参数：GitHub使用 `--github-login --github-client-id <public-id>` 或 `--github-user <login>`；额度用 `--codex`，任务用 `--codex-task-adapter auto`，可通过 `--codex-thread <id>` 指定会话；GUI启用Codex时自动传入任务观察参数。自动模式优先只读本地桌面状态库中的未归档用户会话ID，排除内部审查和子任务，不读取任务正文；没有状态库时回退会话索引，桌面状态不可用时不推断任务空闲。Windows 使用同用户校验的命名管道；本次状态库筛选改动仍需真实 Windows 桌面端验收。播放用 `--music`；LAN上位机用 `--companion --companion-ip <local-ip>`。完整参数以 [Agent入口](../client/internal/agent/run.go) 为准。
+可选模块参数：GitHub使用 `--github-login --github-client-id <public-id>` 或 `--github-user <login>`；额度用 `--codex`，任务用 `--codex-task-adapter auto`，可通过 `--codex-thread <id>` 指定会话；GUI启用Codex时自动传入任务观察参数。自动模式优先只读本地桌面状态库中的未归档用户会话ID，排除内部审查和子任务，不读取任务正文；没有状态库时回退会话索引，桌面状态不可用时不推断任务空闲。Windows 使用同用户校验的命名管道；本次状态库筛选改动仍需真实 Windows 桌面端验收。播放用 `--music`；LAN上位机用 `--companion --companion-ip <local-ip>`。完整参数以 [Agent参数表](../client/internal/agent/options.go) 为准。
 
 | 检查 | 从对应目录执行 | 证明范围 |
 | --- | --- | --- |

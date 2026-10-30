@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"esp32-monitor/client/internal/logging"
 	"esp32-monitor/client/internal/transport/wire"
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"io"
@@ -100,6 +101,9 @@ func (s *session) control(b *Backend, topic string, data any, id *string) error 
 }
 func (s *session) run(b *Backend) {
 	defer b.release(s)
+	device := logging.Ref(s.pair.DeviceID)
+	logging.L("transport").Info("device_session_open", "device", device, "transport", s.transport)
+	defer logging.L("transport").Info("device_session_close", "device", device, "transport", s.transport)
 	s.lastReceipt = time.Now()
 	s.ages = map[string]ageObservation{}
 	s.transactions = map[string]transaction{}

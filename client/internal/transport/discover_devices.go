@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"errors"
+	"esp32-monitor/client/internal/logging"
 	"go.bug.st/serial"
 	"go.bug.st/serial/enumerator"
 	"sync"
@@ -75,6 +76,7 @@ func (b *Backend) DiscoverDevices(ctx context.Context) DiscoveryResult {
 	if serialErr != nil {
 		result.SerialError = serialErr.Error()
 	}
+	logging.L("transport").Info("discovery", "devices", len(result.Devices), "lan_error", result.LANError, "serial_error", result.SerialError)
 	return result
 }
 func (b *Backend) ListSerialPorts() ([]DiscoveredDevice, error) {

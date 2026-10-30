@@ -6,12 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"esp32-monitor/client/internal/platform"
 	"esp32-monitor/client/internal/platform/proxy"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 type tokenResponse struct {
@@ -33,11 +33,6 @@ type deviceResponse struct {
 	Error           string `json:"error"`
 }
 
-func defaultClient() *http.Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = proxy.Default().Proxy
-	return &http.Client{Transport: transport, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-}
 func (c *Client) post(ctx context.Context, endpoint string, values url.Values, out any) error {
 	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(values.Encode()))
 	if err != nil {
@@ -82,7 +77,7 @@ func (c *Client) identity(ctx context.Context, token string) (string, error) {
 	if err := c.request(req, &identity); err != nil {
 		return "", err
 	}
-	if !validLogin(identity.Login) {
+	if !platform.ValidGitHubLogin(identity.Login) {
 		return "", errors.New("auth_invalid_identity")
 	}
 	return identity.Login, nil

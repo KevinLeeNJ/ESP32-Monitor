@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 )
 
@@ -14,19 +13,17 @@ import (
 // Credentials are plaintext, protected by a private directory and file modes.
 type localGitHubCredentials struct{ Directory string }
 
-var credentialAccount = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`)
-
 func (s localGitHubCredentials) root(ctx context.Context, account string, create bool) (*os.Root, string, error) {
-	if ctx.Err() != nil || !credentialAccount.MatchString(account) || strings.Contains(account, "--") {
+	if ctx.Err() != nil || !ValidGitHubLogin(account) {
 		return nil, "", ErrCredentialUnavailable
 	}
 	dir := s.Directory
 	if dir == "" {
-		base, err := os.UserConfigDir()
+		base, err := AppDataDir()
 		if err != nil {
 			return nil, "", ErrCredentialUnavailable
 		}
-		dir = filepath.Join(base, "ESP32-Monitor", "credentials", "github")
+		dir = filepath.Join(base, "credentials", "github")
 	}
 	if create {
 		if err := os.MkdirAll(dir, 0700); err != nil {

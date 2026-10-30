@@ -8,8 +8,9 @@ import (
 	"time"
 )
 
-// TaskTracker is a reducer for a future verified desktop event bridge. Calling it
-// proves only that events were parsed; it does not establish desktop coverage.
+// TaskTracker is a reducer reserved for a future verified desktop event bridge.
+// It currently has no production caller; only model_test.go exercises it.
+// Calling it proves only that events were parsed; it does not establish desktop coverage.
 // Stream liveness must be signalled by a bridge heartbeat, never by process presence.
 type TaskTracker struct {
 	mu        sync.Mutex

@@ -6,17 +6,14 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"esp32-monitor/client/internal/app"
-	"esp32-monitor/client/internal/collector"
-	"esp32-monitor/client/internal/diagnostics"
+	"esp32-monitor/client/internal/platform"
 	"esp32-monitor/client/internal/providers"
-	"esp32-monitor/client/internal/transport"
 )
 
 // Options configures the IPC listener.
@@ -200,288 +197,18 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) route(w http.ResponseWriter, r *http.Request) {
 	switch {
-	case r.Method == http.MethodGet && r.URL.Path == "/v1/app/status":
-		writeJSON(w, http.StatusOK, s.status())
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/app/quit":
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-		s.quitOnce.Do(func() {
-			if s.opts.Shutdown != nil {
-				go s.opts.Shutdown()
-			}
-		})
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/app/restart":
-		var req restartRequest
-		if err := decodeBody(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_json")
-			return
-		}
-		if s.opts.Restart == nil {
-			writeError(w, http.StatusNotImplemented, "restart_unsupported")
-			return
-		}
-		if err := s.opts.Restart(req.Args); err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/app/login-task":
-		var req loginTaskRequest
-		if err := decodeBody(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_json")
-			return
-		}
-		if s.opts.ConfigureLoginTask == nil {
-			writeError(w, http.StatusNotImplemented, "login_task_unsupported")
-			return
-		}
-		if err := s.opts.ConfigureLoginTask(req.Enabled); err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/app/server-test":
-		var req serverTestRequest
-		if err := decodeBody(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_json")
-			return
-		}
-		writeJSON(w, http.StatusOK, s.serverTest(req))
-	case r.Method == http.MethodGet && r.URL.Path == "/v1/diagnostics/report":
-		writeJSON(w, http.StatusOK, diagnostics.Build(s.app, s.opts.Now()))
-	case r.Method == http.MethodGet && r.URL.Path == "/v1/companion/snapshot":
-		writeJSON(w, http.StatusOK, s.app.Companion.Snapshot())
-	case r.Method == http.MethodGet && r.URL.Path == "/v1/now-playing":
-		writeJSON(w, http.StatusOK, s.app.GetNowPlayingSnapshot())
-	case r.Method == http.MethodGet && r.URL.Path == "/v1/github/session":
-		writeJSON(w, http.StatusOK, s.app.GitHubAuth.Status())
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/github/login/start":
-		session, err := s.app.GitHubAuth.StartLogin(r.Context())
-		if err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, session)
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/github/login/poll":
-		var req githubSessionIDRequest
-		if err := decodeBody(r, &req); err != nil || req.SessionID == "" {
-			writeError(w, http.StatusBadRequest, "invalid_request")
-			return
-		}
-		session, err := s.app.GitHubAuth.PollLogin(r.Context(), req.SessionID)
-		if err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, session)
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/github/login/cancel":
-		var req githubSessionIDRequest
-		if err := decodeBody(r, &req); err != nil || req.SessionID == "" {
-			writeError(w, http.StatusBadRequest, "invalid_request")
-			return
-		}
-		writeJSON(w, http.StatusOK, s.app.GitHubAuth.CancelLogin(req.SessionID))
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/github/logout":
-		var req githubLogoutRequest
-		if err := decodeBody(r, &req); err != nil || req.Login == "" {
-			writeError(w, http.StatusBadRequest, "invalid_request")
-			return
-		}
-		if err := s.app.GitHubAuth.Logout(r.Context(), req.Login); err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-	case r.Method == http.MethodGet && r.URL.Path == "/v1/collector/capabilities":
-		if s.app.Collector == nil {
-			writeError(w, http.StatusConflict, "collector_disabled")
-			return
-		}
-		caps, err := s.app.GetCollectorCapabilities()
-		if err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, caps)
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/collector/rescan":
-		if s.app.Collector == nil {
-			writeError(w, http.StatusConflict, "collector_disabled")
-			return
-		}
-		caps, err := s.app.DiscoverCollectorMetrics(r.Context())
-		if err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, caps)
-	case r.Method == http.MethodGet && r.URL.Path == "/v1/collector/status":
-		if s.app.Collector == nil {
-			writeError(w, http.StatusConflict, "collector_disabled")
-			return
-		}
-		snapshot, err := s.app.GetCollectorSnapshot()
-		if err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, snapshot)
-	case r.Method == http.MethodPut && r.URL.Path == "/v1/collector/config":
-		if s.app.Collector == nil {
-			writeError(w, http.StatusConflict, "collector_disabled")
-			return
-		}
-		var config collector.Config
-		if err := decodeBody(r, &config); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_config_json")
-			return
-		}
-		snapshot, err := s.app.ApplyCollectorConfig(r.Context(), config)
-		if err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, snapshot)
-	case r.Method == http.MethodGet && r.URL.Path == "/v1/monitors/devices":
-		devices, err := s.app.GetMonitorDevices()
-		if err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, devices)
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/monitors/discover":
-		var req monitorDiscoverRequest
-		if err := decodeBody(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_request")
-			return
-		}
-		timeout := time.Duration(req.TimeoutMS) * time.Millisecond
-		if timeout <= 0 || timeout > 30*time.Second {
-			timeout = 10 * time.Second
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), timeout)
-		defer cancel()
-		result, err := s.app.DiscoverMonitors(ctx)
-		if err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, result)
-	case r.Method == http.MethodGet && r.URL.Path == "/v1/monitors/pairing/status":
-		status, err := s.app.GetMonitorPairingStatus()
-		if err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, status)
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/monitors/pairing/begin":
-		var req struct {
-			Device   string `json:"device"`
-			TrustLAN bool   `json:"trust_lan"`
-		}
-		if err := decodeBody(r, &req); err != nil || req.Device == "" {
-			writeError(w, http.StatusBadRequest, "invalid_request")
-			return
-		}
-		if err := s.app.BeginMonitorPairing(req.Device, req.TrustLAN); err != nil {
-			writeAppError(w, err)
-			return
-		}
-		status, err := s.app.GetMonitorPairingStatus()
-		if err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, status)
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/monitors/pairing/confirm":
-		var req pairingConfirmRequest
-		if err := decodeBody(r, &req); err != nil || req.PairingID == "" {
-			writeError(w, http.StatusBadRequest, "invalid_request")
-			return
-		}
-		if err := s.app.ConfirmMonitorPairing(req.PairingID, req.Approve); err != nil {
-			writeAppError(w, err)
-			return
-		}
-		status, err := s.app.GetMonitorPairingStatus()
-		if err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, status)
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/monitors/revoke":
-		var req deviceRequest
-		if err := decodeBody(r, &req); err != nil || req.Device == "" {
-			writeError(w, http.StatusBadRequest, "invalid_request")
-			return
-		}
-		if err := s.app.RevokeMonitor(req.Device); err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/monitors/enabled":
-		var req deviceEnabledRequest
-		if err := decodeBody(r, &req); err != nil || req.Device == "" {
-			writeError(w, http.StatusBadRequest, "invalid_request")
-			return
-		}
-		if err := s.app.SetMonitorEnabled(req.Device, req.Enabled); err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/monitors/lan/consent":
-		var req deviceConsentRequest
-		if err := decodeBody(r, &req); err != nil || req.Device == "" {
-			writeError(w, http.StatusBadRequest, "invalid_request")
-			return
-		}
-		if err := s.app.ConfirmMonitorLANConsent(req.Device, req.Trusted); err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/monitors/lan/interface":
-		var req lanInterfaceRequest
-		if err := decodeBody(r, &req); err != nil || req.IP == "" {
-			writeError(w, http.StatusBadRequest, "invalid_request")
-			return
-		}
-		if err := s.app.SetMonitorLANInterface(req.IP); err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-	case r.Method == http.MethodGet && r.URL.Path == "/v1/monitors/serial/ports":
-		ports, err := s.app.ListMonitorSerialPorts()
-		if err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, ports)
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/monitors/serial/probe":
-		var req serialProbeRequest
-		if err := decodeBody(r, &req); err != nil || req.Port == "" {
-			writeError(w, http.StatusBadRequest, "invalid_request")
-			return
-		}
-		device, err := s.app.ProbeMonitorSerial(r.Context(), req.Port)
-		if err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, device)
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/monitors/serial/connect":
-		var req serialConnectRequest
-		if err := decodeBody(r, &req); err != nil || req.Port == "" {
-			writeError(w, http.StatusBadRequest, "invalid_request")
-			return
-		}
-		selection := transport.SerialSelection{DeviceID: req.DeviceID, TrustPhysicalConnection: req.TrustPhysicalConnection}
-		if err := s.app.ConnectMonitorSerial(r.Context(), req.Port, selection); err != nil {
-			writeAppError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	case strings.HasPrefix(r.URL.Path, "/v1/app/"):
+		s.routeApp(w, r)
+	case r.URL.Path == "/v1/diagnostics/report":
+		s.routeDiagnostics(w, r)
+	case strings.HasPrefix(r.URL.Path, "/v1/collector/"):
+		s.routeCollector(w, r)
+	case strings.HasPrefix(r.URL.Path, "/v1/github/"):
+		s.routeGitHub(w, r)
+	case strings.HasPrefix(r.URL.Path, "/v1/companion/"), r.URL.Path == "/v1/now-playing":
+		s.routeCompanion(w, r)
+	case strings.HasPrefix(r.URL.Path, "/v1/monitors/"):
+		s.routeMonitors(w, r)
 	default:
 		writeError(w, http.StatusNotFound, "not_found")
 	}
@@ -506,8 +233,7 @@ func (s *Server) status() Status {
 func (s *Server) serverTest(req serverTestRequest) ServerTestResult {
 	base := strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
 	result := ServerTestResult{URL: base + "/healthz"}
-	u, err := url.Parse(base)
-	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
+	if _, err := platform.ParseHTTPURL(base); err != nil {
 		result.Error = "invalid_server_url"
 		return result
 	}

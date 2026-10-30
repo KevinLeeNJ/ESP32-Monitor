@@ -5,7 +5,6 @@ import (
 	"flag"
 	"io"
 	"net"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,12 +15,10 @@ import (
 	"time"
 
 	"esp32-monitor/client/internal/ipc"
+	"esp32-monitor/client/internal/platform"
 )
 
-var (
-	restartLoginPattern  = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`)
-	restartClientPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
-)
+var restartClientPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 
 // validateRestartArgs accepts only the flags the GUI is allowed to change.
 // Paths that could redirect privileged reads or execute another binary are
@@ -56,20 +53,15 @@ func validateRestartArgs(currentSocket string, args []string) error {
 		return errors.New("restart_task_adapter_invalid")
 	}
 	if uploadURL != "" {
-		u, err := url.Parse(uploadURL)
-		if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			return errors.New("restart_upload_url_invalid")
-		}
-		if u.Scheme != "https" && u.Scheme != "http" {
+		if _, err := platform.ParseHTTPURL(uploadURL); err != nil {
 			return errors.New("restart_upload_url_invalid")
 		}
 	}
 	if tokenFile != "" {
-		base, err := os.UserConfigDir()
+		root, err := platform.AppDataDir()
 		if err != nil {
 			return errors.New("restart_token_path_unavailable")
 		}
-		root := filepath.Join(base, "ESP32-Monitor")
 		clean, err := filepath.Abs(filepath.Clean(tokenFile))
 		if err != nil {
 			return errors.New("restart_token_path_invalid")
@@ -85,7 +77,7 @@ func validateRestartArgs(currentSocket string, args []string) error {
 	if companionIP != "" && net.ParseIP(companionIP).To4() == nil {
 		return errors.New("restart_companion_ip_invalid")
 	}
-	if githubLogin != "" && (!restartLoginPattern.MatchString(githubLogin) || strings.Contains(githubLogin, "--")) {
+	if githubLogin != "" && !platform.ValidGitHubLogin(githubLogin) {
 		return errors.New("restart_github_login_invalid")
 	}
 	if githubClientID != "" && !restartClientPattern.MatchString(githubClientID) {

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+
+	"esp32-monitor/client/internal/platform"
 )
 
 // Settings is the persisted, non-sensitive GUI configuration. It decides the
@@ -81,11 +83,11 @@ func DefaultSettings() Settings {
 
 // SettingsPath returns the private settings file path.
 func SettingsPath() (string, error) {
-	base, err := os.UserConfigDir()
+	base, err := platform.AppDataDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "ESP32-Monitor", "gui-settings.json"), nil
+	return filepath.Join(base, "gui-settings.json"), nil
 }
 
 // DefaultSocketPath returns the well-known Agent IPC endpoint. macOS/Linux

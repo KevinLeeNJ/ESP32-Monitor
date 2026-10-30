@@ -6,13 +6,13 @@ import (
 	"errors"
 	"math/rand/v2"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	v2 "esp32-monitor/client/internal/collector/uploadv2"
-	"esp32-monitor/client/internal/platform/proxy"
+	"esp32-monitor/client/internal/logging"
+	"esp32-monitor/client/internal/platform"
 )
 
 type queued struct {
@@ -26,11 +26,8 @@ type queued struct {
 
 func (m *Manager) initUploader() error {
 	if m.opts.UploadURL != "" {
-		u, err := url.Parse(m.opts.UploadURL)
-		if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Hostname() == "" || u.Path != "/v2/collector/samples" {
-			return errors.New("invalid_upload_url")
-		}
-		if u.Scheme != "https" && u.Scheme != "http" {
+		u, err := platform.ParseHTTPURL(m.opts.UploadURL)
+		if err != nil || u.Path != "/v2/collector/samples" {
 			return errors.New("invalid_upload_url")
 		}
 		if m.opts.UploadToken == nil {
@@ -38,9 +35,7 @@ func (m *Manager) initUploader() error {
 		}
 	}
 	if m.opts.HTTPClient == nil {
-		transport := http.DefaultTransport.(*http.Transport).Clone()
-		transport.Proxy = proxy.Default().Proxy
-		m.opts.HTTPClient = &http.Client{Transport: transport, Timeout: 8 * time.Second}
+		m.opts.HTTPClient = platform.NewHTTPClient(8 * time.Second)
 	}
 	client := *m.opts.HTTPClient
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -66,8 +61,13 @@ func (m *Manager) trimQueueLocked(now time.Time) {
 		if !expired && queueMetrics(m.queue) <= 1000 && queueBytes(m.queue) <= maxBody {
 			break
 		}
-		m.snapshot.DroppedMetrics += uint64(queueMetrics(m.queue[:1]))
+		dropped := queueMetrics(m.queue[:1])
+		m.snapshot.DroppedMetrics += uint64(dropped)
 		m.queue = m.queue[1:]
+		if dropped > 0 && now.Sub(m.dropLogAt) >= time.Minute {
+			m.dropLogAt = now
+			logging.L("collector").Warn("queue_overflow", "dropped_metrics", dropped, "dropped_total", m.snapshot.DroppedMetrics)
+		}
 	}
 }
 func (m *Manager) uploadLoop() {
@@ -111,6 +111,7 @@ func (m *Manager) finishDelivery(q queued, status int, headers http.Header, prof
 	if len(m.queue) == 0 || m.queue[0].revision != q.revision || !m.queue[0].at.Equal(q.at) {
 		return
 	}
+	previousError := m.snapshot.UploadError
 	switch {
 	case status >= 200 && status < 300:
 		now := time.Now()
@@ -151,6 +152,13 @@ func (m *Manager) finishDelivery(q queued, status int, headers http.Header, prof
 		}
 		m.snapshot.DroppedMetrics += uint64(queueMetrics([]queued{q}))
 		m.queue = m.queue[1:]
+	}
+	if previousError != m.snapshot.UploadError {
+		if m.snapshot.UploadError == "" {
+			logging.L("collector").Info("upload_recovered")
+		} else {
+			logging.L("collector").Warn("upload_state", "error", m.snapshot.UploadError, "status", status)
+		}
 	}
 }
 

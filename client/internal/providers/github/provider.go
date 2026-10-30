@@ -8,11 +8,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"esp32-monitor/client/internal/logging"
+	"esp32-monitor/client/internal/platform"
 	"esp32-monitor/client/internal/platform/proxy"
 	"esp32-monitor/client/internal/providers"
 )
@@ -54,19 +55,14 @@ type Provider struct {
 	cacheErr     bool
 }
 
-var loginPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`)
-
 func New(opts Options) (*Provider, error) {
-	if opts.Enabled && (!loginPattern.MatchString(opts.Login) || strings.Contains(opts.Login, "--")) {
+	if opts.Enabled && !platform.ValidGitHubLogin(opts.Login) {
 		return nil, errors.New("invalid_github_login")
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	client := http.Client{Timeout: 15 * time.Second}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = proxy.Default().Proxy
-	client.Transport = transport
+	client := *platform.NewHTTPClient(15 * time.Second)
 	if opts.HTTPClient != nil {
 		client = *opts.HTTPClient
 	}
@@ -157,6 +153,7 @@ func (p *Provider) Refresh(ctx context.Context, manual bool) Snapshot {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	previousState, previousCode := p.health.State, p.health.ErrorCode
 	p.health.ObservedAt = now
 	if err != nil {
 		p.failures++
@@ -197,6 +194,13 @@ func (p *Provider) Refresh(ctx context.Context, manual bool) Snapshot {
 			p.cacheErr = p.save() != nil
 		} else {
 			p.cacheErr = false
+		}
+	}
+	if p.health.State != previousState || p.health.ErrorCode != previousCode {
+		if p.health.State == providers.Healthy {
+			logging.L("github").Info("github_recovered")
+		} else {
+			logging.L("github").Warn("github_health", "state", p.health.State, "error_code", p.health.ErrorCode)
 		}
 	}
 	return p.snapshot(now)
@@ -277,22 +281,6 @@ func (p *Provider) save() error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".github-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
 	data, _ := json.Marshal(p.cache)
-	if _, err = f.Write(data); err != nil {
-		f.Close()
-		return err
-	}
-	if err = f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), path)
+	return platform.WriteFileAtomic(filepath.Dir(path), ".github-*", filepath.Base(path), data, 0600)
 }

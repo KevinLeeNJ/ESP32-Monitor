@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"esp32-monitor/client/internal/logging"
 	"esp32-monitor/client/internal/platform/proxy"
 	"esp32-monitor/client/internal/providers"
 	"esp32-monitor/client/internal/taskmonitor"
@@ -114,6 +115,7 @@ func (p *Provider) Refresh(ctx context.Context) Snapshot {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	previousState, previousCode := p.snapshot.Quota.Health.State, p.snapshot.Quota.Health.ErrorCode
 	p.snapshot.Quota.Health.ObservedAt = now
 	p.next = now.Add(time.Minute)
 	if err != nil {
@@ -156,6 +158,13 @@ func (p *Provider) Refresh(ctx context.Context) Snapshot {
 		if len(windows) == 0 {
 			p.snapshot.Quota.Health.State = providers.Degraded
 			p.snapshot.Quota.Health.ErrorCode = "quota_unknown"
+		}
+	}
+	if p.snapshot.Quota.Health.State != previousState || p.snapshot.Quota.Health.ErrorCode != previousCode {
+		if p.snapshot.Quota.Health.State == providers.Healthy {
+			logging.L("codex").Info("codex_recovered")
+		} else {
+			logging.L("codex").Warn("codex_health", "state", p.snapshot.Quota.Health.State, "error_code", p.snapshot.Quota.Health.ErrorCode)
 		}
 	}
 	return p.copy()

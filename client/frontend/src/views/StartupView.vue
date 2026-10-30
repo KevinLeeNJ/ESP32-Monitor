@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { cloneSettings, store, saveSettings, toast } from "../store.js";
-import { appService } from "../services/bridge.js";
+import { cloneSettings, quitApp, restartAgent, store, saveSettings, toast } from "../store.js";
+import { fmtClockTime } from "../services/format.js";
 import type { GuiSettings } from "../types/app.js";
 
 const saving = ref(false);
@@ -30,14 +30,6 @@ async function persist() {
   }
 }
 
-async function restartAgent() {
-  try {
-    await appService.restartAgent();
-    toast("Agent 已重启");
-  } catch (error) {
-    toast(`重启失败：${String(error)}`);
-  }
-}
 </script>
 
 <template>
@@ -84,13 +76,13 @@ async function restartAgent() {
       </section>
       <section class="card span5">
         <div class="card-title"><h2>后台状态</h2></div>
-        <div class="row"><div><strong>Agent</strong><small>PID {{ store.status?.pid ?? "—" }} · 启动于 {{ store.status?.start_time ? new Date(store.status.start_time).toLocaleTimeString("zh-CN") : "—" }}</small></div><div class="row-right"><span class="pill" :class="store.statusError ? 'amber' : ''">{{ store.statusError ? "不可达" : "运行中" }}</span></div></div>
+        <div class="row"><div><strong>Agent</strong><small>PID {{ store.status?.pid ?? "—" }} · 启动于 {{ fmtClockTime(store.status?.start_time) }}</small></div><div class="row-right"><span class="pill" :class="store.statusError ? 'amber' : ''">{{ store.statusError ? "不可达" : "运行中" }}</span></div></div>
         <div class="row"><div><strong>采集服务</strong><small>{{ store.status?.collector_enabled ? "用户会话内运行" : "未启用" }}</small></div><div class="row-right"><span class="pill" :class="store.status?.collector_enabled ? '' : 'gray'">{{ store.status?.collector_enabled ? "运行中" : "未启用" }}</span></div></div>
         <div class="row"><div><strong>上位机服务</strong><small>{{ store.status?.companion_enabled ? "监听局域网接口" : "未启用" }}</small></div><div class="row-right"><span class="pill" :class="store.status?.companion_enabled ? '' : 'gray'">{{ store.status?.companion_enabled ? "运行中" : "未启用" }}</span></div></div>
         <div class="row"><div><strong>数据源</strong><small>GitHub / Codex / 播放</small></div><div class="row-right"><span class="value muted">{{ [store.status?.github_enabled, store.status?.codex_enabled, store.status?.music_enabled].filter(Boolean).length }} / 3 启用</span></div></div>
         <div class="actions">
           <button class="btn" @click="restartAgent">重启 Agent</button>
-          <button class="btn" @click="appService.quit().catch((error: unknown) => toast(`退出失败：${String(error)}`))">退出应用</button>
+          <button class="btn" @click="quitApp">退出应用</button>
         </div>
         <p class="hint">退出应用会停止采集并断开 ESP32 连接。</p>
       </section>

@@ -71,9 +71,6 @@ func dialValidatedIPC(ctx context.Context, path string) (net.Conn, error) {
 	return conn, nil
 }
 
-// Close is present for symmetry; per-call connections are closed after use.
-func (c *Client) Close() error { return nil }
-
 func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
 	var reader io.Reader
 	if body != nil {

@@ -68,7 +68,12 @@ func (p *proxyWorker) devicesLoop(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		var d wire.DeviceSummary
-		e := p.fetch(ctx, strings.TrimRight(*p.config.Devices.URL, "/")+"/v1/devices/summary", *p.config.Devices.Token, &d, 4096)
+		e := p.fetch(ctx, strings.TrimRight(*p.config.Devices.URL, "/")+"/v1/devices/summary", &d, 4096, func(r *http.Request) {
+			r.Header.Set("Accept", "application/json")
+			if token := *p.config.Devices.Token; token != "" {
+				r.Header.Set("Authorization", "Bearer "+token)
+			}
+		})
 		if e == nil {
 			e = validateSummary(d)
 		}
@@ -98,15 +103,14 @@ func validateSummary(d wire.DeviceSummary) error {
 	}
 	return nil
 }
-func (p *proxyWorker) fetch(ctx context.Context, endpoint, token string, out any, limit int) error {
+func (p *proxyWorker) fetch(ctx context.Context, endpoint string, out any, limit int, configure func(*http.Request)) error {
 	r, e := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if e != nil {
 		return errors.New("upstream_unavailable")
 	}
-	r.Header.Set("Accept", "application/json")
 	r.Header.Set("Accept-Encoding", "identity")
-	if token != "" {
-		r.Header.Set("Authorization", "Bearer "+token)
+	if configure != nil {
+		configure(r)
 	}
 	resp, e := p.client.Do(r)
 	if e != nil {
@@ -149,11 +153,9 @@ func (p *proxyWorker) update(s *wire.Section, data any, e error) {
 	s.LastSuccessAt = wire.Ptr(now.Unix())
 	s.AgeMS = wire.Ptr(int64(0))
 	s.SourceVersion = wire.Ptr("proxy-v1")
-	p.successTimes[sKey(s)] = now
+	// successTimes uses time.Time's monotonic component; failures never reset age.
+	p.successTimes[s] = now
 }
-
-// successTimes uses time.Time's monotonic component; failures never reset age.
-func sKey(s *wire.Section) *wire.Section { return s }
 func (p *proxyWorker) snapshot(serial bool) wire.ProxyData {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -197,7 +199,9 @@ func (p *proxyWorker) weatherLoop(ctx context.Context) {
 			Latitude  float64 `json:"latitude"`
 			Longitude float64 `json:"longitude"`
 		}
-		locationErr = p.fetch(ctx, "https://ipwho.is/", "", &geo, 4096)
+		locationErr = p.fetch(ctx, "https://ipwho.is/", &geo, 4096, func(r *http.Request) {
+			r.Header.Set("Accept", "application/json")
+		})
 		if locationErr == nil && (!geo.Success || geo.Latitude < -90 || geo.Latitude > 90 || geo.Longitude < -180 || geo.Longitude > 180) {
 			locationErr = errors.New("invalid_upstream")
 		}
@@ -231,7 +235,7 @@ func (p *proxyWorker) weather(ctx context.Context, lat, lon float64) {
 			Icon string `json:"icon"`
 		} `json:"now"`
 	}
-	e := p.fetchWeather(ctx, "https://"+host+"/v7/weather/now?location="+location, &weather)
+	e := p.fetch(ctx, "https://"+host+"/v7/weather/now?location="+location, &weather, 16384, p.qweatherHeaders)
 	condition := -1
 	if e == nil {
 		if weather.Code != "200" {
@@ -249,7 +253,7 @@ func (p *proxyWorker) weather(ctx context.Context, lat, lon float64) {
 			AQI     *json.RawMessage `json:"aqi,omitempty"`
 		} `json:"indexes"`
 	}
-	e = p.fetchWeather(ctx, fmt.Sprintf("https://%s/airquality/v1/current/%.5f/%.5f?lang=zh", host, lat, lon), &air)
+	e = p.fetch(ctx, fmt.Sprintf("https://%s/airquality/v1/current/%.5f/%.5f?lang=zh", host, lat, lon), &air, 16384, p.qweatherHeaders)
 	v := -1
 	if e == nil {
 		if len(air.Indexes) == 0 {
@@ -278,33 +282,8 @@ func (p *proxyWorker) weather(ctx context.Context, lat, lon float64) {
 }
 
 // QWeather supports X-QW-Api-Key. Do not put credentials in URL query strings.
-func (p *proxyWorker) fetchWeather(ctx context.Context, endpoint string, out any) error {
-	client := p.client // client is immutable; header wrapper is local
-	r, e := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
-	if e != nil {
-		return errors.New("upstream_unavailable")
-	}
+func (p *proxyWorker) qweatherHeaders(r *http.Request) {
 	r.Header.Set("X-QW-Api-Key", *p.config.Weather.Key)
-	r.Header.Set("Accept-Encoding", "identity")
-	resp, e := client.Do(r)
-	if e != nil {
-		return errors.New("upstream_unavailable")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == 401 || resp.StatusCode == 403 {
-		return errors.New("auth_required")
-	}
-	if resp.StatusCode != 200 {
-		return errors.New("upstream_error")
-	}
-	if resp.Header.Get("Content-Encoding") != "" && resp.Header.Get("Content-Encoding") != "identity" {
-		return errors.New("invalid_upstream")
-	}
-	data, e := io.ReadAll(io.LimitReader(resp.Body, 16385))
-	if e != nil || wire.DecodeJSON(data, out, 16384) != nil {
-		return errors.New("invalid_upstream")
-	}
-	return nil
 }
 
 // Keep the firmware's condition families; an unrecognized code stays unknown.

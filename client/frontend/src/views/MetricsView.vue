@@ -1,34 +1,42 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { collector, store, toast } from "../store.js";
+import { computed, onMounted, ref, watch } from "vue";
+import { collector, store, toast, useCollectorRevision } from "../store.js";
 import {
-  deviceDependencies, metricGroup, metricGroups, metricNames, orderedRows,
-  pruneDeviceDependents, rowValue, selectedObjects, validateMetricDraft,
+  deviceDependencies, ensureUploadConfig, metricGroup, metricGroups, metricNames, orderedRows,
+  pruneDeviceDependents, rowValue, selectedObjects,
 } from "../services/collector-metrics.js";
+import { isV2Server } from "../services/server-url.js";
 import type { CollectorV2Capabilities, CollectorV2Metric } from "../types/collector.js";
 import type { MetricRow } from "../services/collector-metrics.js";
 import PixelSelect from "../components/PixelSelect.vue";
 
 const activeTab = ref("CPU");
-const draftInterval = ref(10);
 const intervalOptions = [5, 10, 30, 60].map(seconds => ({ value: seconds, label: `${seconds} 秒` }));
-const busy = ref(false);
-// CollectorController is a plain class: subscribe so draft edits and the 2s
+const busy = computed(() => collector.busy);
+// CollectorController is a plain class: subscribe so draft edits and the
 // snapshot poll re-render this view (object gating, checked states, values).
-const revision = ref(0);
+const revision = useCollectorRevision();
 
 const caps = computed(() => { revision.value; return collector.capabilities?.v2 ?? null; });
 const hardwareMonitor = computed(() => { revision.value; return collector.capabilities?.hardware_monitor; });
-const v2Configured = computed(() => (store.settings?.collector.upload_url ?? "").endsWith("/v2/collector/samples"));
+const v2Configured = computed(() => isV2Server(store.settings?.collector.upload_url ?? ""));
 const stateNames: Record<string, string> = { healthy: "正常", degraded: "需关注", error: "异常", disabled: "未启用", starting: "启动中" };
 const collectorState = computed(() => { revision.value; return stateNames[collector.snapshot?.state ?? ""] ?? collector.snapshot?.state ?? "加载中"; });
+const draftInterval = computed({
+  get: () => collector.draft?.interval_seconds ?? 10,
+  set: (value: number) => {
+    const draft = collector.draft;
+    if (!draft) return;
+    draft.interval_seconds = value;
+    collector.notifyDraftChanged();
+  },
+});
 const uploadEnabled = computed({
   get: () => { revision.value; return collector.draft?.upload?.enabled ?? false; },
   set: (value: boolean) => {
     const draft = collector.draft;
     if (!draft) return;
-    draft.upload ??= { enabled: false, optional: [] };
-    draft.upload.enabled = value;
+    ensureUploadConfig(draft).enabled = value;
     collector.notifyDraftChanged();
   },
 });
@@ -121,33 +129,16 @@ function batteryValue(): string {
 }
 
 async function rescan() {
-  busy.value = true;
   await collector.rescan();
-  busy.value = false;
   toast(collector.error ? `检测失败：${collector.error}` : "已更新本机指标能力");
 }
 
 async function apply() {
   if (!collector.draft) return;
-  collector.draft.interval_seconds = draftInterval.value;
-  const error = validateMetricDraft(collector.draft, collector.capabilities);
-  if (error) { toast(error); return; }
-  busy.value = true;
-  await collector.apply();
-  busy.value = false;
-  toast(collector.error ? `保存失败：${collector.error}` : "采集配置已保存");
-  if (!collector.error && collector.snapshot) draftInterval.value = collector.snapshot.config.interval_seconds;
+  const ok = await collector.apply();
+  toast(ok ? "采集配置已保存" : `保存失败：${collector.error}`);
 }
 
-const unsubscribe = collector.subscribe(() => { revision.value++; });
-onUnmounted(unsubscribe);
-let intervalInitialized = false;
-watch(revision, () => {
-  if (!intervalInitialized && collector.snapshot) {
-    draftInterval.value = collector.snapshot.config.interval_seconds;
-    intervalInitialized = true;
-  }
-}, { immediate: true });
 onMounted(async () => {
   if (!collector.capabilities) await collector.rescan();
 });

@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"esp32-monitor/client/internal/collector/uploadv2"
+	"esp32-monitor/client/internal/logging"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -50,10 +50,9 @@ type Manager struct {
 	// previewStarting prevents concurrent GUI snapshot requests from starting
 	// more than one transient, local-only preview generation.
 	previewStarting bool
+	// dropLogAt rate-limits queue-overflow logging during long outages.
+	dropLogAt time.Time
 }
-
-// previewTTL comfortably exceeds the GUI snapshot poll interval.
-const previewTTL = 15 * time.Second
 
 type generation struct {
 	config       Config
@@ -217,6 +216,7 @@ func (m *Manager) failure(err error) (Snapshot, error) {
 		m.snapshot.State = "error"
 	}
 	m.mu.Unlock()
+	logging.L("collector").Warn("collector_apply_failed", "error", err)
 	return m.Snapshot(), err
 }
 
@@ -248,6 +248,7 @@ func (m *Manager) disable(ctx context.Context, c Config) (Snapshot, error) {
 	}
 	m.mu.Unlock()
 	m.delivery.Unlock()
+	logging.L("collector").Info("collector_disabled", "revision", revision)
 	return m.Snapshot(), nil
 }
 func (m *Manager) commit(g *generation) {
@@ -279,6 +280,8 @@ func (m *Manager) commit(g *generation) {
 	g.cancel = cancel
 	g.done = make(chan struct{})
 	go m.collectLoop(ctx, g)
+	logging.L("collector").Info("collector_started", "revision", g.revision, "interval_seconds", g.config.IntervalSeconds,
+		"upload", g.config.Upload != nil && g.config.Upload.Enabled)
 }
 func randomToken() string {
 	var b [32]byte
@@ -288,84 +291,12 @@ func randomToken() string {
 	return hex.EncodeToString(b[:])
 }
 
-// collectConfig keeps every local source running so the GUI can show live
-// values for available metrics the user has not selected.
-func (m *Manager) collectConfig(c Config) Config {
-	return v2PreviewConfig(c)
-}
-
-// MarkPreview records that a GUI is consuming snapshots. Preview gathering
-// stops once the TTL expires, so a headless Agent only reads upload selections.
-func (m *Manager) MarkPreview() {
-	now := time.Now()
-	previous := m.previewAt.Swap(now.UnixNano())
-	if previous == 0 || now.Sub(time.Unix(0, previous)) >= previewTTL {
-		select {
-		case m.previewCh <- struct{}{}:
-		default:
-		}
-	}
-	// A first-run Client has no committed upload configuration, so there is no
-	// collection generation yet.  Start an in-memory preview generation on
-	// demand. It is deliberately not persisted and cannot upload anything.
-	m.mu.Lock()
-	start := m.current == nil && !m.previewStarting
-	if start {
-		m.previewStarting = true
-	}
-	m.mu.Unlock()
-	if start {
-		go m.startPreview()
-	}
-}
-
-func (m *Manager) startPreview() {
-	m.op.Lock()
-	defer m.op.Unlock()
-	defer func() {
-		m.mu.Lock()
-		m.previewStarting = false
-		m.mu.Unlock()
-	}()
-	if m.closed || m.current != nil || !m.previewActive() {
-		return
-	}
-	snapshot := m.Snapshot()
-	previewConfig := detached(snapshot.Config)
-	// A failed restore must remain visible and must never start uploading as a
-	// side effect of opening the GUI. Preserve its committed configuration.
-	previewConfig.Selections = nil
-	if previewConfig.Upload != nil {
-		previewConfig.Upload.Enabled = false
-	}
-	if previewConfig.IntervalSeconds < 5 || previewConfig.IntervalSeconds > 60 {
-		previewConfig.IntervalSeconds = 10
-	}
-	g, err := m.start(m.ctx, previewConfig, snapshot.Revision)
-	if err != nil {
-		_, _ = m.failure(err)
-		return
-	}
-	g.previewOnly = true
-	m.mu.Lock()
-	m.current = g
-	m.mu.Unlock()
-	m.accept(g, g.staged, true)
-	ctx, cancel := context.WithCancel(m.ctx)
-	g.cancel = cancel
-	g.done = make(chan struct{})
-	go m.collectLoop(ctx, g)
-}
-
-func (m *Manager) previewActive() bool {
-	at := m.previewAt.Load()
-	return at != 0 && time.Since(time.Unix(0, at)) < previewTTL
-}
-
 func (m *Manager) start(ctx context.Context, c Config, revision uint64) (*generation, error) {
 	ctx, cancel := context.WithTimeout(ctx, m.opts.ApplyTimeout)
 	defer cancel()
-	g := &generation{config: c, collect: m.collectConfig(c), revision: revision, core: m.opts.CoreFactory(), native: m.opts.NativeFactory(), slow: map[string]int64{}}
+	// Preview keeps every local source running so the GUI can show live values
+	// for available metrics the user has not selected.
+	g := &generation{config: c, collect: v2PreviewConfig(c), revision: revision, core: m.opts.CoreFactory(), native: m.opts.NativeFactory(), slow: map[string]int64{}}
 	if core, ok := g.core.(*CoreCollector); ok && c.Upload != nil && c.Upload.Enabled {
 		core.maxRateGap = time.Duration(c.IntervalSeconds) * 2 * time.Second
 	}
@@ -429,15 +360,22 @@ func (m *Manager) collectLoop(ctx context.Context, g *generation) {
 			}
 		}
 		m.mu.Lock()
+		changed := false
+		state, code := "", ""
 		if m.current == g && !g.previewOnly {
-			m.snapshot.State = "healthy"
-			m.snapshot.ErrorCode = ""
+			state = "healthy"
 			if len(reasons) > 0 || validate(g.config, capabilitiesFrom(batch, reasons)) != nil {
-				m.snapshot.State = "error"
-				m.snapshot.ErrorCode = "collector_gather_failed"
+				state = "error"
+				code = "collector_gather_failed"
 			}
+			changed = m.snapshot.State != state || m.snapshot.ErrorCode != code
+			m.snapshot.State = state
+			m.snapshot.ErrorCode = code
 		}
 		m.mu.Unlock()
+		if changed {
+			logging.L("collector").Warn("collector_state", "state", state, "error_code", code)
+		}
 		m.accept(g, batch, preview)
 	}
 }
@@ -455,6 +393,9 @@ func (m *Manager) accept(g *generation, b Batch, preview bool) {
 	if g.config.Upload != nil && g.config.Upload.Enabled {
 		sample, err := m.sampleV2(g.config, b)
 		if err != nil {
+			if m.snapshot.State != "error" || m.snapshot.ErrorCode != err.Error() {
+				logging.L("collector").Warn("collector_sample_failed", "error", err)
+			}
 			m.snapshot.State = "error"
 			m.snapshot.ErrorCode = err.Error()
 			return
@@ -488,91 +429,6 @@ func (m *Manager) stopCurrent() {
 	m.stopGeneration(g)
 }
 
-type persisted struct {
-	SchemaVersion int    `json:"schema_version"`
-	Revision      uint64 `json:"revision"`
-	Config        Config `json:"config"`
-}
-
-func (m *Manager) persist(c Config, rev uint64) error {
-	b, _ := json.Marshal(persisted{SchemaVersion, rev, c})
-	f, err := os.CreateTemp(m.opts.StateDirectory, ".collector-*.json")
-	if err != nil {
-		return errors.New("config_persist_failed")
-	}
-	defer os.Remove(f.Name())
-	defer f.Close()
-	if err = f.Chmod(0600); err == nil {
-		_, err = f.Write(b)
-	}
-	if err == nil {
-		err = f.Sync()
-	}
-	if err == nil {
-		err = f.Close()
-	}
-	if err == nil {
-		err = os.Rename(f.Name(), filepath.Join(m.opts.StateDirectory, "collector.json"))
-	}
-	if err != nil {
-		return errors.New("config_persist_failed")
-	}
-	return nil
-}
-
-// Restore applies the last committed selection using fresh in-process collectors.
-func (m *Manager) Restore(ctx context.Context) error {
-	m.op.Lock()
-	defer m.op.Unlock()
-	if m.closed {
-		return errClosed
-	}
-	if m.Snapshot().Revision != 0 {
-		return errors.New("collector_already_restored")
-	}
-	path := filepath.Join(m.opts.StateDirectory, "collector.json")
-	st, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		// Registration can start an Agent before its first sampling config exists.
-		// Synchronize the startup directory without enabling sample collection.
-		if m.v2 != nil {
-			p := m.profileV2(m.snapshot.Config)
-			if err := validateV2Profile(p); err != nil {
-				return err
-			}
-			m.mu.Lock()
-			m.enqueueV2ProfileLocked(m.snapshot.Config, m.snapshot.Revision)
-			m.mu.Unlock()
-		}
-		return nil
-	}
-	if err != nil || !st.Mode().IsRegular() || st.Size() > maxBody || (runtime.GOOS != "windows" && st.Mode().Perm() != 0600) {
-		return errors.New("invalid_persisted_collector_config")
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	var p persisted
-	if json.Unmarshal(b, &p) != nil || p.SchemaVersion != SchemaVersion || p.Revision == 0 {
-		return errors.New("invalid_persisted_collector_config")
-	}
-	m.mu.Lock()
-	m.snapshot.Revision = p.Revision - 1
-	m.mu.Unlock()
-	_, err = m.apply(ctx, p.Config)
-	if err != nil {
-		// Keep the committed model visible for repair even when a selected
-		// object/dependency vanished while the Agent was stopped.
-		m.mu.Lock()
-		m.snapshot.Revision = p.Revision
-		m.snapshot.Config = p.Config
-		m.snapshot.State = "error"
-		m.snapshot.ErrorCode = err.Error()
-		m.mu.Unlock()
-	}
-	return err
-}
 func (m *Manager) Close() error {
 	m.op.Lock()
 	defer m.op.Unlock()

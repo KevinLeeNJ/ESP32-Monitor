@@ -8,10 +8,11 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
+
+	"esp32-monitor/client/internal/platform"
 )
 
 // Store is injected; production uses platform credential storage, tests use memory.
@@ -74,7 +75,7 @@ func New(opts Options) *Client {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	client := defaultClient()
+	client := platform.NewHTTPClient(15 * time.Second)
 	if opts.HTTPClient != nil {
 		copy := *opts.HTTPClient
 		copy.CheckRedirect = client.CheckRedirect
@@ -83,11 +84,6 @@ func New(opts Options) *Client {
 	return &Client{opts: opts, http: client, session: Session{State: SignedOut}, deviceURL: "https://github.com/login/device/code", tokenURL: "https://github.com/login/oauth/access_token", userURL: "https://api.github.com/user"}
 }
 
-var loginRegex = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`)
-
-func validLogin(login string) bool {
-	return loginRegex.MatchString(login) && !strings.Contains(login, "--")
-}
 func active(s State) bool { return s == Starting || s == AwaitingAuthorization }
 func (c *Client) Status() Session {
 	c.mu.Lock()
@@ -323,7 +319,7 @@ func makeRecord(token tokenResponse, now time.Time) (secretRecord, error) {
 func (c *Client) Token(ctx context.Context, login string) (string, error) {
 	c.tokenMu.Lock()
 	defer c.tokenMu.Unlock()
-	if !validLogin(login) || c.opts.Store == nil {
+	if !platform.ValidGitHubLogin(login) || c.opts.Store == nil {
 		return "", errors.New("auth_required")
 	}
 	raw, err := c.opts.Store.Load(ctx, login)
@@ -376,7 +372,7 @@ func (c *Client) Logout(ctx context.Context, login string) error {
 	}
 	c.tokenMu.Lock()
 	defer c.tokenMu.Unlock()
-	if !validLogin(login) || c.opts.Store == nil {
+	if !platform.ValidGitHubLogin(login) || c.opts.Store == nil {
 		return errors.New("invalid_github_login")
 	}
 	if c.opts.Store.Delete(ctx, login) != nil {

@@ -7,12 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"esp32-monitor/client/internal/platform"
 )
 
 // ServerRegistration is what the WebUI binds to a six-digit code. The bearer
@@ -32,11 +33,11 @@ var (
 // TokenFilePath is the fixed private location the GUI writes the Server-issued
 // upload token to; the Agent reads it on every request.
 func TokenFilePath() (string, error) {
-	base, err := os.UserConfigDir()
+	base, err := platform.AppDataDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "ESP32-Monitor", "server-token"), nil
+	return filepath.Join(base, "server-token"), nil
 }
 
 // ServerBase strips the collector endpoint so the GUI can show and reuse the
@@ -57,15 +58,10 @@ func normalizeServerBase(raw string) (string, error) {
 	if strings.HasSuffix(base, "/v1/ingest/telegraf") {
 		return "", errors.New("v1_server_unsupported")
 	}
-	parsed, err := url.Parse(base)
-	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if _, err := platform.ParseHTTPURL(base); err != nil {
 		return "", errors.New("invalid_server_url")
 	}
-	switch parsed.Scheme {
-	case "https", "http":
-		return base, nil
-	}
-	return "", errors.New("invalid_server_url")
+	return base, nil
 }
 
 type registrationResponse struct {
@@ -120,28 +116,11 @@ func exchangeRegistrationCode(ctx context.Context, base, code string) (registrat
 }
 
 func writePrivateToken(path, token string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return errors.New("token_store_failed")
 	}
-	file, err := os.CreateTemp(filepath.Dir(path), ".server-token-*")
-	if err != nil {
-		return errors.New("token_store_failed")
-	}
-	temp := file.Name()
-	defer os.Remove(temp)
-	if err = file.Chmod(0o600); err == nil {
-		_, err = file.WriteString(token + "\n")
-	}
-	if err == nil {
-		err = file.Sync()
-	}
-	if closeErr := file.Close(); err == nil {
-		err = closeErr
-	}
-	if err == nil {
-		err = os.Rename(temp, path)
-	}
-	if err != nil {
+	if err := platform.WriteFileAtomic(dir, ".server-token-*", filepath.Base(path), []byte(token+"\n"), 0o600); err != nil {
 		return errors.New("token_store_failed")
 	}
 	return nil

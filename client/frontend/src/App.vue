@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, type Component } from "vue";
-import { pages, store, startPolling, stopPolling, toast } from "./store.js";
-import { appService } from "./services/bridge.js";
+import { pages, quitApp, store, startPolling, stopPolling } from "./store.js";
 import type { PageID } from "./store.js";
 import OverviewView from "./views/OverviewView.vue";
 import MetricsView from "./views/MetricsView.vue";
@@ -20,11 +19,7 @@ const views: Record<PageID, Component> = {
 const view = computed(() => views[store.page] ?? OverviewView);
 const pageTitle = computed(() => pages.find(([id]) => id === store.page)?.[1] ?? "");
 
-function goto(page: string) { store.page = page as PageID; }
-
-async function quitApp() {
-  try { await appService.quit(); } catch (error) { toast(`退出失败：${String(error)}`); }
-}
+function goto(page: PageID) { store.page = page; }
 
 onMounted(startPolling);
 onUnmounted(stopPolling);
