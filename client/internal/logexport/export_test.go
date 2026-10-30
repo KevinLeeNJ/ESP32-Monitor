@@ -42,6 +42,27 @@ func TestRedactorMasksCredentialsAndPaths(t *testing.T) {
 	}
 }
 
+func TestRedactorHandlesPathSeparatorVariants(t *testing.T) {
+	// Windows logs mix native separators, JSON-escaped separators and
+	// forward slashes from URLs; every form must still hide the home directory.
+	const home = `C:\Users\alice`
+	redactor := NewRedactor(home)
+	inputs := []string{
+		`open C:\Users\alice\logs\client.log`,
+		`open C:/Users/alice/logs/client.log`,
+		`{"path":"C:\\Users\\alice\\logs\\client.log"}`,
+	}
+	for _, input := range inputs {
+		got := redactor.Text(input)
+		if strings.Contains(got, "alice") {
+			t.Fatalf("home path survived redaction: %s", got)
+		}
+		if !strings.Contains(got, "~") {
+			t.Fatalf("home path was not replaced: %s", got)
+		}
+	}
+}
+
 func TestExportWritesRedactedArchive(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
@@ -49,9 +70,9 @@ func TestExportWritesRedactedArchive(t *testing.T) {
 	if err := os.MkdirAll(logDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(logDir, "client.log"), "msg=log_ready file="+logDir+"/client.log\nauthorization: Bearer topsecretvalue\n")
+	writeFile(t, filepath.Join(logDir, "client.log"), "msg=log_ready file="+filepath.Join(logDir, "client.log")+"\nauthorization: Bearer topsecretvalue\n")
 	writeFile(t, filepath.Join(logDir, "client.log.1"), "msg=log_ready rotated\n")
-	writeFile(t, filepath.Join(logDir, "agent.log"), "msg=ipc_listening path="+logDir+"/agent.sock\n")
+	writeFile(t, filepath.Join(logDir, "agent.log"), "msg=ipc_listening path="+filepath.Join(logDir, "agent.sock")+"\n")
 	outDir := filepath.Join(root, "out")
 	if err := os.MkdirAll(outDir, 0700); err != nil {
 		t.Fatal(err)
@@ -86,7 +107,7 @@ func TestExportWritesRedactedArchive(t *testing.T) {
 	if strings.Contains(clientLog, "topsecretvalue") || strings.Contains(clientLog, "alice") {
 		t.Fatalf("client log was not redacted: %s", clientLog)
 	}
-	if !strings.Contains(clientLog, "file=~/logs/client.log") {
+	if !strings.Contains(clientLog, "file="+filepath.Join("~", "logs", "client.log")) {
 		t.Fatalf("home path was not replaced with ~: %s", clientLog)
 	}
 	var manifest Manifest

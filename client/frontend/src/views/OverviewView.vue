@@ -1,17 +1,31 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { collector, refreshCompanion, refreshDevices, store, toast, useCollectorRevision } from "../store.js";
-import { rowValue, displayMetrics } from "../services/collector-metrics.js";
+import { rowCells, displayMetrics, objectLabel } from "../services/collector-metrics.js";
+import type { MetricRow } from "../services/collector-metrics.js";
 import { serverBase } from "../services/server-url.js";
 import { connectionLabel } from "../services/device-labels.js";
 import { fmtClockTime } from "../services/format.js";
 import type { PageID } from "../store.js";
-import type { CollectorV2Capabilities } from "../types/collector.js";
 
 const revision = useCollectorRevision();
 
+interface OverviewEntry { key: string; title: string; row: MetricRow; objectID?: number }
+
 const caps = computed(() => { revision.value; return collector.capabilities?.v2; });
 const rows = computed(() => caps.value ? displayMetrics(caps.value) : []);
+// 对象型指标（磁盘、网卡、电池）一个设备一行，和设备页的呈现保持一致。
+const overviewRows = computed<OverviewEntry[]>(() => {
+  const entries: OverviewEntry[] = [];
+  for (const row of rows.value.slice(0, 6)) {
+    if (row.objects?.length) {
+      for (const id of row.objects) entries.push({ key: `${row.metric}:${id}`, title: objectName(id), row, objectID: id });
+    } else {
+      entries.push({ key: row.metric, title: row.bundle?.title ?? row.metric, row });
+    }
+  }
+  return entries;
+});
 const snap = computed(() => { revision.value; return collector.snapshot; });
 const uploadPill = computed(() => {
   if (!store.status?.collector_enabled) return { text: "未启用", cls: "gray" };
@@ -28,9 +42,11 @@ function sampleAge(): string {
   return seconds < 5 ? "刚刚" : `${seconds}\u00A0秒前`;
 }
 
-function value(row: Parameters<typeof rowValue>[0]): string {
-  if (!caps.value) return "—";
-  try { return rowValue(row, caps.value as CollectorV2Capabilities, snap.value); } catch { return "—"; }
+function objectName(id: number): string {
+  return caps.value ? objectLabel(caps.value, id) : `对象 ${id}`;
+}
+function cells(row: MetricRow, objectID?: number) {
+  return caps.value ? rowCells(row, caps.value, snap.value, objectID) : [];
 }
 
 function openPage(page: PageID) { store.page = page; }
@@ -79,18 +95,23 @@ async function reloadAll() {
         <div class="stat-sub">{{ store.devices.filter(device => device.confirmed_online).length }} 台在线</div>
       </section>
 
-      <section class="card span5">
+      <section class="card span8">
         <div class="card-title"><h2>本机指标</h2><button class="btn" @click="openPage('metrics')">管理指标</button></div>
         <div class="muted">最近一次采样 · 周期 {{ snap?.config.interval_seconds ?? "—" }}&nbsp;秒</div>
         <div v-if="!rows.length" class="muted">尚未获得指标能力，启用采集后自动检测。</div>
         <template v-else>
-          <div v-for="row in rows.slice(0, 6)" :key="row.metric" class="row">
-            <div><strong>{{ row.bundle?.title ?? row.metric }}</strong></div>
-            <div class="row-right"><span class="value">{{ value(row) }}</span></div>
+          <div v-for="entry in overviewRows" :key="entry.key" class="row overview-row">
+            <div><strong>{{ entry.title }}</strong></div>
+            <span class="value-grid" :style="{ '--value-cols': cells(entry.row, entry.objectID).length }">
+              <span v-for="cell in cells(entry.row, entry.objectID)" :key="cell.key" class="value-cell">
+                <span v-if="cell.label" class="value-cell-name">{{ cell.label }}</span>
+                <span class="value-cell-value">{{ cell.value }}</span>
+              </span>
+            </span>
           </div>
         </template>
       </section>
-      <section class="card span7">
+      <section class="card span4">
         <div class="card-title"><h2>数据活动</h2><span class="pill">{{ uploadPill.text }}</span></div>
         <div class="muted">采样周期 {{ snap?.config.upload?.interval_seconds ?? snap?.config.interval_seconds ?? "—" }}&nbsp;秒</div>
         <div class="row"><div><strong>已选指标</strong><small>随每次采样一起上传</small></div><div class="row-right"><span class="value">{{ snap?.config.upload?.optional.length ?? 0 }} 项</span></div></div>

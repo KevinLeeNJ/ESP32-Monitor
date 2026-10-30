@@ -45,7 +45,10 @@ func NewRedactor(paths ...string) *Redactor {
 		}
 		candidates := []string{path}
 		if strings.Contains(path, `\`) {
-			candidates = append(candidates, strings.ReplaceAll(path, `\`, `\\`))
+			candidates = append(candidates,
+				strings.ReplaceAll(path, `\`, `\\`), // JSON/structured logs escape separators
+				strings.ReplaceAll(path, `\`, `/`),  // URLs and JSON may use forward slashes
+			)
 		}
 		for _, candidate := range candidates {
 			if _, ok := seen[candidate]; ok {

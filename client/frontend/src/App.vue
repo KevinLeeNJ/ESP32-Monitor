@@ -40,7 +40,7 @@ onUnmounted(stopPolling);
         </button>
       </nav>
       <div class="sidefoot">
-        ESP32 MONITOR · V1<br>CONTROL PANEL / 本地控制台
+        V1 · 本地控制台
         <div class="sidefoot-actions"><button class="text-action" @click="quitApp">退出应用</button></div>
       </div>
     </aside>
