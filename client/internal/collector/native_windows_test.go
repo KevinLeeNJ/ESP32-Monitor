@@ -391,3 +391,23 @@ func TestWindowsNativeLiveScan(t *testing.T) {
 		t.Logf("%s unavailable: %s", id, reason)
 	}
 }
+
+func TestWindowsAdapterModelAliases(t *testing.T) {
+	adapters := []windowsNetworkAdapter{
+		{GUID: "{adapter-guid}", Name: "Intel Ethernet Controller", NetConnectionID: ptr("以太网 2"), PNPDeviceID: ptr(`PCI\VEN_8086`), PhysicalAdapter: ptr(true)},
+		{Name: "Virtual adapter", NetConnectionID: ptr("VPN"), PNPDeviceID: ptr(`SWD\virtual`), PhysicalAdapter: ptr(false)},
+	}
+	models := windowsAdapterModels(adapters)
+	names := windowsAdapterDisplayNames(adapters)
+	if names[normalizeIfaceName("{adapter-guid}")] != "以太网 2" {
+		t.Fatal("GUID was used instead of friendly connection name")
+	}
+	for _, name := range []string{"以太网 2", "{adapter-guid}", "Intel Ethernet Controller"} {
+		if models[normalizeIfaceName(name)] != "Intel Ethernet Controller" {
+			t.Fatalf("model not matched for %s", name)
+		}
+	}
+	if models["vpn"] != "" {
+		t.Fatal("virtual adapter model leaked into physical directory")
+	}
+}

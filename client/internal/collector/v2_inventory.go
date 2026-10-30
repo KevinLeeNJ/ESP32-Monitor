@@ -116,6 +116,7 @@ func (s *v2State) buildInventory(b Batch) error {
 			i.Batteries = append(i.Batteries, v2.ObjectInfo{ID: id})
 		}
 	}
+	i.Objects = s.objectDirectory(b)
 	sortInventory(i)
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -505,9 +506,9 @@ func (s *Server) status() Status {
 func (s *Server) serverTest(req serverTestRequest) ServerTestResult {
 	base := strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
 	result := ServerTestResult{URL: base + "/healthz"}
-	loopback := strings.HasPrefix(base, "http://127.0.0.1") || strings.HasPrefix(base, "http://localhost") || strings.HasPrefix(base, "http://[::1]")
-	if !strings.HasPrefix(base, "https://") && !loopback {
-		result.Error = "https_or_loopback_required"
+	u, err := url.Parse(base)
+	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
+		result.Error = "invalid_server_url"
 		return result
 	}
 	client := &http.Client{Timeout: 5 * time.Second}

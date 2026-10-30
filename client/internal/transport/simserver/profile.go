@@ -34,7 +34,7 @@ var (
 		"cpu.usage": true, "memory.usage": true, "memory.used": true, "system.uptime": true,
 	}
 	inventoryArrays = map[string]bool{
-		"cores": true, "gpus": true, "drives": true, "volumes": true,
+		"objects": true, "cores": true, "gpus": true, "drives": true, "volumes": true,
 		"interfaces": true, "batteries": true, "fans": true,
 	}
 )

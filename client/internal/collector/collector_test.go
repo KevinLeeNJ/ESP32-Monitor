@@ -17,6 +17,15 @@ import (
 // Deterministic collectors exercise transactions, scheduling and previews.
 type testCollector struct{ dir string }
 
+func TestUploaderAcceptsHTTPServer(t *testing.T) {
+	for _, endpoint := range []string{"http://192.168.1.5:8080/v2/collector/samples", "http://localhost:8080/v2/collector/samples"} {
+		m := &Manager{opts: Options{UploadURL: endpoint, UploadToken: func(context.Context) (string, error) { return "token", nil }}}
+		if err := m.initUploader(); err != nil {
+			t.Fatalf("%s: %v", endpoint, err)
+		}
+	}
+}
+
 func (c *testCollector) Gather(ctx context.Context, ids []string) (Batch, map[string]string) {
 	batch := Batch{Metrics: []Metric{}}
 	reasons := map[string]string{}

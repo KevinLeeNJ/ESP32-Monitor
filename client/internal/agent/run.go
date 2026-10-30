@@ -67,7 +67,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	fs.BoolVar(&watch, "watch", false, "emit snapshots as JSONL until interrupted")
 	fs.BoolVar(&c.Collector.Enabled, "collector", false, "enable in-process Core/Native collectors and restore the last committed configuration")
 	fs.StringVar(&c.Collector.StateDirectory, "collector-state-dir", "", "private collector state and native bridge descriptor directory")
-	fs.StringVar(&c.Collector.UploadURL, "collector-upload-url", "", "Server v2 samples URL (.../v2/collector/samples); HTTP allowed only for IP loopback")
+	fs.StringVar(&c.Collector.UploadURL, "collector-upload-url", "", "Server v2 samples URL (.../v2/collector/samples); HTTPS recommended")
 	fs.StringVar(&c.Collector.UploadTokenFile, "collector-upload-token-file", "", "private 0600 Server token file; never returned by the GUI API")
 	fs.StringVar(&collectorAPI, "collector-api", "", "authenticated native bridge API at 127.0.0.1:PORT; enables collector")
 	fs.BoolVar(&collectorScan, "collector-scan", false, "print actual Core/Native collector metric capabilities as JSON and exit")

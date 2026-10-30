@@ -276,6 +276,57 @@ func windowsAdapterKinds(adapters []windowsNetworkAdapter) map[string]string {
 	return out
 }
 
+// Use the same identity aliases as medium detection; never send GUID/PNP IDs
+// as human-readable model names.
+func windowsAdapterModels(adapters []windowsNetworkAdapter) map[string]string {
+	out := map[string]string{}
+	for _, a := range adapters {
+		if len(windowsAdapterKinds([]windowsNetworkAdapter{a})) == 0 {
+			continue
+		}
+		connection := ""
+		if a.NetConnectionID != nil {
+			connection = *a.NetConnectionID
+		}
+		model := strings.TrimSpace(a.Name)
+		if model == "" {
+			continue
+		}
+		for _, key := range []string{a.GUID, connection, a.Name} {
+			if key != "" {
+				out[normalizeIfaceName(key)] = model
+			}
+		}
+	}
+	return out
+}
+
+func windowsAdapterDisplayNames(adapters []windowsNetworkAdapter) map[string]string {
+	out := map[string]string{}
+	for _, a := range adapters {
+		if len(windowsAdapterKinds([]windowsNetworkAdapter{a})) == 0 {
+			continue
+		}
+		connection := ""
+		if a.NetConnectionID != nil {
+			connection = strings.TrimSpace(*a.NetConnectionID)
+		}
+		display := connection
+		if display == "" {
+			display = strings.TrimSpace(a.Name)
+		}
+		if display == "" {
+			continue
+		}
+		for _, key := range []string{a.GUID, connection, a.Name} {
+			if key != "" {
+				out[normalizeIfaceName(key)] = display
+			}
+		}
+	}
+	return out
+}
+
 func adapterKindFor(kinds map[string]string, name string) (string, bool) {
 	kind, ok := kinds[normalizeIfaceName(name)]
 	return kind, ok

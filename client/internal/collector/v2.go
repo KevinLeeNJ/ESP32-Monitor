@@ -45,7 +45,7 @@ func buildV2Bindings() map[string]v2Binding {
 		"memory.swap_total": {"swap", "total", ""}, "memory.swap_used": {"swap", "used", ""}, "memory.pressure": {nativeSourceID("memory"), "pressure_level", ""},
 		"gpu.usage": {nativeSourceID("gpu"), "usage_percent", "gpu"}, "gpu.temperature": {nativeSourceID("gpu"), "temperature_celsius", "gpu"},
 		"drive.read_rate": {"diskio", "read_bytes_per_second", "drive"}, "drive.write_rate": {"diskio", "write_bytes_per_second", "drive"}, "drive.used": {nativeSourceID("disk_usage"), "used", "drive"},
-		"drive.smart_health": {nativeSourceID("disk"), "smart_healthy", "drive"},
+		"drive.smart_health":    {nativeSourceID("disk"), "smart_healthy", "drive"},
 		"interface.upload_rate": {"net", "upload_bytes_per_second", "interface"}, "interface.download_rate": {"net", "download_bytes_per_second", "interface"},
 		"interface.up": {nativeSourceID("network"), "connected", "interface"}, "interface.ipv4": {nativeSourceID("network"), "connected", "interface"}, "network.public_ipv4": {nativeSourceID("public_ip"), "present", ""},
 		"battery.level": {nativeSourceID("battery"), "charge_percent", "battery"}, "battery.charging": {nativeSourceID("battery"), "charging", "battery"},
@@ -57,11 +57,16 @@ var v2Static = map[string]string{
 	"drive.model": "drive", "drive.total": "drive", "interface.medium": "interface",
 }
 
+// The persisted envelope contains IDs/names plus a confirmed Profile. Its
+// limit is separate from the 256 KiB HTTP body and sample-queue budget.
+const maxV2StateBody = 4 * maxBody
+
 type v2State struct {
 	IDs map[string]uint16 `json:"ids"`
 	// Names holds GUI display names (GPU/disk model) keyed like IDs. Object
 	// keys stay stable device identifiers.
 	Names     map[string]string `json:"names,omitempty"`
+	AuthHash  string            `json:"auth_hash,omitempty"`
 	Next      uint32            `json:"next"`
 	Endpoint  string            `json:"endpoint"`
 	Profile   *v2.Profile       `json:"profile,omitempty"`
@@ -75,15 +80,21 @@ func (m *Manager) initV2() error {
 	s := &v2State{IDs: map[string]uint16{}, Next: 1, Endpoint: m.opts.UploadURL}
 	path := filepath.Join(m.opts.StateDirectory, "collector-v2.json")
 	if _, err := os.Lstat(path); err == nil {
-		data, e := readPrivateFile(path, maxBody)
+		data, e := readPrivateFile(path, maxV2StateBody)
 		if e != nil {
 			return errors.New("invalid_v2_state")
 		}
-		if json.Unmarshal(data, s) != nil || s.IDs == nil || s.Next == 0 || s.Next > 65536 || s.Endpoint != m.opts.UploadURL {
+		if json.Unmarshal(data, s) != nil || s.IDs == nil || s.Next == 0 || s.Next > 65536 {
 			return errors.New("invalid_v2_state")
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
+	}
+	if s.Endpoint != m.opts.UploadURL {
+		s.Endpoint = m.opts.UploadURL
+		s.Profile = nil
+		s.Revision = 0
+		s.AuthHash = ""
 	}
 	used := map[uint16]bool{}
 	for _, id := range s.IDs {
@@ -100,6 +111,9 @@ func (m *Manager) initV2() error {
 }
 func (m *Manager) persistV2() error {
 	b, err := json.Marshal(m.v2)
+	if err == nil && len(b) > maxV2StateBody {
+		return errors.New("v2_state_too_large")
+	}
 	if err != nil {
 		return err
 	}

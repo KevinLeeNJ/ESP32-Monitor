@@ -60,10 +60,8 @@ func validateRestartArgs(currentSocket string, args []string) error {
 		if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 			return errors.New("restart_upload_url_invalid")
 		}
-		host := u.Hostname()
-		loopback := host == "127.0.0.1" || host == "localhost" || host == "::1"
-		if u.Scheme != "https" && !(u.Scheme == "http" && loopback) {
-			return errors.New("restart_upload_url_insecure")
+		if u.Scheme != "https" && u.Scheme != "http" {
+			return errors.New("restart_upload_url_invalid")
 		}
 	}
 	if tokenFile != "" {

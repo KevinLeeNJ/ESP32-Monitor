@@ -37,6 +37,11 @@ func TestValidate(t *testing.T) {
 	if err := validConfig().Validate(); err != nil {
 		t.Fatal(err)
 	}
+	httpConfig := validConfig()
+	httpConfig.PublicBaseURL = "http://192.168.1.5:8080"
+	if err := httpConfig.Validate(); err != nil {
+		t.Fatal(err)
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := validConfig()

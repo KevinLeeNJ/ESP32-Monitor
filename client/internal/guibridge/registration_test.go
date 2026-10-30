@@ -35,6 +35,7 @@ func TestNormalizeServerBase(t *testing.T) {
 		"https://nas.example.com:8443/monitor/":        "https://nas.example.com:8443/monitor",
 		"http://127.0.0.1:18080":                       "http://127.0.0.1:18080",
 		"http://localhost:18080/":                      "http://localhost:18080",
+		"http://nas.example.com":                       "http://nas.example.com",
 		"http://[::1]:18080":                           "http://[::1]:18080",
 		"https://nas.example.com/v2/collector/samples": "https://nas.example.com",
 	}
@@ -44,8 +45,7 @@ func TestNormalizeServerBase(t *testing.T) {
 		}
 	}
 	invalid := map[string]string{
-		"http://nas.example.com":                     "https_or_loopback_required",
-		"ftp://nas.example.com":                      "https_or_loopback_required",
+		"ftp://nas.example.com":                      "invalid_server_url",
 		"not a url":                                  "invalid_server_url",
 		"https://user:pass@nas.local":                "invalid_server_url",
 		"https://nas.example.com?x=1":                "invalid_server_url",

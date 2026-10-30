@@ -1,5 +1,7 @@
 # V1 计划
 
+Server 的产品版本为 V1；Server–Client 通信协议使用 v2，协议版本不代表 Server 产品版本升级。
+
 核对日期：2026-10-29。以当前工作区 Client 实现为基线，**V1 尚未达到整体发布条件**。~~删除线~~仅表示对应代码子项已实现，不代表真实三平台、生产 Server 或板端验收完成。剩余事项保留未划线；不再沿用旧“受管 Telegraf、GUI/IPC均未实现”的基线。
 
 当前事实详见 [Client整体能力表](CLIENT_CAPABILITIES.md)；接口只在 [Server–Client v2](SERVER_CLIENT_PROTOCOL_V2.md)、[ESP32–上位机协议](ESP32_COMPANION_PROTOCOL_V1.md) 维护；固件实现与目标见 [固件计划能力表](FIRMWARE_CAPABILITIES_PLAN.md)。本计划不另立冲突的路由、字段或指标清单。

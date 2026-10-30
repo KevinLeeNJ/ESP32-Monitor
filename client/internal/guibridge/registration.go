@@ -62,15 +62,10 @@ func normalizeServerBase(raw string) (string, error) {
 		return "", errors.New("invalid_server_url")
 	}
 	switch parsed.Scheme {
-	case "https":
+	case "https", "http":
 		return base, nil
-	case "http":
-		host := parsed.Hostname()
-		if host == "127.0.0.1" || host == "localhost" || host == "::1" {
-			return base, nil
-		}
 	}
-	return "", errors.New("https_or_loopback_required")
+	return "", errors.New("invalid_server_url")
 }
 
 type registrationResponse struct {

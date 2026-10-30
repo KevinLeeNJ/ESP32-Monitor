@@ -1,4 +1,4 @@
-.PHONY: build build-linux-amd64 test-ut test-race test-api test-telegraf test-tui vet
+.PHONY: build build-linux-amd64 test-ut test-race test-api test-v2 test-tui vet
 
 build:
 	mkdir -p bin
@@ -18,9 +18,9 @@ test-race:
 test-api:
 	go test -tags=integration -count=1 -v ./tests/integration
 
-# Real installed Agent + production subprocesses; about two minutes, loopback only.
-test-telegraf: build
-	python3 tests/e2e/telegraf_loopback.py --server bin/monitor-server --evidence "$${TMPDIR:-/tmp}/esp32-monitor-telegraf-evidence"
+# Real Client Agent + production Server, temporary state and loopback only.
+test-v2: build
+	python3 tests/e2e/v2_loopback.py --server bin/monitor-server
 
 # Local terminal only; install tests/e2e/requirements-tui.txt in a venv first.
 test-tui: build

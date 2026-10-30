@@ -317,6 +317,8 @@ func TestV2CommitSyncsProfileAndRecoversFromAuthError(t *testing.T) {
 	lock.Unlock()
 	awaitV2(t, func() bool {
 		s := m.Snapshot()
+		lock.Lock()
+		defer lock.Unlock()
 		return puts > 0 && s.UploadError == "" && s.LastUploadAt != nil
 	})
 	lock.Lock()
@@ -415,8 +417,8 @@ func TestV2MinimalAndPatchDoesNotRepeatMetadata(t *testing.T) {
 	if len(ops) != 1 || ops[0].Path != "/inventory/drives/-" {
 		t.Fatalf("existing object retransmitted: %+v", ops)
 	}
-	if !reflect.DeepEqual(m.profileV2(c).Inventory, v2.Inventory{MemoryTotal: ptr(uint64(8192))}) {
-		t.Fatal("minimum profile should contain only memory total")
+	if !reflect.DeepEqual(m.profileV2(c).Inventory, v2.Inventory{MemoryTotal: ptr(uint64(8192)), Objects: detached(m.v2.inventory.Objects)}) {
+		t.Fatal("minimum profile must contain memory total and object directory")
 	}
 }
 
@@ -728,6 +730,31 @@ func TestPreviewFollowsGUIActivity(t *testing.T) {
 	m.previewAt.Store(time.Now().Add(-previewTTL).UnixNano())
 	if m.previewActive() {
 		t.Fatal("preview stayed active after the TTL")
+	}
+}
+
+func TestV2PreviewWorksWithoutUploadEndpoint(t *testing.T) {
+	reads := new(atomic.Int32)
+	missing := new(atomic.Bool)
+	m := newV2Fixture(t, "", "", reads, missing)
+	caps, err := m.Discover(context.Background())
+	if err != nil || caps.V2 == nil || len(caps.V2.Metrics) == 0 {
+		t.Fatalf("local V2 capabilities unavailable without endpoint: %+v %v", caps.V2, err)
+	}
+	if m.Snapshot().QueueDepth != 0 {
+		t.Fatal("local preview queued an upload without an endpoint")
+	}
+	m.MarkPreview()
+	awaitV2(t, func() bool { return m.Snapshot().V2Sample != nil })
+	snapshot := m.Snapshot()
+	if snapshot.V2Sample.CPUUsage == nil || snapshot.V2Sample.MemoryUsage == nil {
+		t.Fatalf("local preview missing live required metrics: %+v", snapshot.V2Sample)
+	}
+	if snapshot.Config.Upload != nil && snapshot.Config.Upload.Enabled {
+		t.Fatalf("local preview enabled upload: %+v", snapshot.Config.Upload)
+	}
+	if snapshot.UploadError != "" || snapshot.QueueDepth != 0 {
+		t.Fatalf("local preview attempted delivery: %+v", snapshot)
 	}
 }
 

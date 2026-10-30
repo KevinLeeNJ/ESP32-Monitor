@@ -48,7 +48,6 @@ function registrationError(error: unknown): string {
     case "code_expired": return "验证码已过期，请在 Server 网页重新生成";
     case "rate_limited": return "尝试过于频繁，请稍后再试";
     case "server_unreachable": return "无法连接 Server，请检查地址和网络";
-    case "https_or_loopback_required": return "HTTP 仅支持本机地址；其他地址请使用 HTTPS";
     case "invalid_server_url": return "Server 地址格式不正确";
     case "v1_server_unsupported": return "Server 仅支持 v2 协议，请升级 Server 后重新填写地址";
     case "invalid_server_response": return "Server 响应无效，请确认 Server 版本";
@@ -134,7 +133,7 @@ async function testConnection() {
         <div class="field">
           <label for="server-url">Server 地址</label>
           <div class="pixel-input-frame"><input id="server-url" v-model="baseURL" type="url" placeholder="https://" autocomplete="off" :disabled="registering" @input="formError = ''"></div>
-          <small class="muted">支持 HTTPS；本机调试可用 127.0.0.1 或 localhost 的 HTTP。</small>
+          <small class="muted">建议使用 HTTPS。</small>
         </div>
         <div v-if="!registered || reRegistering" class="field">
           <label for="server-code">设备验证码</label>

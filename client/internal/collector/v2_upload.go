@@ -3,6 +3,8 @@ package collector
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	v2 "esp32-monitor/client/internal/collector/uploadv2"
@@ -27,6 +29,11 @@ func queueBytes(q []queued) int {
 }
 
 func (m *Manager) enqueueV2ProfileLocked(c Config, revision uint64) {
+	// The same V2 state also powers local previews.  Without an endpoint there
+	// is nowhere to deliver a profile, so do not create a retrying upload job.
+	if m.v2 == nil || m.opts.UploadURL == "" {
+		return
+	}
 	p := m.profileV2(c)
 	m.queue = append(m.queue, queued{v2: &v2.SampleBatch{ID: randomToken()[:32], Samples: []v2.Sample{}}, profile: &p, revision: revision, at: time.Now()})
 	select {
@@ -105,6 +112,20 @@ func revisionHeader(h http.Header) (uint64, error) {
 	return n, nil
 }
 func (m *Manager) syncV2(ctx context.Context, want *v2.Profile) (int, http.Header, error) {
+	// A new registration may issue a different device token at the same URL.
+	// Never let an old device's confirmed cache suppress the first Profile upload.
+	token, err := m.opts.UploadToken(ctx)
+	if err != nil || token == "" {
+		return 401, nil, errors.New("upload_auth_required")
+	}
+	hash := sha256.Sum256([]byte(token))
+	binding := hex.EncodeToString(hash[:])
+	if m.v2.AuthHash != binding {
+		m.v2.Profile = nil
+		m.v2.Revision = 0
+		m.v2.AuthHash = binding
+	}
+
 	if m.v2.Profile != nil && m.v2.Revision > 0 && reflect.DeepEqual(*m.v2.Profile, *want) {
 		return 200, nil, nil
 	}
@@ -248,7 +269,7 @@ func pointerPath(s string) string {
 // groups wholesale. Missing object groups are created leaf by leaf, arrays are
 // changed member by member, and scalar fields use replace so an absent value
 // can be added without a group-level operation.
-var inventoryArrays = map[string]bool{"cores": true, "gpus": true, "drives": true, "volumes": true, "interfaces": true, "batteries": true, "fans": true}
+var inventoryArrays = map[string]bool{"objects": true, "cores": true, "gpus": true, "drives": true, "volumes": true, "interfaces": true, "batteries": true, "fans": true}
 
 func diffInventory(p *v2.ProfilePatch, old, next map[string]any) {
 	keys := []string{}

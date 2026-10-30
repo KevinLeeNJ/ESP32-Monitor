@@ -132,6 +132,8 @@ func (d *windowsCollector) fixedLocked(ctx context.Context) *windowsFixed {
 		}
 		if adapters, err := windowsNetworkAdapters(ctx); err == nil {
 			kinds := windowsAdapterKinds(adapters)
+			models := windowsAdapterModels(adapters)
+			names := windowsAdapterDisplayNames(adapters)
 			if interfaces, err := net.Interfaces(); err == nil {
 				for _, iface := range interfaces {
 					kind, ok := adapterKindFor(kinds, iface.Name)
@@ -139,7 +141,7 @@ func (d *windowsCollector) fixedLocked(ctx context.Context) *windowsFixed {
 						continue
 					}
 					f.netKinds[iface.Name] = kind
-					add("windows_network", map[string]string{"interface": iface.Name, "type": kind}, map[string]float64{"present": 1}, nil)
+					add("windows_network", map[string]string{"interface": iface.Name, "type": kind, "model": models[normalizeIfaceName(iface.Name)], "display_name": names[normalizeIfaceName(iface.Name)]}, map[string]float64{"present": 1}, nil)
 				}
 			}
 		}

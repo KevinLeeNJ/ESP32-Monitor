@@ -47,6 +47,9 @@ type Manager struct {
 	v2         *v2State
 	previewAt  atomic.Int64
 	previewCh  chan struct{}
+	// previewStarting prevents concurrent GUI snapshot requests from starting
+	// more than one transient, local-only preview generation.
+	previewStarting bool
 }
 
 // previewTTL comfortably exceeds the GUI snapshot poll interval.
@@ -54,6 +57,7 @@ const previewTTL = 15 * time.Second
 
 type generation struct {
 	config       Config
+	previewOnly  bool
 	revision     uint64
 	staged       Batch
 	collect      Config
@@ -119,13 +123,14 @@ func New(opts Options) (*Manager, error) {
 			*factory = fixed.Fork
 		}
 	}
-	if m.opts.UploadURL != "" {
-		if err := m.initV2(); err != nil {
-			cancel()
-			unlockFile(lock)
-			lock.Close()
-			return nil, err
-		}
+	// V2 is also the local GUI preview schema.  Keep its object inventory and
+	// capability mapping available before a Server has been configured; the
+	// endpoint only controls delivery, never local collection or preview.
+	if err := m.initV2(); err != nil {
+		cancel()
+		unlockFile(lock)
+		lock.Close()
+		return nil, err
 	}
 	go m.uploadLoop()
 	return m, nil
@@ -238,7 +243,7 @@ func (m *Manager) disable(ctx context.Context, c Config) (Snapshot, error) {
 	m.snapshot.LastReceivedAt = nil
 	m.snapshot.LastUploadAt = nil
 	m.snapshot.V2Sample = nil
-	if m.v2 != nil {
+	if m.v2 != nil && m.opts.UploadURL != "" {
 		m.enqueueV2ProfileLocked(c, revision)
 	}
 	m.mu.Unlock()
@@ -300,6 +305,56 @@ func (m *Manager) MarkPreview() {
 		default:
 		}
 	}
+	// A first-run Client has no committed upload configuration, so there is no
+	// collection generation yet.  Start an in-memory preview generation on
+	// demand. It is deliberately not persisted and cannot upload anything.
+	m.mu.Lock()
+	start := m.current == nil && !m.previewStarting
+	if start {
+		m.previewStarting = true
+	}
+	m.mu.Unlock()
+	if start {
+		go m.startPreview()
+	}
+}
+
+func (m *Manager) startPreview() {
+	m.op.Lock()
+	defer m.op.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.previewStarting = false
+		m.mu.Unlock()
+	}()
+	if m.closed || m.current != nil || !m.previewActive() {
+		return
+	}
+	snapshot := m.Snapshot()
+	previewConfig := detached(snapshot.Config)
+	// A failed restore must remain visible and must never start uploading as a
+	// side effect of opening the GUI. Preserve its committed configuration.
+	previewConfig.Selections = nil
+	if previewConfig.Upload != nil {
+		previewConfig.Upload.Enabled = false
+	}
+	if previewConfig.IntervalSeconds < 5 || previewConfig.IntervalSeconds > 60 {
+		previewConfig.IntervalSeconds = 10
+	}
+	g, err := m.start(m.ctx, previewConfig, snapshot.Revision)
+	if err != nil {
+		_, _ = m.failure(err)
+		return
+	}
+	g.previewOnly = true
+	m.mu.Lock()
+	m.current = g
+	m.mu.Unlock()
+	m.accept(g, g.staged, true)
+	ctx, cancel := context.WithCancel(m.ctx)
+	g.cancel = cancel
+	g.done = make(chan struct{})
+	go m.collectLoop(ctx, g)
 }
 
 func (m *Manager) previewActive() bool {
@@ -374,7 +429,7 @@ func (m *Manager) collectLoop(ctx context.Context, g *generation) {
 			}
 		}
 		m.mu.Lock()
-		if m.current == g {
+		if m.current == g && !g.previewOnly {
 			m.snapshot.State = "healthy"
 			m.snapshot.ErrorCode = ""
 			if len(reasons) > 0 || validate(g.config, capabilitiesFrom(batch, reasons)) != nil {
@@ -478,6 +533,17 @@ func (m *Manager) Restore(ctx context.Context) error {
 	path := filepath.Join(m.opts.StateDirectory, "collector.json")
 	st, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
+		// Registration can start an Agent before its first sampling config exists.
+		// Synchronize the startup directory without enabling sample collection.
+		if m.v2 != nil {
+			p := m.profileV2(m.snapshot.Config)
+			if err := validateV2Profile(p); err != nil {
+				return err
+			}
+			m.mu.Lock()
+			m.enqueueV2ProfileLocked(m.snapshot.Config, m.snapshot.Revision)
+			m.mu.Unlock()
+		}
 		return nil
 	}
 	if err != nil || !st.Mode().IsRegular() || st.Size() > maxBody || (runtime.GOOS != "windows" && st.Mode().Perm() != 0600) {
