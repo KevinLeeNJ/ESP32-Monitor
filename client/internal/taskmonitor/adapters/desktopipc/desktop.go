@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"esp32-monitor/client/internal/logging"
 	"esp32-monitor/client/internal/providers"
 )
 
@@ -131,6 +132,7 @@ func (d *Observer) Run(ctx context.Context) {
 		}
 		d.mu.Lock()
 		wasConnected := d.connected
+		previousCode := d.code
 		d.connected = false
 		d.code = safeDesktopError(err)
 		for id := range d.states {
@@ -138,6 +140,14 @@ func (d *Observer) Run(ctx context.Context) {
 		}
 		d.mu.Unlock()
 		d.signalReady()
+		if ctx.Err() == nil {
+			switch {
+			case wasConnected:
+				logging.L("codex_tasks").Warn("desktop_disconnected", "error", d.code)
+			case previousCode != d.code:
+				logging.L("codex_tasks").Warn("desktop_unavailable", "error", d.code)
+			}
+		}
 		if ctx.Err() != nil {
 			return
 		}
@@ -317,9 +327,13 @@ func (d *Observer) serve(ctx context.Context, conn net.Conn) error {
 			}
 			registered = true
 			d.mu.Lock()
+			wasConnected := d.connected
 			d.connected = true
 			d.code = ""
 			d.mu.Unlock()
+			if !wasConnected {
+				logging.L("codex_tasks").Info("desktop_connected", "threads", len(d.ids()))
+			}
 			for _, id := range d.ids() {
 				if err := d.follow(conn, id, true); err != nil {
 					return err

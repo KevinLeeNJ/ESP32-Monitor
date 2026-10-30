@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onUnmounted, ref } from "vue";
 import { monitorService } from "../services/bridge.js";
-import type { DiscoveredDevice, PairingStatus } from "../types/monitors.js";
+import type { DiscoveryResult, DiscoveredDevice, PairingStatus } from "../types/monitors.js";
 import { cloneSettings, saveSettings, store, toast } from "../store.js";
 import { connectionLabel, connectionTypeLabel } from "../services/device-labels.js";
+import { fmtClockTime } from "../services/format.js";
 
 const discovering = ref(false);
-const discovery = ref<{ devices: DiscoveredDevice[]; lan_error?: string; serial_error?: string; overflow: boolean } | null>(null);
+const discovery = ref<DiscoveryResult | null>(null);
 const localPairing = ref<PairingStatus | null>(null);
 const pairTarget = ref<DiscoveredDevice | null>(null);
 const riskConfirmed = ref(false);
@@ -128,7 +129,6 @@ async function probeAndConnect(port: DiscoveredDevice) {
   }
 }
 
-onMounted(() => { void store.devices; });
 onUnmounted(stopPairingPoll);
 </script>
 
@@ -154,7 +154,7 @@ onUnmounted(stopPairingPoll);
           <div class="device-icon" aria-hidden="true"><i class="pixelart-icons-font-cpu"></i></div>
           <div class="device-info">
             <h3>{{ device.device_name }}　<span class="pill" :class="device.confirmed_online ? '' : 'gray'">{{ device.confirmed_online ? "在线" : "离线" }}</span></h3>
-            <p>{{ device.device_id }}<br>{{ device.address || "—" }} · {{ connectionLabel(device.connection_state) }}<br>最近在线 {{ device.last_seen ? new Date(device.last_seen).toLocaleTimeString("zh-CN") : "—" }}</p>
+            <p>{{ device.device_id }}<br>{{ device.address || "—" }} · {{ connectionLabel(device.connection_state) }}<br>最近在线 {{ fmtClockTime(device.last_seen) }}</p>
           </div>
           <div class="actions">
             <button class="btn" @click="toggleDevice(device.device_id, false)">停用</button>

@@ -40,7 +40,6 @@ func TestStaleSocketFileRebinds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
-	defer client.Close()
 	if _, err := client.Status(context.Background()); err != nil {
 		t.Fatalf("Status after rebind: %v", err)
 	}

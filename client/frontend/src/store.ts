@@ -1,10 +1,9 @@
-import { reactive } from "vue";
+import { onUnmounted, reactive, ref } from "vue";
 import { appService, companionService, monitorService } from "./services/bridge.js";
 import type { AppStatus, GuiSettings } from "./types/app.js";
 import type { CompanionSnapshot } from "./types/companion.js";
 import type { DeviceStatus } from "./types/monitors.js";
 import { CollectorController } from "./services/collector-controller.js";
-import { wailsCollectorBridge } from "./services/collector-bridge.js";
 import { errCode } from "./services/wails.js";
 
 export type PageID = "overview" | "metrics" | "server" | "companion" | "esp32" | "startup" | "diagnostics";
@@ -46,7 +45,15 @@ export const store = reactive<Store>({
 /** Background GUI data poll; every view reads these snapshots. */
 const GUI_REFRESH_MS = 5000;
 
-export const collector = new CollectorController(wailsCollectorBridge, GUI_REFRESH_MS);
+export const collector = new CollectorController(GUI_REFRESH_MS);
+
+/** Re-render a view whenever collector state or the live snapshot changes. */
+export function useCollectorRevision() {
+  const revision = ref(0);
+  const unsubscribe = collector.subscribe(() => { revision.value++; });
+  onUnmounted(unsubscribe);
+  return revision;
+}
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 export function toast(message: string) {
@@ -92,6 +99,23 @@ export async function refreshDevices() {
   }
 }
 
+export async function quitApp() {
+  try {
+    await appService.quit();
+  } catch (error) {
+    toast(`退出失败：${errCode(error)}`);
+  }
+}
+
+export async function restartAgent() {
+  try {
+    await appService.restartAgent();
+    toast("Agent 已重启");
+  } catch (error) {
+    toast(`重启失败：${errCode(error)}`);
+  }
+}
+
 export async function saveSettings(settings: GuiSettings) {
   store.restarting = true;
   try {
@@ -122,9 +146,11 @@ export function startPolling() {
   })();
   void collector.start();
   timers = [
-    setInterval(() => void refreshStatus(), GUI_REFRESH_MS),
-    setInterval(() => void refreshCompanion(), GUI_REFRESH_MS),
-    setInterval(() => void refreshDevices(), GUI_REFRESH_MS),
+    setInterval(() => {
+      void refreshStatus();
+      void refreshCompanion();
+      void refreshDevices();
+    }, GUI_REFRESH_MS),
   ];
 }
 

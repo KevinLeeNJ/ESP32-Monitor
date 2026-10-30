@@ -405,26 +405,15 @@ func (s *session) sendSerial(topic string, data any) error {
 		return wire.ErrMessage
 	}
 	seq := s.next()
-	if x, ok := data.(wire.Snapshot); ok {
+	switch x := data.(type) {
+	case wire.Snapshot:
 		x.Seq = seq
-		x.SentAt = time.Now().Unix()
-		if d, ok := x.Sections.Proxy.Data.(wire.ProxyData); ok {
-			if td, ok := d.Time.Data.(wire.TimeData); ok {
-				td.UnixMS = time.Now().UnixMilli()
-				d.Time.Data = td
-				x.Sections.Proxy.Data = d
-			}
-		}
+		data = x
+	case wire.Heartbeat:
+		x.Seq = seq
 		data = x
 	}
-	if x, ok := data.(wire.Heartbeat); ok {
-		x.Seq = seq
-		x.SentAt = time.Now().Unix()
-		if x.Time != nil {
-			x.Time.UnixMS = time.Now().UnixMilli()
-		}
-		data = x
-	}
+	data = stampWallClock(data, time.Now())
 	return writeSerialFrame(s.ctx, s.stream, t, seq, data, s.serialKeys.Frame)
 }
 
@@ -483,6 +472,7 @@ type USBIdentity struct {
 
 // WatchSerial reconnects a selected USB identity after unplug/rename. A bare COM
 // number is deliberately insufficient to enable unattended probing/reconnection.
+// It is reserved for USB reconnect and currently has no production caller.
 func (b *Backend) WatchSerial(ctx context.Context, id USBIdentity, selection SerialSelection) error {
 	if id.SerialNumber == "" || selection.DeviceID == "" {
 		return errors.New("stable_usb_identity_required")

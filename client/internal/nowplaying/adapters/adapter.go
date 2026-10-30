@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"esp32-monitor/client/internal/logging"
 	"esp32-monitor/client/internal/nowplaying"
 	"esp32-monitor/client/internal/providers"
 	"io"
@@ -121,6 +122,7 @@ func (a *streamAdapter) update(m Message) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	previousState, previousCode := a.snapshot.Health.State, a.snapshot.Health.ErrorCode
 	now := time.Now()
 	a.lastRead = now
 	a.snapshot.Health.ObservedAt = now.UTC()
@@ -164,6 +166,14 @@ func (a *streamAdapter) update(m Message) {
 		}
 	}
 	a.markReady()
+	// music_cancelled is the normal shutdown path, not a fault worth warning.
+	if a.snapshot.Health.ErrorCode != "music_cancelled" && (a.snapshot.Health.State != previousState || a.snapshot.Health.ErrorCode != previousCode) {
+		if a.snapshot.Health.State == providers.Healthy {
+			logging.L("music").Info("music_recovered")
+		} else {
+			logging.L("music").Warn("music_state", "state", a.snapshot.Health.State, "error_code", a.snapshot.Health.ErrorCode)
+		}
+	}
 }
 
 func (a *streamAdapter) Run(ctx context.Context) {

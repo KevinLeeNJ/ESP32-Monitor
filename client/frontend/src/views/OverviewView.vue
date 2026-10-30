@@ -1,15 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
-import { collector, pages, refreshCompanion, refreshDevices, store, toast } from "../store.js";
+import { computed } from "vue";
+import { collector, refreshCompanion, refreshDevices, store, toast, useCollectorRevision } from "../store.js";
 import { rowValue, displayMetrics } from "../services/collector-metrics.js";
 import { serverBase } from "../services/server-url.js";
 import { connectionLabel } from "../services/device-labels.js";
+import { fmtClockTime } from "../services/format.js";
+import type { PageID } from "../store.js";
 import type { CollectorV2Capabilities } from "../types/collector.js";
 
-const revision = ref(0);
-let unsubscribe = () => {};
-onMounted(() => { unsubscribe = collector.subscribe(() => { revision.value++; }); });
-onUnmounted(() => unsubscribe());
+const revision = useCollectorRevision();
 
 const caps = computed(() => { revision.value; return collector.capabilities?.v2; });
 const rows = computed(() => caps.value ? displayMetrics(caps.value) : []);
@@ -34,7 +33,7 @@ function value(row: Parameters<typeof rowValue>[0]): string {
   try { return rowValue(row, caps.value as CollectorV2Capabilities, snap.value); } catch { return "—"; }
 }
 
-async function openPage(page: string) { store.page = page as typeof store.page; }
+function openPage(page: PageID) { store.page = page; }
 async function reloadAll() {
   await Promise.all([refreshCompanion(), refreshDevices()]);
   toast("已刷新设备与数据源状态");
@@ -63,7 +62,7 @@ async function reloadAll() {
       </section>
       <section class="card span3">
         <div class="stat-head">最近上传<span class="stat-icon"><i class="pixelart-icons-font-upload" aria-hidden="true"></i></span></div>
-        <div class="stat-value">{{ snap?.last_upload_at ? new Date(snap.last_upload_at).toLocaleTimeString("zh-CN") : "—" }}</div>
+        <div class="stat-value">{{ fmtClockTime(snap?.last_upload_at) }}</div>
         <div class="stat-sub">
           队列 {{ snap?.queue_depth ?? 0 }} · 丢弃 {{ snap?.dropped_metrics ?? 0 }}
           <template v-if="snap?.upload_error"> · {{ snap.upload_error }}</template>
@@ -96,7 +95,7 @@ async function reloadAll() {
         <div class="muted">采样周期 {{ snap?.config.upload?.interval_seconds ?? snap?.config.interval_seconds ?? "—" }}&nbsp;秒</div>
         <div class="row"><div><strong>已选指标</strong><small>随每次采样一起上传</small></div><div class="row-right"><span class="value">{{ snap?.config.upload?.optional.length ?? 0 }} 项</span></div></div>
         <div class="row"><div><strong>上传地址</strong><small>{{ snap?.config.upload?.enabled ? "已启用上传" : "仅本地采集" }}</small></div><div class="row-right"><span class="value muted">{{ serverBase(store.settings?.collector.upload_url ?? "") || "—" }}</span></div></div>
-        <div class="row"><div><strong>最近接收</strong><small>Agent 收到一轮采样</small></div><div class="row-right"><span class="value">{{ snap?.last_received_at ? new Date(snap.last_received_at).toLocaleTimeString("zh-CN") : "—" }}</span></div></div>
+        <div class="row"><div><strong>最近接收</strong><small>Agent 收到一轮采样</small></div><div class="row-right"><span class="value">{{ fmtClockTime(snap?.last_received_at) }}</span></div></div>
       </section>
 
       <section class="card span7">
@@ -106,7 +105,7 @@ async function reloadAll() {
           <div class="device-icon" aria-hidden="true"><i class="pixelart-icons-font-cpu"></i></div>
           <div class="device-info">
             <h3>{{ device.device_name }}　<span class="pill" :class="device.confirmed_online ? '' : 'gray'">{{ device.confirmed_online ? "在线" : "离线" }}</span></h3>
-            <p>{{ device.address || "—" }} · {{ connectionLabel(device.connection_state) }}<br>最近更新 {{ device.last_seen ? new Date(device.last_seen).toLocaleTimeString("zh-CN") : "—" }}</p>
+            <p>{{ device.address || "—" }} · {{ connectionLabel(device.connection_state) }}<br>最近更新 {{ fmtClockTime(device.last_seen) }}</p>
           </div>
         </div>
       </section>

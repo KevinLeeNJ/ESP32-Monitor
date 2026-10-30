@@ -1,19 +1,11 @@
 import type { CollectorCapabilities, CollectorConfig, CollectorSnapshot } from "../types/collector.js";
+import { call } from "./wails.js";
 
-/** Implement in the trusted native bridge. The web frontend receives no tokens,
- * filesystem paths or collector internals. Go Application exposes the same methods. */
-export interface CollectorBridge {
-  DiscoverCollectorMetrics(): Promise<CollectorCapabilities>;
-  GetCollectorCapabilities(): Promise<CollectorCapabilities>;
-  GetCollectorSnapshot(): Promise<CollectorSnapshot>;
-  ApplyCollectorConfig(config: CollectorConfig): Promise<CollectorSnapshot>;
-}
-
-export function collectorService(bridge: CollectorBridge) {
-  return {
-    rescan: () => bridge.DiscoverCollectorMetrics(),
-    capabilities: () => bridge.GetCollectorCapabilities(),
-    snapshot: () => bridge.GetCollectorSnapshot(),
-    apply: (config: CollectorConfig) => bridge.ApplyCollectorConfig(config),
-  };
-}
+// Collector bindings over the authenticated Agent IPC; the web frontend never
+// sees tokens or filesystem paths.
+export const collectorService = {
+  rescan: () => call<CollectorCapabilities>("CollectorService.DiscoverCollectorMetrics"),
+  capabilities: () => call<CollectorCapabilities>("CollectorService.GetCollectorCapabilities"),
+  snapshot: () => call<CollectorSnapshot>("CollectorService.GetCollectorSnapshot"),
+  apply: (config: CollectorConfig) => call<CollectorSnapshot>("CollectorService.ApplyCollectorConfig", config),
+};

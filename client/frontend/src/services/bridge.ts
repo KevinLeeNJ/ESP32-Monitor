@@ -1,11 +1,12 @@
 import { call } from "./wails.js";
-import type { AppStatus, DiagnosticsReport, GuiSettings, ServerRegistration, ServerTestResult } from "../types/app.js";
+import type { AppStatus, DiagnosticsReport, GuiSettings, LogExportResult, ServerRegistration, ServerTestResult } from "../types/app.js";
 import type { CompanionSnapshot, GitHubSession } from "../types/companion.js";
 import type { DiscoveredDevice, DiscoveryResult, DeviceStatus, PairingStatus } from "../types/monitors.js";
 
 export const appService = {
   status: () => call<AppStatus>("AppService.Status"),
   diagnostics: () => call<DiagnosticsReport>("AppService.DiagnosticsReport"),
+  exportLogs: () => call<LogExportResult>("AppService.ExportLogs"),
   serverTest: (baseURL: string) => call<ServerTestResult>("AppService.ServerTest", baseURL),
   registerServer: (baseURL: string, code: string) => call<ServerRegistration>("AppService.RegisterServer", baseURL, code),
   quit: () => call<void>("AppService.QuitApp"),

@@ -82,8 +82,8 @@ test("stale selections are pruned silently instead of blocking the save", () => 
   repairV2Selections(config, caps);
   assert.deepEqual(config.upload.optional.map(item => item.metric), ["drive.model", "drive.read_rate"]);
   assert.deepEqual(config.upload.optional[0].objects, [7]);
-  assert.equal(validateMetricDraft(config, { v2: caps }), "");
+  assert.equal(validateMetricDraft(config), "");
   const prepared = prepareMetricDraft(structuredClone(config), { v2: caps });
   assert.deepEqual(prepared.upload.optional.map(item => item.metric), ["drive.model", "drive.read_rate"]);
-  assert.equal(validateMetricDraft(prepared, { v2: caps }), "");
+  assert.equal(validateMetricDraft(prepared), "");
 });

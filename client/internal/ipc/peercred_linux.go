@@ -13,5 +13,5 @@ func peerUID(fd uintptr) (int32, bool) {
 	if err != nil || cred == nil {
 		return 0, false
 	}
-	return cred.Uid, true
+	return int32(cred.Uid), true
 }

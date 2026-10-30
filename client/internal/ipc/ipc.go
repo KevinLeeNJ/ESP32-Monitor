@@ -24,8 +24,6 @@ const (
 // Sentinels mirror the existing application error strings so the GUI can
 // branch on the same codes regardless of transport.
 var (
-	ErrUnauthorized      = errors.New("unauthorized")
-	ErrNotFound          = errors.New("not_found")
 	ErrAlreadyRunning    = errors.New("ipc_already_owned")
 	ErrPeerCheckRequired = errors.New("ipc_peer_unavailable")
 )

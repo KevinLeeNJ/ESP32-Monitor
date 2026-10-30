@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { companionService } from "../services/bridge.js";
 import type { GitHubSession } from "../types/companion.js";
 import { cloneSettings, refreshCompanion, saveSettings, store, toast } from "../store.js";
 import { taskStatusText } from "../services/codex-task.js";
+import { fmtClockFromSeconds } from "../services/format.js";
 
 const session = ref<GitHubSession | null>(null);
 const loggingIn = ref(false);
@@ -121,9 +122,6 @@ const musicPosition = computed(() => {
 });
 
 onMounted(() => { clockTimer = setInterval(() => { nowTick.value = Date.now(); }, 1000); });
-watch(() => store.page, page => {
-  if (page !== "companion") { clearTimeout(pollTimer); session.value = null; }
-});
 onUnmounted(() => {
   clearTimeout(pollTimer);
   clearInterval(clockTimer);
@@ -183,7 +181,7 @@ onUnmounted(() => {
           <div v-for="window in quotaWindows" :key="window.bucket_id" class="quota">
             <div><span>{{ quotaLabel(window.window_minutes) }} <small>剩余</small></span><strong>{{ Math.round(window.remaining_percent ?? 0) }}%</strong></div>
             <div class="quota-bar"><i :style="{ width: `${Math.max(0, Math.min(100, window.remaining_percent ?? 0))}%` }"></i></div>
-            <small v-if="window.resets_at">将于 {{ new Date(window.resets_at * 1000).toLocaleTimeString("zh-CN") }} 重置</small>
+            <small v-if="window.resets_at">将于 {{ fmtClockFromSeconds(window.resets_at) }} 重置</small>
           </div>
         </template>
         <template v-else>

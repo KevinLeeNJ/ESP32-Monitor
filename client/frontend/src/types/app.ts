@@ -68,3 +68,10 @@ export interface DiagnosticsReport {
   companion: { github: ProviderHealth; codex: ProviderHealth; music: ProviderHealth };
   monitor?: { device_count: number; paired_count: number; online_count: number } | null;
 }
+
+export interface LogExportResult {
+  canceled: boolean;
+  path?: string;
+  bytes?: number;
+  files?: number;
+}

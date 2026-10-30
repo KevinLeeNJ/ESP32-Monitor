@@ -20,6 +20,7 @@ import (
 
 	"esp32-monitor/client/internal/guiassets"
 	"esp32-monitor/client/internal/guibridge"
+	"esp32-monitor/client/internal/logging"
 )
 
 // trayController owns the optional status bar item. Settings changes are
@@ -70,20 +71,28 @@ func (t *trayController) showWindow() {
 }
 
 func main() {
+	if handle, err := logging.Setup(logging.Options{Name: "client", AlsoStderr: logging.IsTerminal(os.Stderr)}); err == nil {
+		defer handle.Close()
+	} else {
+		log.Printf("log_setup_failed: %v", err)
+	}
 	loginItem := flag.Bool("login-item", false, "start from the login item without showing the window")
 	flag.Parse()
 	if err := ensureWebView2(); err != nil {
 		log.Fatal(err)
 	}
 	if err := run(*loginItem); err != nil {
+		logging.L("gui").Error("client_exit", "error", err)
 		log.Fatal(err)
 	}
+	logging.L("gui").Info("client_exit")
 }
 
 func run(loginItem bool) error {
+	logging.L("gui").Info("client_start", "version", guibridge.AppVersion, "os", runtime.GOOS, "arch", runtime.GOARCH, "login_item", loginItem)
 	settings, err := guibridge.LoadSettings()
 	if err != nil {
-		log.Printf("gui_settings_fallback: %v", err)
+		logging.L("gui").Warn("gui_settings_fallback", "error", err)
 	}
 	socketPath, err := guibridge.DefaultSocketPath()
 	if err != nil {
@@ -113,6 +122,7 @@ func run(loginItem bool) error {
 			Handler: application.BundledAssetFileServer(guiassets.Assets()),
 		},
 		Mac:      macOptions,
+		Logger:   logging.Level("wails", slog.LevelWarn),
 		LogLevel: slog.LevelWarn,
 	})
 
@@ -164,6 +174,7 @@ func run(loginItem bool) error {
 	// window opens immediately and reports Agent state through Status calls.
 	go func() {
 		if err := supervisor.Start(ctx); err != nil {
+			logging.L("gui").Error("agent_supervisor", "error", err)
 			log.Printf("agent_supervisor: %v", err)
 		}
 	}()

@@ -3,14 +3,15 @@
 package guibridge
 
 import (
-	"os"
 	"path/filepath"
+
+	"esp32-monitor/client/internal/platform"
 )
 
 func defaultIPCPath() (string, error) {
-	base, err := os.UserConfigDir()
+	base, err := platform.AppDataDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "ESP32-Monitor", "agent-ipc.sock"), nil
+	return filepath.Join(base, "agent-ipc.sock"), nil
 }

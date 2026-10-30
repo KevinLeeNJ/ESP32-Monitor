@@ -10,7 +10,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   "update:modelValue": [value: T];
-  change: [value: T];
 }>();
 
 const root = ref<HTMLDivElement>();
@@ -56,10 +55,7 @@ function toggle() {
 function pick(index: number) {
   const option = props.options[index];
   if (!option) return;
-  if (option.value !== props.modelValue) {
-    emit("update:modelValue", option.value);
-    emit("change", option.value);
-  }
+  if (option.value !== props.modelValue) emit("update:modelValue", option.value);
   close(true);
 }
 

@@ -26,8 +26,3 @@ export interface NowPlayingSnapshot {
   };
   current: NowPlayingCurrent | null;
 }
-
-/** Implement with future Wails binding or authenticated Agent IPC. */
-export interface NowPlayingReader {
-  GetNowPlayingSnapshot(): Promise<NowPlayingSnapshot>;
-}

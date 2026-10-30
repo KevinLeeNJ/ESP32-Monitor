@@ -43,11 +43,11 @@ func New(c config.Config, cacheDir string) (*Application, error) {
 	if c.Companion.Enabled {
 		dir := c.Companion.StateDirectory
 		if dir == "" {
-			base, e := os.UserConfigDir()
+			base, e := platform.AppDataDir()
 			if e != nil {
 				return nil, e
 			}
-			dir = filepath.Join(base, "ESP32-Monitor", "credentials", "companion")
+			dir = filepath.Join(base, "credentials", "companion")
 		}
 		name, _ := os.Hostname()
 		backend, e := transport.New(transport.Options{StoreDirectory: dir, HostName: name, BindIP: c.Companion.BindIP, Providers: application.Companion})
@@ -59,12 +59,12 @@ func New(c config.Config, cacheDir string) (*Application, error) {
 	if c.Collector.Enabled {
 		dir := c.Collector.StateDirectory
 		if dir == "" {
-			base, e := os.UserConfigDir()
+			base, e := platform.AppDataDir()
 			if e != nil {
 				_ = application.Close()
 				return nil, e
 			}
-			dir = filepath.Join(base, "ESP32-Monitor", "collector")
+			dir = filepath.Join(base, "collector")
 		}
 		manager, e := collector.New(collector.Options{StateDirectory: dir, UploadURL: c.Collector.UploadURL, UploadToken: collector.TokenFile(c.Collector.UploadTokenFile)})
 		if e != nil {

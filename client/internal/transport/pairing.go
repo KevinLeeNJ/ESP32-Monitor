@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/binary"
 	"errors"
+	"esp32-monitor/client/internal/logging"
 	"esp32-monitor/client/internal/transport/wire"
 	"fmt"
 	"io"
@@ -13,8 +14,6 @@ import (
 	"sync"
 	"time"
 )
-
-const PairingWarning = "配对 Monitor 会在局域网内明文传输密钥。只有在你信任当前局域网时才进行配对。"
 
 type pairWindow struct {
 	deviceID        string
@@ -79,6 +78,7 @@ func (p *pairingServer) open(device, ip string) error {
 	}
 	now := time.Now()
 	p.window = &pairWindow{deviceID: device, sourceIP: ip, consent: now, expires: now.Add(120 * time.Second)}
+	logging.L("transport").Info("pairing_opened", "device", logging.Ref(device), "source", ip)
 	return nil
 }
 func (p *pairingServer) port() int {
@@ -135,6 +135,7 @@ func (b *Backend) ConfirmPairing(id string, approve bool) error {
 	if !approve {
 		w.rejected = true
 		w.response.State = "rejected"
+		logging.L("transport").Info("pairing_rejected", "device", logging.Ref(w.deviceID))
 		return nil
 	}
 	w.hostConfirmed = true
@@ -153,6 +154,7 @@ func (p *pairingServer) approve(w *pairWindow) error {
 	r.State = "approved"
 	r.DeviceToken = &token
 	r.SerialKey = &key
+	logging.L("transport").Info("pairing_approved", "device", logging.Ref(w.deviceID))
 	return nil
 }
 func pairCode(dn, hn, d, h, p string) string {

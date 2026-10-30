@@ -1,4 +1,4 @@
-import { collectorService, type CollectorBridge } from "./collector.js";
+import { collectorService } from "./collector.js";
 import type { CollectorCapabilities, CollectorConfig, CollectorSnapshot } from "../types/collector.js";
 import { prepareMetricDraft, repairV2Selections, validateMetricDraft } from "./collector-metrics.js";
 
@@ -11,15 +11,13 @@ export class CollectorController {
   busy = false;
   error = "";
   pollError = "";
-  private service;
+  private service = collectorService;
   private listeners = new Set<() => void>();
   private timer?: ReturnType<typeof setTimeout>;
   private stopped = true;
   private capsRetryAt = 0;
 
-  constructor(bridge: CollectorBridge, private pollMS = 1000) {
-    this.service = collectorService(bridge);
-  }
+  constructor(private pollMS = 1000) {}
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     listener();
@@ -81,15 +79,20 @@ export class CollectorController {
   private repairDraft() {
     if (this.draft && this.capabilities?.v2) repairV2Selections(this.draft, this.capabilities.v2);
   }
-  async apply() {
-    if (this.busy || !this.draft) return;
-    const error = validateMetricDraft(this.draft, this.capabilities);
-    if (error) { this.error = error; this.emit(); return; }
+  async apply(): Promise<boolean> {
+    if (this.busy || !this.draft) return false;
+    const error = validateMetricDraft(this.draft);
+    if (error) { this.error = error; this.emit(); return false; }
     this.busy = true; this.error = ""; this.emit();
     try {
       this.snapshot = await this.service.apply(prepareMetricDraft(this.draft, this.capabilities));
       this.draft = structuredClone(this.snapshot.config);
-    } catch (error) { this.error = String(error); }
-    finally { this.busy = false; this.emit(); }
+      return true;
+    } catch (error) {
+      this.error = String(error);
+      return false;
+    } finally {
+      this.busy = false; this.emit();
+    }
   }
 }

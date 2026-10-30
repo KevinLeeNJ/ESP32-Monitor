@@ -132,17 +132,21 @@ export function repairV2Selections(config: CollectorConfig, caps: CollectorV2Cap
   });
   bundleUploads(config.upload, caps);
 }
-export function validateMetricDraft(config: CollectorConfig, caps?: CollectorCapabilities): string {
+export function validateMetricDraft(config: CollectorConfig): string {
   if (!Number.isInteger(config.interval_seconds) || config.interval_seconds < 5 || config.interval_seconds > 60) return "采集间隔必须为 5–60 秒的整数";
   return "";
+}
+export function ensureUploadConfig(config: CollectorConfig): CollectorUploadConfig {
+  config.upload ??= { enabled: false, interval_seconds: config.interval_seconds, optional: [] };
+  return config.upload;
 }
 export function prepareMetricDraft(config: CollectorConfig, caps?: CollectorCapabilities): CollectorConfig {
   const next = structuredClone(config);
   if (caps?.v2) {
-    next.upload ??= { enabled: false, optional: [] };
-    next.upload.interval_seconds = next.interval_seconds;
+    const upload = ensureUploadConfig(next);
+    upload.interval_seconds = next.interval_seconds;
     // V2 upload choices live in upload.optional; keep local previews separate.
-    next.upload.optional = next.upload.optional.filter(selection => !requiredMetrics.has(selection.metric));
+    upload.optional = upload.optional.filter(selection => !requiredMetrics.has(selection.metric));
     // The GUI only offers currently available metrics, so stale selections
     // (hardware changed or a sensor backend went away) are pruned here
     // instead of blocking the save with a selection the user cannot see.

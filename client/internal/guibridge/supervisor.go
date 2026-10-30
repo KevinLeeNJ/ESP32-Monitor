@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"esp32-monitor/client/internal/ipc"
+	"esp32-monitor/client/internal/logging"
 )
 
 // Supervisor owns the Agent child process. It spawns the binary with settings
@@ -35,7 +36,6 @@ type Supervisor struct {
 	external bool
 	stopped  bool
 
-	restarts  int
 	lastError error
 
 	// restartMu serializes settings-driven external restarts. The save call
@@ -105,6 +105,7 @@ func (s *Supervisor) Start(ctx context.Context) error {
 		s.mu.Lock()
 		s.external = true
 		s.mu.Unlock()
+		logging.L("supervisor").Info("agent_reused", "reason", "socket_ready")
 		return nil
 	}
 	if handled, err := s.startPlatformAgent(ctx); handled {
@@ -115,14 +116,17 @@ func (s *Supervisor) Start(ctx context.Context) error {
 		s.mu.Lock()
 		s.external = true
 		s.mu.Unlock()
+		logging.L("supervisor").Info("agent_started", "mode", "external")
 		if err := s.WaitSocket(ctx, 15*time.Second); err != nil {
 			s.setLast(err)
+			logging.L("supervisor").Warn("agent_unreachable", "error", err)
 			return err
 		}
 		return nil
 	}
 	go s.manage()
 	if err := s.WaitSocket(ctx, 15*time.Second); err != nil {
+		logging.L("supervisor").Warn("agent_unreachable", "error", err)
 		return err
 	}
 	return nil
@@ -144,6 +148,7 @@ func (s *Supervisor) manage() {
 		}
 		if attempt > 0 && !graceful {
 			backoff := min(time.Duration(1<<min(attempt, 5))*time.Second, 32*time.Second)
+			logging.L("supervisor").Warn("agent_restart_backoff", "attempt", attempt, "delay", backoff.String())
 			select {
 			case <-s.manageCtx.Done():
 				return
@@ -160,8 +165,10 @@ func (s *Supervisor) manage() {
 		if err := cmd.Start(); err != nil {
 			cancel()
 			s.setLast(fmt.Errorf("agent_start_failed: %w", err))
+			logging.L("supervisor").Error("agent_start_failed", "error", err)
 			continue
 		}
+		logging.L("supervisor").Info("agent_started", "mode", "managed", "pid", cmd.Process.Pid)
 		s.mu.Lock()
 		s.current = &currentAgent{cmd: cmd, cancel: cancel}
 		s.mu.Unlock()
@@ -188,6 +195,7 @@ func (s *Supervisor) manage() {
 		}
 		if exitErr != nil {
 			s.setLast(fmt.Errorf("agent_exited: %v", exitErr))
+			logging.L("supervisor").Warn("agent_exited", "error", exitErr)
 		}
 		_ = exitErr
 	}
@@ -280,10 +288,8 @@ func (s *Supervisor) WaitSocket(ctx context.Context, timeout time.Duration) erro
 		client, err := ipc.Dial(s.socket)
 		if err == nil {
 			_, statusErr := client.Status(ctx)
-			_ = client.Close()
 			if statusErr == nil {
 				s.mu.Lock()
-				s.restarts = 0
 				s.lastError = nil
 				s.mu.Unlock()
 				return nil
@@ -306,7 +312,6 @@ func (s *Supervisor) Call(fn func(client *ipc.Client) error) error {
 	if err != nil {
 		return fmt.Errorf("ipc_unavailable: %w", err)
 	}
-	defer client.Close()
 	return fn(client)
 }
 
@@ -319,6 +324,11 @@ func (s *Supervisor) Restart(ctx context.Context) error {
 	external := s.external
 	managed := s.current != nil
 	s.mu.Unlock()
+	mode := "managed"
+	if external {
+		mode = "external"
+	}
+	logging.L("supervisor").Info("agent_restart", "mode", mode)
 	if managed {
 		s.stopChild(5 * time.Second)
 		return s.WaitSocket(ctx, 20*time.Second)
@@ -346,7 +356,6 @@ func (s *Supervisor) restartExternal(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ipc_unavailable: %w", err)
 	}
-	defer client.Close()
 	callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	status, err := client.Status(callCtx)
 	if err != nil {
@@ -404,11 +413,9 @@ func (s *Supervisor) waitNewPID(ctx context.Context, oldPID int, timeout time.Du
 		client, err := ipc.Dial(s.socket)
 		if err == nil {
 			status, statusErr := client.Status(probeCtx)
-			_ = client.Close()
 			if statusErr == nil && status.PID != 0 && status.PID != oldPID {
 				cancel()
 				s.mu.Lock()
-				s.restarts = 0
 				s.lastError = nil
 				s.mu.Unlock()
 				return nil
@@ -463,12 +470,12 @@ func (s *Supervisor) Stop() {
 	done := s.manageDone
 	external := s.external
 	s.mu.Unlock()
+	logging.L("supervisor").Info("agent_stop", "external", external)
 	if external {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		if client, err := ipc.Dial(s.socket); err == nil {
 			_ = client.Quit(ctx)
-			_ = client.Close()
 		}
 		return
 	}
@@ -495,7 +502,6 @@ func (s *Supervisor) isStopped() bool {
 func (s *Supervisor) setLast(err error) {
 	s.mu.Lock()
 	s.lastError = err
-	s.restarts++
 	s.mu.Unlock()
 }
 

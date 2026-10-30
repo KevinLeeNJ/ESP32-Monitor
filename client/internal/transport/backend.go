@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"esp32-monitor/client/internal/companion"
+	"esp32-monitor/client/internal/logging"
 	"esp32-monitor/client/internal/transport/wire"
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/listeners"
@@ -128,6 +129,7 @@ func New(opts Options) (*Backend, error) {
 	go b.maintain()
 	b.wg.Add(1)
 	go b.watchInterface()
+	logging.L("transport").Info("companion_listen", "bind_ip", opts.BindIP, "mqtt", b.MQTTAddress())
 	return b, nil
 }
 func (b *Backend) HostID() string      { return b.store.HostID() }
@@ -155,6 +157,7 @@ func (b *Backend) Close() error {
 		b.networkChangeMu.Unlock()
 		b.wg.Wait()
 		_ = b.store.Close()
+		logging.L("transport").Info("companion_close")
 	})
 	return nil
 }

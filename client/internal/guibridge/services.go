@@ -10,6 +10,7 @@ import (
 	"esp32-monitor/client/internal/companion"
 	"esp32-monitor/client/internal/diagnostics"
 	"esp32-monitor/client/internal/ipc"
+	"esp32-monitor/client/internal/logging"
 	"esp32-monitor/client/internal/nowplaying"
 	"esp32-monitor/client/internal/transport"
 )
@@ -89,6 +90,7 @@ func (s *AppService) QuitApp(context.Context) error {
 	if s.quit == nil {
 		return errors.New("quit_unavailable")
 	}
+	logging.L("gui").Info("quit_requested")
 	s.sup.Stop()
 	s.quit()
 	return nil
@@ -111,19 +113,26 @@ func (s *AppService) SaveSettings(ctx context.Context, settings Settings) (Setti
 		}
 	}
 	if err := SaveSettings(settings); err != nil {
+		logging.L("gui").Warn("settings_save_failed", "error", err)
 		return s.sup.CurrentSettings(), err
 	}
+	logging.L("gui").Info("settings_saved", "collector", settings.Collector.Enabled, "companion", settings.Companion.Enabled,
+		"codex", settings.Codex.Enabled, "music", settings.Music.Enabled, "launch_at_login", settings.Launch.LaunchAtLogin)
 	if s.onSettings != nil {
 		s.onSettings(settings)
 	}
 	if err := s.sup.UpdateSettings(ctx, settings); err != nil {
+		logging.L("gui").Warn("settings_apply_failed", "error", err)
 		return s.sup.CurrentSettings(), err
 	}
 	return s.sup.CurrentSettings(), nil
 }
 
 // RestartAgent relaunches the Agent without changing settings.
-func (s *AppService) RestartAgent(ctx context.Context) error { return s.sup.Restart(ctx) }
+func (s *AppService) RestartAgent(ctx context.Context) error {
+	logging.L("gui").Info("agent_restart_requested")
+	return s.sup.Restart(ctx)
+}
 
 // LastAgentError returns the most recent supervisor failure text.
 func (s *AppService) LastAgentError() string {

@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { appService } from "../services/bridge.js";
 import type { ServerTestResult } from "../types/app.js";
-import { cloneSettings, collector, saveSettings, store, toast } from "../store.js";
+import { cloneSettings, collector, saveSettings, store, toast, useCollectorRevision } from "../store.js";
 import { serverBase } from "../services/server-url.js";
+import { ensureUploadConfig } from "../services/collector-metrics.js";
+import { fmtClockTime } from "../services/format.js";
 import { errCode } from "../services/wails.js";
 
 const baseURL = ref("");
@@ -13,12 +15,9 @@ const reRegistering = ref(false);
 const formError = ref("");
 const testing = ref(false);
 const result = ref<ServerTestResult | null>(null);
-// CollectorController is a plain class; subscribe so the 2s snapshot poll
-// updates upload errors and last-upload rows on this page.
-const revision = ref(0);
-let unsubscribe = () => {};
-onMounted(() => { unsubscribe = collector.subscribe(() => { revision.value++; }); });
-onUnmounted(() => unsubscribe());
+// CollectorController is a plain class; subscribe so the snapshot poll updates
+// upload errors and last-upload rows on this page.
+const revision = useCollectorRevision();
 
 const snap = computed(() => { revision.value; return collector.snapshot; });
 const committed = computed(() => store.settings?.collector.upload_url ?? "");
@@ -94,12 +93,11 @@ async function setUpload(on: boolean): Promise<boolean> {
     }
     const draft = collector.draft;
     if (!draft) { toast("Agent 尚未就绪，请稍后重试"); return false; }
-    draft.upload ??= { enabled: false, interval_seconds: draft.interval_seconds, optional: [] };
-    draft.upload.enabled = on;
+    ensureUploadConfig(draft).enabled = on;
     collector.notifyDraftChanged();
-    await collector.apply();
-    if (collector.error) { toast(`操作失败：${collector.error}`); return false; }
-    return true;
+    if (await collector.apply()) return true;
+    toast(`操作失败：${collector.error}`);
+    return false;
   } catch (error) { toast(`操作失败：${String(error)}`); return false; }
   finally { toggling.value = false; }
 }
@@ -166,7 +164,7 @@ async function testConnection() {
         <div class="row"><div><strong>采集与上传</strong><small>{{ uploadOn ? "正在按周期采集并上传指标" : "开启后自动启用采集；关闭后仅在本机采集" }}</small></div><div class="row-right"><input class="switch" type="checkbox" :checked="uploadOn" :disabled="toggling || !registered || !committed" aria-label="采集与上传" @change="setUpload(($event.target as HTMLInputElement).checked)"></div></div>
         <div class="row"><div><strong>上传指标</strong><small>必选指标始终上传，可选项在「指标采集」中调整</small></div><div class="row-right"><button class="btn" @click="store.page = 'metrics'">管理指标</button></div></div>
         <div class="row"><div><strong>上传错误</strong><small>Agent 最近一次上传</small></div><div class="row-right"><span class="value muted">{{ snap?.upload_error || "无" }}</span></div></div>
-        <div class="row"><div><strong>最近上传</strong><small>最近一次成功上传</small></div><div class="row-right"><span class="value">{{ snap?.last_upload_at ? new Date(snap.last_upload_at).toLocaleTimeString("zh-CN") : "—" }}</span></div></div>
+        <div class="row"><div><strong>最近上传</strong><small>最近一次成功上传</small></div><div class="row-right"><span class="value">{{ fmtClockTime(snap?.last_upload_at) }}</span></div></div>
         <div class="section-note">验证码错误或过期时，请回到 Server 网页重新生成。401 / 403 表示令牌已失效，需要重新注册设备。</div>
       </section>
     </div>

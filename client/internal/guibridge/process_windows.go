@@ -23,7 +23,6 @@ func (s *Supervisor) terminateAgent(process *os.Process) error {
 	if err != nil {
 		return process.Kill()
 	}
-	defer client.Close()
 	return client.Quit(ctx)
 }
 
