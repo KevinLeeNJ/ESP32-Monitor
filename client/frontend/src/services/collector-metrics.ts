@@ -187,6 +187,24 @@ function formatValue(key: string, value: unknown): string {
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
 }
+// 代理上报的对象名可能只是键里的局部名（电池为 "0"、核心为 "cpu0"），
+// 这类名称按对象类型补一个可读名称。
+export function objectLabel(caps: CollectorV2Capabilities, id: number): string {
+  const object = caps.objects?.find(item => item.id === id);
+  const name = object?.name?.trim() ?? "";
+  const core = object?.kind === "core" ? array(caps.inventory.cores).find(item => Number(item.id) === id) : undefined;
+  if (core) {
+    if (name && !/^cpu\d+$/i.test(name)) return name;
+    const index = Number(core.index);
+    return Number.isNaN(index) ? `逻辑核 ${id}` : `逻辑核 ${index}`;
+  }
+  if (name && !/^\d+$/.test(name)) return name;
+  if (object?.kind === "battery") return "系统电池";
+  if (object?.kind === "gpu") return "GPU";
+  if (object?.kind === "volume") return "卷";
+  return name || `对象 ${id}`;
+}
+
 export function metricValue(metric: CollectorV2Metric, caps: CollectorV2Capabilities, snapshot?: CollectorSnapshot, objectID?: number): string {
   const key = metric.metric, inventory = caps.inventory, sample = record(snapshot?.v2_sample);
   const [family, field] = key.split(".");
@@ -210,7 +228,7 @@ export function metricValue(metric: CollectorV2Metric, caps: CollectorV2Capabili
       let value = item[fields[key]];
       if (key === "drive.smart_health") value = record(item.sm).h;
       const id = Number(item[metric.fixed ? "id" : "i"]);
-      const name = caps.objects?.find(object => object.id === id)?.name ?? `对象 ${id}`;
+      const name = objectLabel(caps, id);
       const formatted = key === "interface.medium" ? ({ wifi: "Wi-Fi", ethernet: "有线网络", other: "其他" }[String(value)] ?? "—") : formatValue(key, value);
       return objectID === undefined ? `${name}: ${formatted}` : formatted;
     }).join("；") || "—";
@@ -224,47 +242,60 @@ const memberLabels: Record<string, string> = {
  "interface.ipv4":"本地", "network.public_ipv4":"公网", "battery.level":"电量", "battery.charging":"充电状态",
  "system.os":"系统", "system.product":"设备",
 };
-// Bond tokens with non-breaking spaces so a unit never splits between its
-// label and number; units are newline-separated and rendered with pre-line.
-const bond = (value: string) => value.replaceAll(" ", "\u00A0");
+// One cell per measurement. Each cell owns its own width, so values wrap
+// inside the cell and the layout needs no NBSP bonding or manual line breaks.
+export interface MetricCell { key: string; label: string; value: string }
 
-// CPU 信息 compacts to "型号\nxC/xT"（核数/线程数）。
-function cpuInfoValue(row: MetricRow, caps: CollectorV2Capabilities): string {
+// CPU 信息拆成「型号」与核心/线程数两格。
+function cpuInfoCells(row: MetricRow, caps: CollectorV2Capabilities): MetricCell[] {
   const raw = (key: string) => { const metric = row.members.find(member => member.metric === key); return metric ? metricValue(metric, caps) : "—"; };
-  const cores = raw("cpu.physical_cores"), threads = raw("cpu.logical_cores");
-  const parts = [raw("cpu.model")];
-  if (cores !== "—") parts.push(threads === "—" ? `${cores}C` : `${cores}C/${threads}T`);
-  else if (threads !== "—") parts.push(`${threads}T`);
-  return parts.filter(part => part !== "—").join("\n") || "—";
+  const model = raw("cpu.model"), cores = raw("cpu.physical_cores"), threads = raw("cpu.logical_cores");
+  const counts = cores !== "—" ? (threads === "—" ? `${cores}C` : `${cores}C/${threads}T`) : threads !== "—" ? `${threads}T` : "";
+  const cells: MetricCell[] = [];
+  if (model !== "—") cells.push({ key: "cpu.model", label: "型号", value: model });
+  if (counts) cells.push({ key: "cpu.cores", label: "核心", value: counts });
+  return cells;
 }
 
-// 磁盘信息每行只展示「名称: 已用 / 总容量」，容量取自 inventory 与最新采样。
-function driveInfoValue(row: MetricRow, caps: CollectorV2Capabilities, snapshot?: CollectorSnapshot, objectID?: number): string {
+// 磁盘信息每格一个磁盘：对象名在行首，格内只放「已用 / 总容量」。
+function driveCells(row: MetricRow, caps: CollectorV2Capabilities, snapshot?: CollectorSnapshot, objectID?: number): MetricCell[] {
   const totals = new Map(array(caps.inventory.drives).map(drive => [Number(drive.id), drive.total]));
   const used = new Map(array(record(snapshot?.v2_sample).disk).map(disk => [Number(disk.i), disk.u]));
   const ids = objectID === undefined ? row.objects ?? [] : [objectID];
-  const lines = ids.map(id => {
+  return ids.flatMap(id => {
+    const total = totals.get(id), current = used.get(id);
     let value = "—";
     try {
-      const usedBytes = BigInt(String(used.get(id))), totalBytes = BigInt(String(totals.get(id)));
+      const usedBytes = BigInt(String(current)), totalBytes = BigInt(String(total));
       if (usedBytes >= 0n && totalBytes > 0n && usedBytes <= totalBytes) value = `${formatBytes(usedBytes)} / ${formatBytes(totalBytes)}`;
     } catch { /* 缺失或非法容量保持占位符 */ }
-    if (objectID !== undefined) return bond(value);
-    const name = caps.objects?.find(object => object.id === id)?.name ?? `对象 ${id}`;
-    return `${name}: ${bond(value)}`;
+    if (objectID !== undefined) {
+      return [
+        { key: `${id}.used`, label: "已用", value: current === undefined ? "—" : formatBytes(current) },
+        { key: `${id}.total`, label: "总量", value: total === undefined ? "—" : formatBytes(total) },
+      ];
+    }
+    const name = objectLabel(caps, id);
+    return [{ key: String(id), label: name, value }];
   });
-  return lines.join("\n") || "—";
 }
 
-// 每个 "·" 分隔的指标独占一行：WebKit 在 keep-all 下会在小数点/斜杠处断行，
-// 预先分行可完全避开该行为。
+export function rowCells(row: MetricRow, caps: CollectorV2Capabilities, snapshot?: CollectorSnapshot, objectID?: number): MetricCell[] {
+  if (row.bundle?.key === "cpu.model") return cpuInfoCells(row, caps);
+  if (row.bundle?.key === "drive.model") return driveCells(row, caps, snapshot, objectID);
+  const cells = !row.bundle
+    ? [{ key: row.metric, label: "", value: metricValue(row.members[0], caps, snapshot, objectID) }]
+    : row.members
+      .map(metric => {
+        const value = metricValue(metric, caps, snapshot, objectID);
+        return { key: metric.metric, label: memberLabels[metric.metric] ?? metric.metric, value: metric.metric === "interface.up" && value === "—" ? "未知" : value };
+      })
+      .filter(cell => cell.value !== "—");
+  return cells.length ? cells : [{ key: row.metric, label: "", value: "—" }];
+}
+
+// Flat text form for places that still render one string (overview, arcade).
+// The metrics page renders rowCells directly as pixel cards.
 export function rowValue(row: MetricRow, caps: CollectorV2Capabilities, snapshot?: CollectorSnapshot, objectID?: number): string {
-  if (row.bundle?.key === "cpu.model") return cpuInfoValue(row, caps);
-  if (row.bundle?.key === "drive.model") return driveInfoValue(row, caps, snapshot, objectID);
-  if (!row.bundle) return bond(metricValue(row.members[0], caps, snapshot, objectID));
-  const values = row.members.map(metric => {
-    const value = metricValue(metric, caps, snapshot, objectID);
-    return { key: metric.metric, value: metric.metric === "interface.up" && value === "—" ? "未知" : value };
-  }).filter(entry => entry.value !== "—");
-  return values.length ? values.map(entry => `${bond(memberLabels[entry.key] ?? entry.key)}\u00A0${bond(entry.value)}`).join("\n") : "—";
+  return rowCells(row, caps, snapshot, objectID).map(cell => cell.label ? `${cell.label} ${cell.value}` : cell.value).join("\n");
 }

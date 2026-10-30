@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { collector, store, toast, useCollectorRevision } from "../store.js";
 import {
   deviceDependencies, ensureUploadConfig, metricGroup, metricGroups, metricNames, orderedRows,
-  pruneDeviceDependents, rowValue, selectedObjects,
+  pruneDeviceDependents, rowCells, rowValue, selectedObjects, objectLabel,
 } from "../services/collector-metrics.js";
 import { isV2Server } from "../services/server-url.js";
 import type { CollectorV2Capabilities, CollectorV2Metric } from "../types/collector.js";
@@ -46,12 +46,12 @@ watch(tabs, value => { if (!value.includes(activeTab.value)) activeTab.value = v
 const rows = computed<MetricRow[]>(() => allRows.value.filter(row => metricGroup(row.metric) === activeTab.value));
 
 const rowTitle = (row: MetricRow) => row.bundle?.title ?? metricNames[row.metric] ?? row.metric;
-const isObjectRow = (row: MetricRow) => !!row.objects?.length && row.metric !== "battery.level";
+const isObjectRow = (row: MetricRow) => !!row.objects?.length;
 function memberMetric(key: string): CollectorV2Metric | undefined {
   return caps.value?.metrics.find(metric => metric.metric === key);
 }
 function objectName(id: number): string {
-  return caps.value?.objects.find(object => object.id === id)?.name ?? `对象 ${id}`;
+  return caps.value ? objectLabel(caps.value, id) : `对象 ${id}`;
 }
 function isSelected(row: MetricRow): boolean {
   const upload = collector.draft?.upload;
@@ -119,13 +119,9 @@ function objectDisabled(row: MetricRow, id: number): boolean {
   const parent = deviceDependencies[row.metric];
   return !!parent && !!collector.draft?.upload && !selectedObjects(collector.draft.upload, parent).includes(id);
 }
-// 电池状态电量与充电状态各占一行。
-function batteryValue(): string {
-  const batteries = (collector.snapshot?.v2_sample as Record<string, unknown> | undefined)?.bat;
-  const list = Array.isArray(batteries) ? batteries.map(item => (item ?? {}) as Record<string, unknown>) : [];
-  const level = Number(list[0]?.l);
-  if (!list.length || !Number.isFinite(level)) return "—";
-  return `${Math.round(level / 100)}%\n${list[0].c ? "充电中" : "未充电"}`;
+// 每一格承载一个数值；组合指标按成员并排，由 CSS 决定每行几列。
+function cells(row: MetricRow, id?: number) {
+  return caps.value ? rowCells(row, caps.value, collector.snapshot, id) : [];
 }
 
 async function rescan() {
@@ -204,23 +200,38 @@ onMounted(async () => {
                     @change="toggleRow(row, ($event.target as HTMLInputElement).checked)">
                 </label>
               </div>
-              <div class="metric-objects">
+              <div v-if="row.metric === 'core.usage'" class="value-grid core-grid" style="--value-cols:4">
+                <span v-for="id in row.objects" :key="id" class="value-cell" :data-object-row="id">
+                  <span class="value-cell-name">{{ objectName(id) }}</span>
+                  <span class="value-cell-value">{{ rowValue(row, caps!, collector.snapshot, id) }}</span>
+                </span>
+              </div>
+              <div v-else class="metric-objects">
                 <div v-for="id in row.objects" :key="id" class="metric-object" :data-object-row="id">
                   <span class="metric-object-name">{{ objectName(id) }}</span>
-                  <span class="value">{{ rowValue(row, caps!, collector.snapshot, id) }}</span>
-                  <label v-if="row.metric !== 'core.usage'">
+                  <span class="value-grid" :style="{ '--value-cols': cells(row, id).length }">
+                    <span v-for="cell in cells(row, id)" :key="cell.key" class="value-cell">
+                      <span v-if="cell.label" class="value-cell-name">{{ cell.label }}</span>
+                      <span class="value-cell-value">{{ cell.value }}</span>
+                    </span>
+                  </span>
+                  <label>
                     <input class="switch" type="checkbox" :aria-label="`上传 ${rowTitle(row)} ${objectName(id)}`"
                       :checked="objectChecked(row, id)" :disabled="busy || !v2Configured || objectDisabled(row, id)"
                       :title="objectDisabled(row, id) ? '请先启用该设备的主指标' : undefined"
                       @change="toggleObject(row, id, ($event.target as HTMLInputElement).checked)">
                   </label>
-                  <span v-else class="metric-object-empty" aria-hidden="true"></span>
                 </div>
               </div>
             </div>
             <div v-else class="metric-row" :data-metric-row="row.metric">
               <div class="metric-title"><strong>{{ rowTitle(row) }}</strong></div>
-              <div class="value">{{ row.metric === "battery.level" ? batteryValue() : rowValue(row, caps!, collector.snapshot) }}</div>
+              <div class="value-grid" :style="{ '--value-cols': cells(row).length }">
+                <span v-for="cell in cells(row)" :key="cell.key" class="value-cell">
+                  <span v-if="cell.label" class="value-cell-name">{{ cell.label }}</span>
+                  <span class="value-cell-value">{{ cell.value }}</span>
+                </span>
+              </div>
               <div>
                 <span v-if="row.required" class="pill required-metric" title="自动采集并上传">必选</span>
                 <input v-else class="switch" type="checkbox" :aria-label="`上传 ${rowTitle(row)}`"

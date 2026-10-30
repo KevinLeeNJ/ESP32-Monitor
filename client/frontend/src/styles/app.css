@@ -70,10 +70,10 @@ button:focus-visible{outline:2px dashed #777;outline-offset:3px}
 .row + :is(.section-note,.preview-controls,.actions){margin-top:12px}
 
 /* Shared stepped frames for controls, notices and status indicators. */
-:is(.pixel-input-frame,.banner,.device,.device-icon,.stat-icon,.source-icon,.preview-controls,.section-note,.demo,.pill){position:relative;isolation:isolate;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none;--pixel-border:#888;--pixel-surface:#e5e5df}
-:is(.pixel-input-frame,.banner,.device,.device-icon,.stat-icon,.source-icon,.preview-controls,.section-note,.demo,.pill)::before,:is(.pixel-input-frame,.banner,.device,.device-icon,.stat-icon,.source-icon,.preview-controls,.section-note,.demo,.pill)::after{content:"";position:absolute;pointer-events:none;clip-path:polygon(4px 0,calc(100% - 4px) 0,calc(100% - 4px) 2px,calc(100% - 2px) 2px,calc(100% - 2px) 4px,100% 4px,100% calc(100% - 4px),calc(100% - 2px) calc(100% - 4px),calc(100% - 2px) calc(100% - 2px),calc(100% - 4px) calc(100% - 2px),calc(100% - 4px) 100%,4px 100%,4px calc(100% - 2px),2px calc(100% - 2px),2px calc(100% - 4px),0 calc(100% - 4px),0 4px,2px 4px,2px 2px,4px 2px)}
-:is(.pixel-input-frame,.banner,.device,.device-icon,.stat-icon,.source-icon,.preview-controls,.section-note,.demo,.pill)::before{inset:0;background:var(--pixel-border);z-index:-2}
-:is(.pixel-input-frame,.banner,.device,.device-icon,.stat-icon,.source-icon,.preview-controls,.section-note,.demo,.pill)::after{inset:2px;background:var(--pixel-surface);z-index:-1}
+:is(.pixel-input-frame,.banner,.device,.device-icon,.stat-icon,.source-icon,.preview-controls,.section-note,.demo,.pill,.value-cell){position:relative;isolation:isolate;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none;--pixel-border:#888;--pixel-surface:#e5e5df}
+:is(.pixel-input-frame,.banner,.device,.device-icon,.stat-icon,.source-icon,.preview-controls,.section-note,.demo,.pill,.value-cell)::before,:is(.pixel-input-frame,.banner,.device,.device-icon,.stat-icon,.source-icon,.preview-controls,.section-note,.demo,.pill,.value-cell)::after{content:"";position:absolute;pointer-events:none;clip-path:polygon(4px 0,calc(100% - 4px) 0,calc(100% - 4px) 2px,calc(100% - 2px) 2px,calc(100% - 2px) 4px,100% 4px,100% calc(100% - 4px),calc(100% - 2px) calc(100% - 4px),calc(100% - 2px) calc(100% - 2px),calc(100% - 4px) calc(100% - 2px),calc(100% - 4px) 100%,4px 100%,4px calc(100% - 2px),2px calc(100% - 2px),2px calc(100% - 4px),0 calc(100% - 4px),0 4px,2px 4px,2px 2px,4px 2px)}
+:is(.pixel-input-frame,.banner,.device,.device-icon,.stat-icon,.source-icon,.preview-controls,.section-note,.demo,.pill,.value-cell)::before{inset:0;background:var(--pixel-border);z-index:-2}
+:is(.pixel-input-frame,.banner,.device,.device-icon,.stat-icon,.source-icon,.preview-controls,.section-note,.demo,.pill,.value-cell)::after{inset:2px;background:var(--pixel-surface);z-index:-1}
 .pixel-input-frame{display:inline-block;vertical-align:middle;--pixel-border:#777;--pixel-surface:#f8f8f4}.pixel-input-frame:focus-within{outline:2px dashed #555;outline-offset:2px}.pixel-input-frame select,.pixel-input-frame input{position:relative;display:block;border:0!important;box-shadow:none!important;outline:none!important;background-color:transparent!important;border-radius:0}.field .pixel-input-frame{display:block;width:100%}.field .pixel-input-frame input,.field .pixel-input-frame select{width:100%}
 .banner{--pixel-border:#888;--pixel-surface:#deded7}.device{--pixel-border:#999;--pixel-surface:#deded8}.device-icon,.stat-icon,.source-icon{--pixel-border:#999;--pixel-surface:#d8d8d2}.preview-controls,.section-note{--pixel-border:#aaa;--pixel-surface:#e5e5df}.demo{--pixel-border:#aaa;--pixel-surface:#353535}.pill{--pixel-border:#888;--pixel-surface:#ddd}.pill.gray{--pixel-border:#aaa;--pixel-surface:#e5e5e2}.pill.amber{--pixel-border:#777;--pixel-surface:#d4d4d0}
 .switch{appearance:none;width:38px;height:22px;border:0!important;border-radius:0;clip-path:polygon(4px 0,calc(100% - 4px) 0,calc(100% - 4px) 2px,calc(100% - 2px) 2px,calc(100% - 2px) 4px,100% 4px,100% calc(100% - 4px),calc(100% - 2px) calc(100% - 4px),calc(100% - 2px) calc(100% - 2px),calc(100% - 4px) calc(100% - 2px),calc(100% - 4px) 100%,4px 100%,4px calc(100% - 2px),2px calc(100% - 2px),2px calc(100% - 4px),0 calc(100% - 4px),0 4px,2px 4px,2px 2px,4px 2px);background:#ccc;box-shadow:inset 0 0 0 2px #666;outline-offset:3px}.switch:checked{background:#444;box-shadow:inset 0 0 0 2px #222}.switch:after{top:4px;left:4px;width:14px;height:14px;background:#fafaf5;border-radius:0;box-shadow:none;clip-path:polygon(2px 0,12px 0,12px 2px,14px 2px,14px 12px,12px 12px,12px 14px,2px 14px,2px 12px,0 12px,0 2px,2px 2px)}.switch:checked:after{left:20px}.switch:focus-visible{filter:drop-shadow(0 0 2px #444);outline:none}
@@ -96,8 +96,8 @@ button,button:hover,button:active,button:focus,button:focus-visible{box-shadow:n
 .required-metric{white-space:nowrap;font-size:10px}.metric-row .value{white-space:pre-line;overflow-wrap:break-word;line-height:1.55}.metric-row>div:last-child{justify-self:start}
 
 @media(max-width:650px){.required-metric{white-space:normal;line-height:1.5;max-width:85px;text-align:center}}
-.metric-row.object-row{grid-template-columns:minmax(0,1fr) 220px}.metric-objects{display:grid;gap:10px}.metric-object{display:grid;grid-template-columns:110px 110px;align-items:center}.metric-object .value small{margin:0 0 4px;overflow-wrap:anywhere}.metric-object label{justify-self:start}
-@media(max-width:650px){.metric-row.object-row{grid-template-columns:minmax(0,1fr) 150px}.metric-object{grid-template-columns:65px 85px;gap:0}.metric-object .value{overflow-wrap:anywhere}}
+.metric-row.object-row{grid-template-columns:minmax(0,1fr) 220px}.metric-objects{display:grid;gap:10px}.metric-object{display:grid;grid-template-columns:110px 110px;align-items:center}.metric-object .value small{margin:0 0 4px;overflow-wrap:break-word}.metric-object label{justify-self:start}
+@media(max-width:650px){.metric-row.object-row{grid-template-columns:minmax(0,1fr) 150px}.metric-object{grid-template-columns:65px 85px;gap:0}.metric-object .value{overflow-wrap:break-word}}
 
 /* Keep each object, its value, and its switch aligned even in a narrow window. */
 .metric-row.object-row{display:block}.metric-objects{margin-top:10px;gap:10px}.metric-object{grid-template-columns:minmax(0,1fr) 110px 110px}.metric-object-name{padding-left:12px;overflow-wrap:anywhere;color:#666;font-size:11px}
@@ -118,7 +118,7 @@ button,button:hover,button:active,button:focus,button:focus-visible{box-shadow:n
 
 /* Readability and adaptive layout pass. Keeps the monochrome console look but
    raises the type scale and gives every window width a stable rhythm. */
-:root{--metric-cols:minmax(0,1fr) clamp(150px,16vw,240px) 110px;--page-pad:clamp(20px,3.2vw,44px)}
+:root{--metric-cols:minmax(0,1fr) minmax(0,460px) 110px;--page-pad:clamp(20px,3.2vw,44px)}
 .shell{grid-template-columns:clamp(200px,17vw,240px) minmax(0,1fr)}
 .sidebar{padding:28px clamp(14px,1.6vw,20px)}
 .brand strong{font-size:15px}
@@ -156,6 +156,11 @@ button,button:hover,button:active,button:focus,button:focus-visible{box-shadow:n
 .metric-row .value,.metric-object .value{font-size:14px}
 .table-head,.metric-row:not(.object-row),.metric-object{grid-template-columns:var(--metric-cols)}
 .metric-object-name{padding-left:14px;font-size:13px;color:#4b4b4b}
+/* Hardware names break between words, never inside a word. CJK titles keep
+   their word intact so "CPU 信息" cannot split after 信. Uses break-word, not
+   anywhere: WebKit shipped anywhere only in Safari 15.4. */
+.metric-title strong,.metric-object-name,.row strong,.card-title h2,.section-heading h2{word-break:keep-all;overflow-wrap:break-word;min-width:0}
+.metric-row .value,.metric-object .value,.row-right .value{word-break:normal;overflow-wrap:break-word}
 .required-metric{font-size:12px}
 .hint{font-size:12px;color:#5b5b5b}
 .section-note{font-size:13px}
@@ -182,13 +187,31 @@ button,button:hover,button:active,button:focus,button:focus-visible{box-shadow:n
 
 /* Object metric rows share the table columns with their header and sibling
    rows, so CPU cores keep the same rhythm as every other metric. */
-.metric-row.object-row{display:block;padding:16px 0}
-.metric-row.object-row>.metric-title{display:grid;grid-template-columns:var(--metric-cols);column-gap:5px;align-items:center;padding-bottom:8px;border-bottom:1px solid #dcdcd6}
+.metric-row.object-row{display:grid;grid-template-columns:var(--metric-cols);column-gap:5px;padding:16px 0}
+.metric-row.object-row>.metric-title{grid-column:1/-1;display:grid;grid-template-columns:var(--metric-cols);column-gap:5px;align-items:center;padding-bottom:8px;border-bottom:1px solid #dcdcd6}
 .metric-title .row-switch{grid-column:3;justify-self:end;display:flex;align-items:center}
 .metric-objects{display:grid;margin-top:0;gap:0}
 .metric-object{min-height:42px;padding:8px 0;border-bottom:1px dashed #dcdcd6}
 .metric-object:last-child{border-bottom:0}
-.metric-object-empty{display:block}
+
+/* 所有当前值都以像素风小卡片呈现：一个数值一格，组合指标并排成一行。 */
+.value-grid,.core-grid{--value-card-width:144px}
+.value-grid{display:grid;grid-auto-flow:column;grid-auto-columns:var(--value-card-width);gap:8px;max-width:100%;justify-content:end;justify-self:end}
+.value-cell{display:flex;align-items:baseline;justify-content:space-between;gap:10px;min-width:0;padding:11px 14px;--pixel-border:#aaa;--pixel-surface:#fafaf5}
+.value-cell-name{flex:none;white-space:nowrap;color:#5e5e5e;font-size:12px}
+.value-cell-value{flex:1 1 auto;min-width:0;margin-left:auto;font-size:15px;text-align:right;font-variant-numeric:tabular-nums;word-break:normal;overflow-wrap:break-word}
+/* 逐核占用率单独成行，固定 4 列，右边缘与其它数值卡片对齐。 */
+.core-grid{grid-auto-flow:row;grid-template-columns:repeat(4,var(--value-card-width));justify-content:end;padding-top:12px}
+.metric-row.object-row>.core-grid{grid-column:1/-1;justify-self:stretch;padding-right:115px}
+.metric-row.object-row>.metric-objects{grid-column:1/-1;width:100%}
+
+/* 总览的「本机指标」沿用采集页的小卡片，左侧标题占剩余宽度。 */
+.row.overview-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,460px);align-items:center;gap:5px}
+.row.overview-row>.value-grid{justify-self:end;max-width:100%}
+@media(max-width:1180px){
+  .row.overview-row{grid-template-columns:minmax(0,1fr)}
+  .row.overview-row>.value-grid{grid-auto-flow:row;grid-template-columns:repeat(2,var(--value-card-width));justify-content:end;justify-self:end;padding-top:6px}
+}
 
 /* Pixel listbox replaces the native select popup. */
 .pixel-select{min-width:132px}
@@ -210,5 +233,11 @@ button,button:hover,button:active,button:focus,button:focus-visible{box-shadow:n
   .pixel-select{min-width:112px}
   .metric-object-name{padding-left:0}
   .metric-row.object-row>.metric-title,.metric-object{grid-template-columns:var(--metric-cols)}
+  .table-head,.metric-row:not(.object-row),.metric-object{grid-template-columns:minmax(0,1fr) minmax(0,52%) 55px}
+  .value-grid.core-grid{grid-template-columns:repeat(2,var(--value-card-width));justify-content:end;gap:6px}
+  .metric-row.object-row>.core-grid{padding-top:10px;padding-right:60px}
+  .value-grid{grid-auto-flow:row;grid-template-columns:repeat(var(--value-cols,1),minmax(0,1fr));justify-content:stretch;justify-self:stretch;gap:6px}
+  .value-cell{flex-direction:column;align-items:stretch;gap:2px;padding:9px 11px}
+  .value-cell-value{text-align:left}
   .pixel-select-menu{max-width:70vw}
 }

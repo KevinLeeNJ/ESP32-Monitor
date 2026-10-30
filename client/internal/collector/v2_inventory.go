@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -220,10 +221,46 @@ func (m *Manager) v2Capabilities(batch Batch) *V2Capabilities {
 		if display := m.v2.Names[key]; display != "" {
 			name = display
 		}
+		if !readableObjectName(kind, name) {
+			if fallback := m.v2.objectFallbackName(kind, id); fallback != "" {
+				name = fallback
+			}
+		}
 		out.Objects = append(out.Objects, V2Object{ID: id, Kind: kind, Name: name})
 	}
 	sort.Slice(out.Objects, func(a, b int) bool { return out.Objects[a].ID < out.Objects[b].ID })
 	return out
+}
+
+// 键里的局部名（电池 "0"、核心 "cpu0"）不适合展示，需要按对象类型补默认名称。
+func readableObjectName(kind, name string) bool {
+	if name == "" {
+		return false
+	}
+	if kind == "core" {
+		_, err := strconv.Atoi(strings.TrimPrefix(strings.ToLower(name), "cpu"))
+		return err != nil
+	}
+	_, err := strconv.Atoi(name)
+	return err != nil
+}
+
+func (s *v2State) objectFallbackName(kind string, id uint16) string {
+	switch kind {
+	case "core":
+		for _, c := range s.inventory.Cores {
+			if c.ID == id {
+				return fmt.Sprintf("逻辑核 %d", c.Index)
+			}
+		}
+	case "gpu":
+		return "GPU"
+	case "battery":
+		return "系统电池"
+	case "volume":
+		return "卷"
+	}
+	return ""
 }
 
 func (m *Manager) fixedV2Available(key string) bool {
