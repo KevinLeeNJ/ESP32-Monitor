@@ -1,6 +1,0 @@
-linuxdeploy-plugin-gtk.sh is from the Tauri repository at commit
-548a3692f59405aeb239c5b63fa589824eee51e8, under MIT OR Apache-2.0:
-https://github.com/tauri-apps/tauri/blob/548a3692f59405aeb239c5b63fa589824eee51e8/crates/tauri-bundler/src/bundle/linux/appimage/linuxdeploy-plugin-gtk.sh
-
-The build script copies the plugin and disables its broad WebKit /usr rewrite;
-it relocates only WebKit's helper directory separately.

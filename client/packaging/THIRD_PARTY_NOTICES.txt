@@ -77,10 +77,3 @@ Windows-only components
   https://github.com/ffhighwind/HidSharp
 - Microsoft Edge WebView2 Runtime is a prerequisite installed separately and
   is not redistributed with this package.
-
-Linux AppImage runtime libraries (AppImage only)
------------------------------------------------
-The AppImage bundles GTK 4 and WebKitGTK 6.0 from the build host. Both are
-distributed under the GNU Lesser General Public License, version 2.1 or later;
-the full text is in LICENSE-LGPL-2.1.txt inside the AppImage. Sources are
-available at https://www.gtk.org and https://webkitgtk.org.
