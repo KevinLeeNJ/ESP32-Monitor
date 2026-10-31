@@ -1,6 +1,6 @@
 # Client 整体能力表
 
-核对日期：2026-10-29；依据当前工作区源码，包含尚未提交的实现。不把旧文档、历史测试或交叉构建当作当前三平台验收。发布工作见 [V1 计划](V1_RELEASE_PLAN.md)。
+核对日期：2026-10-30；依据当前工作区源码，包含尚未提交的实现。不把旧文档、历史测试或交叉构建当作当前三平台验收。发布工作见 [V1 计划](V1_RELEASE_PLAN.md)。
 
 状态口径：**已实现**表示可定位代码；**部分实现**表示链路/平台/产品入口有缺口；**待实现**表示尚无完整交付。存在测试用例不等于本次已执行，也不等于真实系统、Server 或板端验收。
 
@@ -35,11 +35,11 @@ Wails GUI + Vue 页面
 | --- | --- | --- |
 | 总览 | Agent、采集、上传、连接状态 | 真实故障下显示和修复闭环 |
 | 指标 | 能力、分组选择、对象、5–60秒周期、预览/上传配置 | 各平台真实来源、缺失值和多设备场景 |
-| Server 连接 | 基地址、健康测试、验证码注册、设备身份 | 正式 Server v2 尚缺；健康探针成功不代表可上传 |
+| Server 连接 | 基地址、健康测试、验证码注册、设备身份 | 生产 Server 已实现 v2 注册和采集接口；健康探针成功不代表注册及上传成功 |
 | 上位机 | GitHub Device Flow 登录（内置公开 Client ID）、Codex/音乐状态与设置 | 真实 GitHub 账号授权与贡献墙加载需验收；Codex 任务不等于只打开额度开关 |
 | ESP32 | 发现、配对、设备开关、串口列举/探测/连接 | 真实固件、物理串口、网络切换恢复 |
 | 启动与后台 | 模块开关、关窗后台、登录自启、状态栏图标、退出 | 三平台登录项/托盘的真实系统验收 |
-| 诊断 | 脱敏报告、队列/错误/时间、重启 Agent | 日志包导出、权限和复杂故障恢复 |
+| 诊断 | 脱敏报告、队列/错误/时间、重启 Agent、日志 ZIP 导出 | 原生保存对话框、权限和复杂故障恢复的跨平台验收 |
 
 页面源码集中于 [views](../client/frontend/src/views)，绑定方法集中于 [services.go](../client/internal/guibridge/services.go)。`frontend/preview` 为示例数据原型，不作为真实后端或原生 GUI 的验收证据。
 
@@ -49,15 +49,15 @@ Core 只使用 gopsutil 可提供的能力；Native 补平台专有字段。可�
 
 | 类别 | 当前目标字段 | macOS 实现 | Windows/Linux 实现与边界 |
 | --- | --- | --- | --- |
-| CPU | 型号、物理/逻辑/可辨别P/E核数、总体/逐核占用、1/5/15分钟负载、平均温度 | Core占用/负载；sysctl型号/核数；SMC温度按硬件可用 | Windows Native 已实现型号/核数；负载以 Processor Queue Length + 总体占用按 Unix 60/300/900 秒 EWMA 估算（windows_exporter 本身无 load 指标）；温度经包内 LHM 0.9.4 helper 读取，需 Agent 提权与 .NET Framework 4.7.2+，否则按原因省略；Linux Native 仍为 stub |
-| 内存 | 总量/已用/比例、App/Wired/压缩、Swap总量/已用、压力 | Core内存/Swap；vm_stat细分与可用压力级别 | Windows 仅 Core 内存/Swap；App/Wired/压缩/压力为 macOS 专有，不可用；Linux Native 为 stub |
-| GPU | 占用、平均温度 | IOKit PerformanceStatistics；SMC温度 | Windows Native 已实现 GPU Engine 占用，经 D3DKMT 枚举把 LUID 映射到 WMI 显卡，唯一匹配时按卡归属，多 GPU 可分别归属；温度经 WDDM D3DKMT 驱动性能数据读取，NVIDIA/AMD/Intel 自动适配，需 WDDM 2.4+ 驱动支持；映射歧义时省略；Linux Native 为 stub；无 GPU/计数器禁用不显示 0% |
-| 磁盘 | 型号、物理总量/已用、读写B/s、SMART健康 | diskutil档案/SMART；可可靠归属的APFS容器汇总；Core计数器速率 | Windows Native 已实现物理盘型号/总量/健康、可归属的物理盘已用，以及经包内 LHM helper 提供的温度（需提权与 .NET Framework 4.7.2+）；SMART 全平台只探测健康状态；Core `diskio` 为卷级计数，Windows 物理盘读写速率不可用；Linux Native 为 stub |
-| 网络 | Wi-Fi/有线类型、上传/下载B/s、本地IPv4、公网IPv4 | 物理网卡介质/链路/IP及Core速率；公网IPv4外部查询 | Windows Native 已实现物理网卡介质/在线/IPv4，Core 速率仅映射已确认物理网卡，公网 IP 可在GUI预览或上传时查询；虚拟/隧道/蓝牙网卡不进入 v2 对象；Linux Native 为 stub |
-| 电池 | 电量百分比、充电状态 | 系统电源信息，两项成对 | Windows Native 已实现 `GetSystemPowerStatus`，两项成对；无电池整机不可用；Linux Native 为 stub |
-| 系统 | Uptime、OS类型/名称/版本/构建、硬件产品名 | Core Uptime；Native OS与产品映射 | Windows Native 读注册表 OS 名称/版本/构建与 BIOS 产品名；Linux Native 为 stub |
+| CPU | 型号、物理/逻辑/可辨别P/E核数、总体/逐核占用、1/5/15分钟负载、平均温度 | Core占用/负载；sysctl型号/核数；SMC温度按硬件可用 | Windows Native 已实现型号/核数；负载以 Processor Queue Length + 总体占用按 Unix 60/300/900 秒 EWMA 估算（windows_exporter 本身无 load 指标）；温度经包内 LHM 0.9.4 helper 读取，需 Agent 提权与 .NET Framework 4.7.2+，否则按原因省略；Linux 使用 Core 与 gopsutil 温度传感器（仅识别 package/Tctl/Tdie），温度取决于驱动与权限 |
+| 内存 | 总量/已用/比例、App/Wired/压缩、Swap总量/已用、压力 | Core内存/Swap；vm_stat细分与可用压力级别 | Windows 仅 Core 内存/Swap；App/Wired/压缩/压力为 macOS 专有，不可用；Linux 使用 Core 内存/Swap，其他细分不可用 |
+| GPU | 占用、平均温度 | IOKit PerformanceStatistics；SMC温度 | Windows Native 已实现 GPU Engine 占用，经 D3DKMT 枚举把 LUID 映射到 WMI 显卡，唯一匹配时按卡归属，多 GPU 可分别归属；温度经 WDDM D3DKMT 驱动性能数据读取，NVIDIA/AMD/Intel 自动适配，需 WDDM 2.4+ 驱动支持；映射歧义时省略；Linux 使用 nvtop snapshot 读取 GPU 占用和温度；同型号多卡因缺少稳定身份而省略；无 GPU/计数器禁用不显示 0% |
+| 磁盘 | 型号、总量/已用、读写B/s、SMART健康 | diskutil档案/SMART；可可靠归属的APFS容器汇总；Core计数器速率 | Windows Native 已实现物理盘型号/总量/健康、可归属的物理盘已用，以及经包内 LHM helper 提供的温度（需提权与 .NET Framework 4.7.2+）；SMART 全平台只探测健康状态；Core `diskio` 为卷级计数，Windows 物理盘读写速率不可用；Linux 使用 lsblk 枚举含已挂载文件系统的物理盘并汇总已挂载文件系统的已用量与总容量、UDisks2 读取健康状态 |
+| 网络 | Wi-Fi/有线类型、上传/下载B/s、本地IPv4、公网IPv4 | 物理网卡介质/链路/IP及Core速率；公网IPv4外部查询 | Windows Native 已实现物理网卡介质/在线/IPv4，Core 速率仅映射已确认物理网卡，公网 IP 可在GUI预览或上传时查询；虚拟/隧道/蓝牙网卡不进入 v2 对象；Linux 识别具有设备节点的网卡并读取链路/IP、Core 速率及公网 IP；网卡类型判定仍需更多设备验证 |
+| 电池 | 电量百分比、充电状态 | 系统电源信息，两项成对 | Windows Native 已实现 `GetSystemPowerStatus`，两项成对；无电池整机不可用；Linux 通过 UPower DisplayDevice 读取电量和充电状态 |
+| 系统 | Uptime、OS类型/名称/版本/构建、硬件产品名 | Core Uptime；Native OS与产品映射 | Windows Native 读注册表 OS 名称/版本/构建与 BIOS 产品名；Linux 通过 gopsutil 与 DMI 读取系统及产品信息 |
 
-macOS 温度需要 CGO/SMC，关闭 CGO 时不可用；传感器映射与产品名称映射不保证所有机型。HID 备选温度路径未实现；SMART 全平台只探测健康状态，不读取细项。源码/来源分别见 [native_darwin.go](../client/internal/collector/native_darwin.go)、[darwin_extra.go](../client/internal/collector/darwin_extra.go)、[第三方许可证](../client/docs/third_party/monitor-LICENSE.txt)。
+macOS 温度需要 CGO/SMC，关闭 CGO 时不可用；传感器映射与产品名称映射不保证所有机型。HID 备选温度路径未实现；SMART 全平台只探测健康状态，不读取细项。源码/来源分别见 [native_darwin.go](../client/internal/collector/native_darwin.go)、[darwin_extra.go](../client/internal/collector/darwin_extra.go)、[第三方许可证](../client/third_party/monitor/LICENSE)。
 
 Windows Native 通过 WMI、WDDM、注册表和 `GetSystemPowerStatus` 采集，WMI 查询受 context 限制；不可用/权限不足返回 `unavailable`/`permission_required`，不补 0。2026-10-29 本机实测：Ryzen 7 7700（8/16 核，v2 上传 load1/5/15=1.335/1.291/1.284）、RTX 4070 SUPER（GPU Engine 占用 2%，D3DKMT 温度多次采样 47.5–59.8°C）、2×NVMe 健康与已用量、WLAN/有线网卡、Windows 11 Pro 25H2（26200.9711）、MAXSUN MS-eSport B650ITX；该台式机无电池。提权 Agent 通过包内 LHM 0.9.4 helper 已在本机把 `windows_cpu` 温度标记为可用；同一机器非提权运行 `--collector-scan` 时 `windows_cpu` 按 `lhm_permission_required` 报告。真实 Core/Native 采集已用本地假 Server 跑通 v2 上传：必选 CPU/内存/Uptime 齐全，CPU 负载、GPU 占用/温度、Swap、物理盘已用/健康、网卡状态按可用性出现；未选或不可用项不出现。源码见 [native_windows.go](../client/internal/collector/native_windows.go)、[windows_wmi_windows.go](../client/internal/collector/windows_wmi_windows.go)、[windows_lhm_windows.go](../client/internal/collector/windows_lhm_windows.go)、[windows_gpu_sensors_windows.go](../client/internal/collector/windows_gpu_sensors_windows.go)、[windows_load_windows.go](../client/internal/collector/windows_load_windows.go)、[windows_system_windows.go](../client/internal/collector/windows_system_windows.go)。风扇转速已在所有平台移除，不再采集。
 
@@ -90,15 +90,15 @@ macOS 和 Windows 公网 IPv4 先查询 `https://api.mac-stats.com/ip`，无有�
 | 压缩内存 | macOS Native已实现；Windows/Linux不可用 | `memory.compressed` |
 | Swap总量/已用 | Core已实现，作为动态值成组 | `memory.swap_total`、`memory.swap_used` |
 | 内存压力（macOS） | macOS Native有读取路径，不能保证每台系统可获取；Windows/Linux不可用 | `memory.pressure` |
-| GPU占用率（有GPU时） | macOS IOKit、Windows GPU Engine 已实现；Windows 按 D3DKMT LUID→显卡唯一映射分别归属，歧义时省略；Linux Native未实现 | `gpu.usage` |
+| GPU占用率（有GPU时） | macOS IOKit、Windows GPU Engine 已实现；Windows 按 D3DKMT LUID→显卡唯一映射分别归属，歧义时省略；Linux 使用 nvtop snapshot；Intel 占用率取决于 nvtop 和驱动是否提供 | `gpu.usage` |
 | GPU平均温度 | macOS SMC有实现，依传感器/CGO；Windows 经 WDDM D3DKMT 驱动性能数据读取，NVIDIA/AMD/Intel 按厂商驱动自动适配，需 WDDM 2.4+ 与驱动支持，映射不唯一时省略；上传依赖同GPU占用率 | `gpu.temperature` |
 | GPU风扇转速 | 已移除：所有平台不再读取或上传风扇转速；Client 不产生 `fan.rpm` | 无 |
 | 磁盘型号 | macOS diskutil、Windows `MSFT_PhysicalDisk` 固定信息已实现；按盘选择 | `drive.model` |
-| 磁盘总容量 | 物理盘总量固定档案；macOS/Windows 已实现 | `drive.total` |
-| 磁盘已占用容量 | macOS 可归属APFS容器、Windows 卷符唯一归属单盘的分区已实现；存储空间/动态盘不猜测；不等于挂载点用量；Linux未实现 | `drive.used` |
+| 磁盘总容量 | macOS/Windows 为物理盘总量固定档案；Linux 为同一物理盘上已挂载文件系统的容量之和，与已用口径一致 | `drive.total` |
+| 磁盘已占用容量 | macOS 可归属APFS容器、Windows 卷符唯一归属单盘的分区已实现；存储空间/动态盘不猜测；不等于挂载点用量；Linux 使用 lsblk：仅列出含可归属已挂载文件系统的物理盘，已用量只统计已挂载文件系统 | `drive.used` |
 | 磁盘正写入速度 | Core累计计数器差分为B/s，无有效基线时省略；Windows 卷级计数器无法映射物理盘，不可用 | `drive.write_rate` |
 | 磁盘正读取速度 | 同上，与写速率按组选择；Windows 不可用 | `drive.read_rate` |
-| SMART健康状态 | 所有平台只探测健康状态；macOS diskutil、Windows `MSFT_PhysicalDisk.HealthStatus`/包内 LHM helper 提供可读状态；未勾选上传时仍随 GUI 预览显示；不支持/权限不足不伪造健康，也不提供细项或 `detail` | `drive.smart_health` |
+| SMART健康状态 | 所有平台只探测健康状态；macOS diskutil、Windows `MSFT_PhysicalDisk.HealthStatus`/包内 LHM helper、Linux UDisks2 提供可读状态；未勾选上传时仍随 GUI 预览显示；不支持/权限不足不伪造健康，也不提供细项或 `detail` | `drive.smart_health` |
 | 网络连接类型Wi-Fi/LAN | macOS、Windows 物理网卡介质/在线状态已实现，按网卡列举，不猜唯一主链路 | `interface.medium`、`interface.up` |
 | 网络上传速度 | Core按网卡计数器差分B/s；Windows 仅映射已确认物理网卡；上传依赖同网卡连接组 | `interface.upload_rate` |
 | 网络下载速度 | 同上，与上传速率成组选择 | `interface.download_rate` |
@@ -112,7 +112,7 @@ macOS 和 Windows 公网 IPv4 先查询 `https://api.mac-stats.com/ip`，无有�
 
 不一致的处理：保留“有硬件/可获取才提供”的约束；按当前实现明确逻辑核范围、物理盘/APFS口径及平台缺口；风扇转速已整体移除，不再作为能力项。旧文档的指标愿望不自动变成完成状态，协议中不存在的值不新增为虚假能力。
 
-磁盘已用量独立上传已修复：[enqueueV2Locked](../client/internal/collector/v2_upload.go) 判空时包含Used，只有SMART健康状态/已用量/读写速率均缺失才省略该磁盘。新增 [HTTP回归测试](../client/internal/collector/v2_disk_upload_test.go) 验证仅上传已用量、0字节、精确大整数，以及SMART观测去重后仍保留已用量；重复SMART且没有其他值的空对象仍会被省略。验证范围为Client与本机测试HTTP接收端，正式Server v2与真实平台/硬件验收边界不变。
+磁盘已用量独立上传已修复：[enqueueV2Locked](../client/internal/collector/v2_upload.go) 判空时包含Used，只有SMART健康状态/已用量/读写速率均缺失才省略该磁盘。新增 [HTTP回归测试](../client/internal/collector/v2_disk_upload_test.go) 验证仅上传已用量、0字节、精确大整数，以及SMART观测去重后仍保留已用量；重复SMART且没有其他值的空对象仍会被省略。测试覆盖 Client 与本机测试 HTTP 接收端；真实平台和硬件仍需验收。
 
 指标页「磁盘信息」按磁盘逐行显示 `名称: 已用容量 / 总容量`，取自 Profile inventory 的总量与最新采样的已用量；缺失时显示 `—`。
 
@@ -129,7 +129,7 @@ macOS 和 Windows 公网 IPv4 先查询 `https://api.mac-stats.com/ip`，无有�
 | 上传队列 | 已实现 | 内存FIFO，5分钟/1000轮/256KiB上限；丢最旧计数、退避、鉴权暂停 |
 | 无损离线恢复 | 未实现 | 队列不持久化；退出可能丢样本；重启恢复配置不等于补回旧样本 |
 | v1上传 | 不支持 | 当前 uploader只接受`/v2/collector/samples`，旧Server需升级 |
-| 正式Server端到端 | 待实现/联调 | 模拟器支持注册/Profile/Sample；生产Server尚无v2存储/投影 |
+| 生产 Server 端到端 | 已实现/需部署验收 | 生产 Server 支持 v2 注册、Profile、样本持久化与摘要投影；仓库提供真实 Agent 与 Server 的回环测试，部署和真实平台仍需验收。ESP32 摘要读取链路另有版本缺口，见第 6 节 |
 | 系统时间修复 | 待实现 | Profile 422与样本 422分别报告；样本错误仍无法精确区分时钟原因，无授权同步、UAC及恢复上传闭环 |
 
 字段/编码/重试细节统一由 [Server–Client v2协议](SERVER_CLIENT_PROTOCOL_V2.md) 维护。不能因本地保存成功宣称远端字段立即移除；需等待 Server 确认 Profile。
@@ -139,13 +139,13 @@ macOS 和 Windows 公网 IPv4 先查询 `https://api.mac-stats.com/ip`，无有�
 | 提供者 | 当前实现 | 证据与限制 |
 | --- | --- | --- |
 | GitHub | Device Flow默认浏览器授权、轮询/取消/过期、账号确认、贡献日历、限流/缓存/账号隔离 | [auth](../client/internal/auth/github)、[provider](../client/internal/providers/github)；实际授权和三平台复用需各自验收 |
-| GitHub凭据 | 应用私有文件、原子写入、路径/符号链接校验；Unix0700/0600；Windows使用Credential Manager且禁止枚举 | [credential_file.go](../client/internal/platform/credential_file.go)、[credentials_windows.go](../client/internal/platform/credentials_windows.go)；Windows Save/Load/Delete往返已在本机通过；不恢复Keychain依赖，不打包Client Secret |
+| GitHub凭据 | macOS 使用应用私有文件并校验权限；Windows 使用 Credential Manager；Linux 使用会话 Secret Service（无需 secret-tool） | [credential_file.go](../client/internal/platform/credential_file.go)、[credentials_windows.go](../client/internal/platform/credentials_windows.go)；Windows Save/Load/Delete往返已在本机通过；不恢复Keychain依赖，不打包Client Secret |
 | Codex额度 | 通过本机App Server只读读取账号额度、多bucket/窗口、未知值处理；Windows解析桌面App捆绑CLI | [codex](../client/internal/providers/codex)；不启动推理，不把额度读取成功等同桌面任务可观察 |
 | Codex任务 | GUI启用Codex时同时启用只读任务观察；自动跟踪最近更新的本地用户会话，也可用显式ID覆盖（最多128个）；显示运行、等待、完成及不可用状态 | [taskmonitor](../client/internal/taskmonitor)、[desktop_discovery.go](../client/internal/taskmonitor/adapters/desktopipc/desktop_discovery.go)；内部IPC是实验接入，非稳定分发保证；优先只读状态库选择未归档用户会话，缺少状态库时回退`session_index.jsonl`；不保留名称或内容；macOS/Linux用Unix socket、Windows用`\\.\pipe\codex-ipc`，Windows已实测运行态自动发现；完成态由turn的`durationMs`还原，完成发生在连接前60秒内也会上报`completed`，更早的历史完成按`idle`处理；等待/审批与实时完成转换待验收 |
 | 系统播放 | 统一只读快照、playing/not_playing、元数据/来源/位置；取消和异常降级 | [adapters](../client/internal/nowplaying/adapters)；仅覆盖向系统播放接口暴露的应用 |
 | macOS播放 | MediaRemote + dylib桥接，isPlaying为播放权威状态 | 依私有API/系统版本及桥接库；真实分发兼容仍需验证 |
 | Windows播放 | GSMTC，PowerShell适配器 | 本机适配器健康且无源时 `current` 缺席；真实会话/播放元数据/权限/安装环境待验收 |
-| Linux播放 | MPRIS，Python/DBus适配器，优先播放中的源 | 原生桌面/DBus依赖与来源选择待验收 |
+| Linux播放 | MPRIS，Go D-Bus适配器，优先播放中的源 | 原生桌面/DBus依赖与来源选择待验收 |
 
 暂停时保留可用元数据；无当前源时 current 缺席；provider错误单独显示，不伪装为正常暂停。Codex quota账号、运行中Desktop账号及任务覆盖范围必须核对，不自动推断一致。系统手动代理/环境代理实现见 [proxy](../client/internal/platform/proxy)；PAC/WPAD、企业认证代理及平台特有行为仍有缺口，不能静默绕开直连。
 
@@ -156,7 +156,7 @@ macOS 和 Windows 公网 IPv4 先查询 `https://api.mac-stats.com/ip`，无有�
 | LAN发现、选设备、临时HTTP配对 | 已实现 | 可信LAN确认、双方核对、记录凭据；实机交互未完成 |
 | 内置MQTT与只读快照 | 已实现 | 主题ACL、会话认证、配置事务、快照/心跳/ACK/resync、Protobuf v2 |
 | 串口列举/探测/配对/连接 | 已实现 | EMON帧、CRC/HMAC/HKDF、Config AES-GCM；物理串口仍待验证 |
-| 配置代理 | 已实现 | ESP32配置天气/Devices/时间，Client会话内存代理；不把上游秘密落入普通设置/诊断 |
+| 配置代理 | 部分实现 | ESP32 配置天气/Devices/时间，Client 会话内存代理；不把上游秘密落入普通设置/诊断。Devices 代理仍请求 `/v1/devices/summary`，生产 Server 只提供 v2 摘要，二者尚未接通 |
 | 地址恢复/传输接管 | 部分实现 | 有重新绑定、认证邀请、串口认证优先代码/测试；休眠、DHCP、复杂断线矩阵待验收 |
 | 真固件双页三模式 | 待实现 | 模拟Monitor通过不能证明固件已接入或电源切换有效 |
 
@@ -166,7 +166,7 @@ macOS 和 Windows 公网 IPv4 先查询 `https://api.mac-stats.com/ip`，无有�
 
 GUI 设置保存在 `os.UserConfigDir()/ESP32-Monitor/gui-settings.json`，记录设备身份、Server地址、开关和偏好。上传Token路径是宿主内部配置，不要求用户手填；凭据正文不进入WebView返回值。采集状态目录有所有权锁，默认 `collector/`；Companion凭据在 `credentials/companion/`。
 
-正式 GUI 调用链：WebView → Go受限服务 → IPC → Application；状态/采集/提供者/Monitor方法见 [services.go](../client/internal/guibridge/services.go)，验证码注册在宿主完成。诊断报告只提供健康、错误码、版本、队列、时间和计数，省略贡献日历/任务标题/媒体内容与凭据，见 [report.go](../client/internal/diagnostics/report.go)。当前页面能读取报告，完整导出包尚待实现。
+正式 GUI 调用链：WebView → Go受限服务 → IPC → Application；状态/采集/提供者/Monitor方法见 [services.go](../client/internal/guibridge/services.go)，验证码注册在宿主完成。诊断报告只提供健康、错误码、版本、队列、时间和计数，省略贡献日历/任务标题/媒体内容与凭据，见 [report.go](../client/internal/diagnostics/report.go)。页面可通过保存对话框导出 ZIP，包含 GUI 和 Agent 日志及脱敏诊断快照；Agent 不可达时会在包中记录错误。实现见 [logexport.go](../client/internal/guibridge/logexport.go)，原生对话框和各平台实际导出仍需验收。
 
 独立调试可显式开 `--collector-api 127.0.0.1:0`，要求临时Bearer并拒绝浏览器Origin；提供 capabilities/rescan/status/config 端点。它不是正式 GUI 到 Agent 的通用浏览器通道，不能把描述文件或上传Token交给网页。
 
@@ -188,10 +188,13 @@ macOS 应用构建入口为 `cd client && make build-app-darwin`，生成 `clien
 | --- | --- | --- |
 | Client测试/静态检查 | `go test -race ./...`、`go vet ./...` | 测试覆盖内的行为，不替代原生系统验收 |
 | 前端 | `cd frontend` 后 `npm ci`、`npm test` | 类型、构建与DOM测试，不替代真实WebView操作 |
-| Collector回环 | `make test-collector-e2e` | 当前脚本覆盖的Agent/HTTP/SQLite路径；需检查脚本与v2迁移是否一致 |
+| Collector回环 | `make test-collector-e2e` | 真实 Agent 与内存模拟 Server 的 v2 注册、采集和上传，以及本地采集 API；不验证生产 Server 的 SQLite |
+| 生产 Server 回环 | `cd ../server && make test-v2` | 真实 Client Agent 与生产 Server 的回环注册、Profile、样本和摘要；不替代部署与硬件验收 |
 | Companion | `go test ./internal/transport/...` | 模拟LAN/字节流/编码/认证，无实机功耗结论 |
 | 模拟Server | `go run ./cmd/sim-server -listen 127.0.0.1:18080` | 注册与v2联调，无生产持久化/管理安全保证 |
 
 模拟 Server 接受成对选择的 `battery.level` 和 `battery.charging`，并校验样本中两个字段均存在。模拟器设备、注册与指标保存在内存中，重启后需重新注册。
 
 清理前的旧验收文件保存在 [.bak历史证据](../.bak/docs-cleanup-2026-10-28/client/docs/evidence)；其中 Telegraf 与早期 Core 结果只代表对应版本，不能为当前 Native/v2/GUI 完成背书。本次整理的验证结果由交付说明单独报告。
+
+Linux GPU 使用 [nvtop](https://github.com/Syllo/nvtop) 的 snapshot 输出；占用和温度取决于驱动支持，GPU 名称不能唯一识别时不上传。磁盘用量使用 lsblk：对可唯一归属的直接分区，已用量和总容量都只统计已挂载文件系统（FSUSED 与分区 SIZE）；未挂载分区和 swap 不计入，未挂载任何可归属文件系统的物理盘不显示。跨盘 Btrfs、重复 UUID、复杂设备拓扑不猜测。SMART 只读取 UDisks2 的 NVMe/ATA 健康缓存（仅接受 30 分钟内数据）；缓存不可用时省略。
