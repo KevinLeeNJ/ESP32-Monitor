@@ -30,9 +30,10 @@ const snap = computed(() => { revision.value; return collector.snapshot; });
 const uploadPill = computed(() => {
   if (!store.status?.collector_enabled) return { text: "未启用", cls: "gray" };
   if (!snap.value) return { text: "等待采样", cls: "gray" };
-  if (snap.value.state === "healthy") return { text: snap.value.upload_error ? "上传异常" : "上传正常", cls: snap.value.upload_error ? "amber" : "" };
   if (snap.value.state === "error") return { text: "采集错误", cls: "amber" };
-  return { text: "已停止", cls: "gray" };
+  if (!snap.value.config.upload?.enabled) return { text: "未启用上传", cls: "gray" };
+  if (snap.value.upload_error) return { text: "上传异常", cls: "amber" };
+  return { text: snap.value.state === "healthy" ? "上传正常" : "已停止", cls: snap.value.state === "healthy" ? "" : "gray" };
 });
 
 function sampleAge(): string {
@@ -102,7 +103,7 @@ async function reloadAll() {
         <template v-else>
           <div v-for="entry in overviewRows" :key="entry.key" class="row overview-row">
             <div><strong>{{ entry.title }}</strong></div>
-            <span class="value-grid" :style="{ '--value-cols': cells(entry.row, entry.objectID).length }">
+            <span class="value-grid">
               <span v-for="cell in cells(entry.row, entry.objectID)" :key="cell.key" class="value-cell">
                 <span v-if="cell.label" class="value-cell-name">{{ cell.label }}</span>
                 <span class="value-cell-value">{{ cell.value }}</span>
@@ -121,7 +122,8 @@ async function reloadAll() {
 
       <section class="card span7">
         <div class="card-title"><h2>ESP32 设备</h2><button class="btn" @click="openPage('esp32')">设备详情</button></div>
-        <div v-if="!store.devices.length" class="muted">还没有已配对的设备。</div>
+        <div v-if="store.devicesError" class="section-note">设备状态读取失败，以下为上次结果。</div>
+        <div v-if="!store.devices.length" class="muted">{{ store.devicesError ? "无法读取设备列表。" : "还没有已配对的设备。" }}</div>
         <div v-for="device in store.devices.slice(0, 3)" :key="device.device_id" class="device">
           <div class="device-icon" aria-hidden="true"><i class="pixelart-icons-font-cpu"></i></div>
           <div class="device-info">

@@ -81,7 +81,7 @@ func proxyURL(value string) (*url.URL, error) {
 		return nil, ErrInvalid
 	}
 }
-func bypass(host string, patterns []string) bool {
+func bypass(host, port string, patterns []string) bool {
 	host = strings.ToLower(host)
 	if host == "localhost" {
 		return true
@@ -106,7 +106,10 @@ func bypass(host string, patterns []string) bool {
 			}
 			continue
 		}
-		if h, _, err := net.SplitHostPort(pattern); err == nil {
+		if h, p, err := net.SplitHostPort(pattern); err == nil {
+			if p != port {
+				continue
+			}
 			pattern = h
 		}
 		base := strings.TrimPrefix(strings.TrimPrefix(pattern, "*."), ".")
@@ -124,7 +127,15 @@ func (r Resolver) Proxy(req *http.Request) (*url.URL, error) {
 	if err != nil {
 		return nil, err
 	}
-	if bypass(req.URL.Hostname(), s.Bypass) {
+	port := req.URL.Port()
+	if port == "" {
+		if req.URL.Scheme == "https" {
+			port = "443"
+		} else if req.URL.Scheme == "http" {
+			port = "80"
+		}
+	}
+	if bypass(req.URL.Hostname(), port, s.Bypass) {
 		return nil, nil
 	}
 	value := s.HTTP

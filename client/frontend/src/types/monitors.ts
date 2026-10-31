@@ -5,6 +5,7 @@ export interface DeviceStatus {
   device_id: string;
   device_name: string;
   paired: boolean;
+  enabled: boolean;
   address: string;
   confirmed_online: boolean;
   connection_state: string;

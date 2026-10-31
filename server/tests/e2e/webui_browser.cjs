@@ -31,7 +31,7 @@ const crypto = require('node:crypto');
  assert.equal(await page.locator('#sidebar').isVisible(),false);
  await page.locator('#current-password').fill(bootstrap);await page.locator('#new-password').fill('browser permanent passphrase');await page.locator('#repeat-password').fill('browser permanent passphrase');await page.getByRole('button',{name:'保存新密码'}).click();
  await page.getByRole('heading',{name:'设备注册',exact:true}).waitFor();
- await page.getByRole('button',{name:'Read Token',exact:true}).click();assert.equal(await page.locator('#read-token').inputValue(),'');await page.getByRole('button',{name:'显示 Token'}).click();assert.equal(await page.locator('#read-token').inputValue(),readToken);assert.equal(await page.locator('#read-token').getAttribute('type'),'text');await page.getByRole('button',{name:'隐藏 Token'}).click();assert.equal(await page.locator('#read-token').getAttribute('type'),'password');await page.getByRole('button',{name:'设备注册',exact:true}).click();
+ await page.locator('[data-page=token]').click();assert.equal(await page.locator('#read-token').inputValue(),'');await page.getByRole('button',{name:'显示 Token'}).click();await page.waitForFunction(t=>document.querySelector('#read-token').value===t,readToken);assert.equal(await page.locator('#read-token').getAttribute('type'),'text');await page.getByRole('button',{name:'隐藏 Token'}).click();assert.equal(await page.locator('#read-token').getAttribute('type'),'password');await page.locator('[data-page=devices]').click();
  await page.locator('#device-name').fill('测试工作站');await page.getByRole('button',{name:'添加设备并生成验证码'}).click();await page.locator('.code-value').waitFor();
  const code=await page.locator('.code-value').innerText();
  await page.screenshot({path:path.join(output,'devices.png'),fullPage:true});
@@ -51,6 +51,11 @@ const crypto = require('node:crypto');
  const patch=await page.request.patch(base+'/v2/collector/profile',{headers:{...headers,'If-Match':JSON.stringify('1')},data:[{op:'replace',path:'/inventory/objects/1/name',value:'Ethernet renamed'}]});assert.equal(patch.status(),200);await page.getByRole('heading',{name:'Ethernet renamed',exact:true}).waitFor();
  // An actively edited settings form must survive refresh without losing its value or focus.
  await page.locator('#panel-name').fill('EDITING');await page.waitForTimeout(5500);assert.equal(await page.locator('#panel-name').inputValue(),'EDITING');assert.equal(await page.locator('#panel-name').evaluate(e=>document.activeElement===e),true);
+ await page.locator('.sample-chart').first().waitFor();assert((await page.locator('.sample-chart').first().getAttribute('aria-label')).includes('最新'));assert.equal(await page.locator('.sr-only table').count(),2);
+ // Polling must keep keyboard focus on device selectors and action buttons.
+ const selectorButton=page.locator('#device-selector button').first();await selectorButton.focus();await page.waitForTimeout(5500);assert.equal(await selectorButton.evaluate(e=>document.activeElement===e),true);
+ await page.locator('[data-page=devices]').click();await page.getByRole('heading',{name:'设备注册',exact:true}).waitFor();
+ const metricsButton=page.getByRole('button',{name:'查看指标',exact:true});await metricsButton.focus();await page.waitForTimeout(5500);assert.equal(await metricsButton.evaluate(e=>document.activeElement===e),true);
  await page.reload();await page.getByRole('heading',{name:'设备注册',exact:true}).waitFor();assert.equal(await page.locator('#login-password').count(),0);
  const mobile=await context.newPage();await mobile.setViewportSize({width:390,height:844});assert.equal(await mobile.evaluate(()=>innerWidth),390);await mobile.goto(base);await mobile.getByRole('heading',{name:'设备注册',exact:true}).waitFor();assert(await mobile.locator('#logout-mobile').isVisible());
  assert.equal(await mobile.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);

@@ -7,6 +7,7 @@ import (
 	"esp32-monitor/client/internal/transport/simesp32"
 	"esp32-monitor/client/internal/transport/wire"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -40,6 +41,49 @@ func (f *fixtureDoer) Do(r *http.Request) (*http.Response, error) {
 	}
 	return &http.Response{StatusCode: code, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 }
+// A simulator on loopback is discovered with a 127.0.0.1 source address but
+// must POST its pairing begin through the bound LAN interface.
+func TestLoopbackPairingWithLANBind(t *testing.T) {
+	bind := ""
+	ifaces, _ := net.Interfaces()
+	for _, i := range ifaces {
+		as, _ := i.Addrs()
+		for _, a := range as {
+			n, ok := a.(*net.IPNet)
+			if ok && n.IP.To4() != nil && !n.IP.IsLoopback() {
+				bind = n.IP.String()
+				break
+			}
+		}
+		if bind != "" {
+			break
+		}
+	}
+	if bind == "" {
+		t.Skip("no non-loopback IPv4 address")
+	}
+	m, e := simesp32.New("loopback monitor", "127.0.0.1:0")
+	if e != nil {
+		t.Fatal(e)
+	}
+	m.Start()
+	defer m.Close()
+	b, e := transport.New(transport.Options{StoreDirectory: filepath.Join(t.TempDir(), "vault"), HostName: "lan-host", BindIP: bind, MQTTAddress: net.JoinHostPort(bind, "0"), HTTPAddress: net.JoinHostPort(bind, "0"), DiscoveryTarget: m.Address()})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer b.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if e = b.Discover(ctx, ""); e != nil {
+		t.Fatal(e)
+	}
+	if e = b.BeginPairing(m.DeviceID, true); e != nil {
+		t.Fatal(e)
+	}
+	waitFor(t, 3*time.Second, func() bool { return b.PairingStatus().Code != "" })
+}
+
 func TestLANEndToEndSimulatedESP32(t *testing.T) {
 	m, e := simesp32.New("客厅 Monitor", "127.0.0.1:0")
 	if e != nil {
@@ -120,6 +164,18 @@ func TestLANEndToEndSimulatedESP32(t *testing.T) {
 	d, _ = b.Devices()
 	if d[0].SessionID != active.SessionID || d[0].ConnectionState != "connected" {
 		t.Fatal("impostor evicted active monitor")
+	}
+	if e = b.SetDeviceEnabled(m.DeviceID, false); e != nil {
+		t.Fatal(e)
+	}
+	if d, _ = b.Devices(); len(d) != 1 || d[0].Enabled {
+		t.Fatalf("disabled state not reported: %+v", d)
+	}
+	if e = b.SetDeviceEnabled(m.DeviceID, true); e != nil {
+		t.Fatal(e)
+	}
+	if d, _ = b.Devices(); len(d) != 1 || !d[0].Enabled {
+		t.Fatalf("enabled state not reported: %+v", d)
 	}
 	if e = b.Revoke(m.DeviceID); e != nil {
 		t.Fatal(e)

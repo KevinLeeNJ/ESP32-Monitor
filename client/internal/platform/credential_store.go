@@ -2,9 +2,7 @@ package platform
 
 import (
 	"context"
-	"os/exec"
 	"runtime"
-	"strings"
 )
 
 // GitHubCredentials stores either a legacy PAT or a JSON OAuth token record in
@@ -25,12 +23,8 @@ func (GitHubCredentials) Save(ctx context.Context, account, secret string) error
 	case "windows":
 		return windowsSaveCredential(account, secret)
 	case "linux":
-		cmd := exec.CommandContext(ctx, "secret-tool", "store", "--label=ESP32 Monitor GitHub", "service", "esp32-monitor.github", "account", account)
-		cmd.Stdin = strings.NewReader(secret)
-		if cmd.Run() != nil {
-			return ErrCredentialUnavailable
-		}
-		return nil
+		_, err := linuxGitHubSecret(ctx, "save", account, secret)
+		return err
 	default:
 		return ErrCredentialUnavailable
 	}
@@ -42,10 +36,8 @@ func (GitHubCredentials) Delete(ctx context.Context, account string) error {
 	case "windows":
 		return windowsDeleteCredential(account)
 	case "linux":
-		if exec.CommandContext(ctx, "secret-tool", "clear", "service", "esp32-monitor.github", "account", account).Run() != nil {
-			return ErrCredentialUnavailable
-		}
-		return nil
+		_, err := linuxGitHubSecret(ctx, "delete", account, "")
+		return err
 	default:
 		return ErrCredentialUnavailable
 	}

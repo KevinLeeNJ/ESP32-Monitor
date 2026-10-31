@@ -4,6 +4,17 @@ import "net/http"
 
 func (s *Server) routeGitHub(w http.ResponseWriter, r *http.Request) {
 	switch {
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/github/account":
+		var req githubLogoutRequest
+		if err := decodeBody(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		if err := s.app.SetGitHubLogin(req.Login); err != nil {
+			writeAppError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/github/session":
 		writeJSON(w, http.StatusOK, s.app.GitHubAuth.Status())
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/github/login/start":
@@ -49,6 +60,23 @@ func (s *Server) routeGitHub(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) routeCompanion(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && (r.URL.Path == "/v1/companion/music" || r.URL.Path == "/v1/companion/codex") {
+		var req loginTaskRequest
+		if err := decodeBody(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		if r.URL.Path == "/v1/companion/music" {
+			if err := s.app.SetMusicEnabled(req.Enabled); err != nil {
+				writeAppError(w, err)
+				return
+			}
+		} else {
+			s.app.SetCodexEnabled(req.Enabled)
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusNotFound, "not_found")
 		return

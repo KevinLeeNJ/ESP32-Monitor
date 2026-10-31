@@ -21,3 +21,11 @@ build-nowplaying-macos:
 .PHONY: test-collector-e2e
 test-collector-e2e:
 	python3 tests/e2e/collector_loopback.py --evidence "$${TMPDIR:-/tmp}/esp32-collector-e2e.json"
+
+.PHONY: build-appimage-linux
+build-appimage-linux:
+	./scripts/build-linux-appimage.sh
+
+.PHONY: test-appimage-linux
+test-appimage-linux:
+	python3 tests/test_appimage_layout.py build/linux/ESP32-Monitor-$$(uname -m).AppImage

@@ -139,5 +139,5 @@ func SaveSettings(settings Settings) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	return platform.WriteFileAtomic(filepath.Dir(path), ".gui-settings-*", filepath.Base(path), data, 0o600)
 }

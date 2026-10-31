@@ -200,7 +200,7 @@ onMounted(async () => {
                     @change="toggleRow(row, ($event.target as HTMLInputElement).checked)">
                 </label>
               </div>
-              <div v-if="row.metric === 'core.usage'" class="value-grid core-grid" style="--value-cols:4">
+              <div v-if="row.metric === 'core.usage'" class="value-grid core-grid">
                 <span v-for="id in row.objects" :key="id" class="value-cell" :data-object-row="id">
                   <span class="value-cell-name">{{ objectName(id) }}</span>
                   <span class="value-cell-value">{{ rowValue(row, caps!, collector.snapshot, id) }}</span>
@@ -209,7 +209,7 @@ onMounted(async () => {
               <div v-else class="metric-objects">
                 <div v-for="id in row.objects" :key="id" class="metric-object" :data-object-row="id">
                   <span class="metric-object-name">{{ objectName(id) }}</span>
-                  <span class="value-grid" :style="{ '--value-cols': cells(row, id).length }">
+                  <span class="value-grid">
                     <span v-for="cell in cells(row, id)" :key="cell.key" class="value-cell">
                       <span v-if="cell.label" class="value-cell-name">{{ cell.label }}</span>
                       <span class="value-cell-value">{{ cell.value }}</span>
@@ -226,7 +226,7 @@ onMounted(async () => {
             </div>
             <div v-else class="metric-row" :data-metric-row="row.metric">
               <div class="metric-title"><strong>{{ rowTitle(row) }}</strong></div>
-              <div class="value-grid" :style="{ '--value-cols': cells(row).length }">
+              <div class="value-grid">
                 <span v-for="cell in cells(row)" :key="cell.key" class="value-cell">
                   <span v-if="cell.label" class="value-cell-name">{{ cell.label }}</span>
                   <span class="value-cell-value">{{ cell.value }}</span>

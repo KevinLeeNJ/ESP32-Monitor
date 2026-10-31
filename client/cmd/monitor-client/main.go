@@ -90,6 +90,9 @@ func main() {
 
 func run(loginItem bool) error {
 	logging.L("gui").Info("client_start", "version", guibridge.AppVersion, "os", runtime.GOOS, "arch", runtime.GOARCH, "login_item", loginItem)
+	if err := guibridge.EnsureDesktopIntegration(); err != nil {
+		logging.L("gui").Warn("desktop_integration_failed", "error", err)
+	}
 	settings, err := guibridge.LoadSettings()
 	if err != nil {
 		logging.L("gui").Warn("gui_settings_fallback", "error", err)
@@ -122,6 +125,7 @@ func run(loginItem bool) error {
 			Handler: application.BundledAssetFileServer(guiassets.Assets()),
 		},
 		Mac:      macOptions,
+		Linux:    application.LinuxOptions{ProgramName: "esp32-monitor"},
 		Logger:   logging.Level("wails", slog.LevelWarn),
 		LogLevel: slog.LevelWarn,
 	})

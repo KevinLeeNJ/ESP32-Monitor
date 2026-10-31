@@ -8,6 +8,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $client = Split-Path -Parent $PSScriptRoot
+$repo = Split-Path -Parent $client
 $buildRoot = Join-Path $client "build\windows"
 $package = Join-Path $buildRoot "ESP32-Monitor"
 $helperProject = Join-Path $client "tools\lhm-helper\LhmHelper.csproj"
@@ -111,7 +112,12 @@ try {
   Get-ChildItem $helperDest -Recurse -Include *.pdb | Remove-Item -Force
 
   Copy-Item (Join-Path $client "packaging\windows\README.txt") $package
-  Copy-Item (Join-Path $client "packaging\windows\THIRD_PARTY_NOTICES.txt") $package
+  Copy-Item (Join-Path $repo "LICENSE") (Join-Path $package "LICENSE.txt")
+  Copy-Item (Join-Path $client "packaging\THIRD_PARTY_NOTICES.txt") $package
+  Copy-Item (Join-Path $client "third_party\go-keyring\LICENSE") (Join-Path $package "LICENSE-go-keyring.txt")
+  Copy-Item (Join-Path $client "frontend\public\fonts\LICENSE-fusion-pixel.txt") (Join-Path $package "LICENSE-fusion-pixel.txt")
+  Copy-Item (Join-Path $client "frontend\public\fonts\LICENSE-unscii\unscii.html") (Join-Path $package "LICENSE-unscii.html")
+  Copy-Item (Join-Path $client "frontend\public\icons\LICENSE") (Join-Path $package "LICENSE-pixelarticons.txt")
   Copy-Item (Join-Path $client "assets\icons\app-icon.ico") $package
   Set-Content -Path (Join-Path $package "VERSION.txt") -Encoding ASCII -Value $Version
 

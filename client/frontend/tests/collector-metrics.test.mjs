@@ -123,6 +123,18 @@ test("battery devices render one row each with level and charging cells", () => 
   assert.deepEqual(cells.map(cell => `${cell.label} ${cell.value}`), ["电量 100.00%", "充电状态 未充电"]);
 });
 
+test("public IP is hidden for interfaces without a local IP", () => {
+  const caps = capabilities();
+  caps.metrics.push(metric("interface.ipv4", { objects: [3, 4, 5] }), metric("network.public_ipv4"));
+  const row = displayMetrics(caps).find(item => item.metric === "interface.ipv4");
+  const snapshot = { v2_sample: { ip: { v: "203.0.113.5" }, net: [
+    { i: 3, ip: ["192.168.1.2"] }, { i: 4, ip: [] }, { i: 5 },
+  ] } };
+  assert.deepEqual(rowCells(row, caps, snapshot, 3).map(cell => cell.label), ["本地", "公网"]);
+  assert.deepEqual(rowCells(row, caps, snapshot, 4).map(cell => cell.value), ["无地址"]);
+  assert.ok(!rowCells(row, caps, snapshot, 5).some(cell => cell.label === "公网"));
+});
+
 test("raw key locals fall back to readable object names", () => {
   const caps = capabilities();
   caps.inventory.cores = [{ id: 11, index: 1 }, { id: 12, index: 2 }];

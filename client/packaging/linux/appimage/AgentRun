@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+for key in LD_LIBRARY_PATH XDG_DATA_DIRS GSETTINGS_SCHEMA_DIR GI_TYPELIB_PATH GIO_MODULE_DIR GTK_DATA_PREFIX GTK_THEME GTK_EXE_PREFIX GTK_PATH GDK_PIXBUF_MODULE_FILE WEBKIT_INJECTED_BUNDLE_PATH; do
+  if value=$(printenv "ESP32_APPIMAGE_SAVED_$key"); then
+    export "$key=$value"
+  else
+    unset "$key"
+  fi
+  unset "ESP32_APPIMAGE_SAVED_$key"
+done
+exec "$(dirname -- "$0")/monitor-agent.bin" "$@"

@@ -27,6 +27,8 @@ func resolveExecutable(configured string) string {
 		candidates = codexBundledPaths(home)
 	case "windows":
 		candidates = codexBundledPathsWindows(home)
+	case "linux":
+		candidates = codexBundledPathsLinux(home)
 	}
 	for _, candidate := range candidates {
 		if bundledExecutable(candidate) {
@@ -34,6 +36,15 @@ func resolveExecutable(configured string) string {
 		}
 	}
 	return configured
+}
+
+func codexBundledPathsLinux(home string) []string {
+	return []string{
+		filepath.Join(home, ".local", "bin", "codex"),
+		filepath.Join(home, ".codex", "bin", "codex"),
+		"/usr/lib/chatgpt/resources/codex",
+		"/opt/Codex/resources/codex",
+	}
 }
 
 func bundledExecutable(path string) bool {

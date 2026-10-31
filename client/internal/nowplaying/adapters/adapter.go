@@ -184,6 +184,10 @@ func (a *streamAdapter) run(ctx context.Context) {
 		return
 	}
 	defer a.update(Message{ErrorCode: "music_cancelled"})
+	if a.command == nil {
+		runNative(ctx, a)
+		return
+	}
 	for ctx.Err() == nil {
 		a.readStream(ctx)
 		timer := time.NewTimer(2 * time.Second)

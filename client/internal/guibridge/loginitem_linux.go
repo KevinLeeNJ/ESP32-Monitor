@@ -36,10 +36,15 @@ func setLaunchAtLogin(enabled bool, _ func(bool) error) error {
 	if err != nil {
 		return err
 	}
+	if image := os.Getenv("APPIMAGE"); filepath.IsAbs(image) {
+		if info, err := os.Stat(image); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0 {
+			executable = image
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	escaped := strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "`", "\\`", "$", "\\$").Replace(executable)
+	escaped := strings.NewReplacer("%", "%%", "\\", "\\\\", "\"", "\\\"", "`", "\\`", "$", "\\$").Replace(executable)
 	quoted := `"` + escaped + `"`
 	entry := fmt.Sprintf(`[Desktop Entry]
 Type=Application

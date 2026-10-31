@@ -24,9 +24,9 @@ const github = computed(() => store.companion?.github);
 const codex = computed(() => store.companion?.codex);
 const music = computed(() => store.companion?.music);
 const calendar = computed(() => github.value?.data ?? null);
-const wallLevels = computed(() => {
+const wallDays = computed(() => {
   if (!calendar.value) return [];
-  return calendar.value.days.slice(-371).map(day => Math.max(0, Math.min(4, day.level)));
+  return calendar.value.days.slice(-371).map(day => ({ ...day, level: Math.max(0, Math.min(4, day.level)) }));
 });
 const quotaWindows = computed(() => codex.value?.quota.windows ?? []);
 
@@ -148,7 +148,8 @@ onUnmounted(() => {
             <button class="text-action" @click="logout">退出登录</button>
           </div>
           <div class="contribution-wall" aria-label="GitHub 贡献墙">
-            <i v-for="(level, index) in wallLevels" :key="index" :class="`level-${level}`"></i>
+            <i v-for="day in wallDays" :key="day.date" :class="`level-${day.level}`" role="img"
+              :title="`${day.date} · ${day.count} 次贡献`" :aria-label="`${day.date}：${day.count} 次贡献`"></i>
           </div>
           <div class="wall-legend">较少 <i class="level-0"></i><i class="level-1"></i><i class="level-2"></i><i class="level-3"></i><i class="level-4"></i> 较多
             <span v-if="github?.stale">缓存数据 · 刷新中</span>

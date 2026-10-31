@@ -134,6 +134,36 @@ func applyRegistration(current Settings, base string, registered registrationRes
 	return current
 }
 
+func persistRegistration(current Settings, base string, registered registrationResponse, defaultPath string, save func(Settings) error) (Settings, error) {
+	dir := filepath.Dir(defaultPath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return current, errors.New("token_store_failed")
+	}
+	f, err := os.CreateTemp(dir, "server-token-*")
+	if err != nil {
+		return current, errors.New("token_store_failed")
+	}
+	path := f.Name()
+	if err := f.Close(); err != nil {
+		os.Remove(path)
+		return current, errors.New("token_store_failed")
+	}
+	if err := writePrivateToken(path, registered.Token); err != nil {
+		os.Remove(path)
+		return current, err
+	}
+	next := applyRegistration(current, base, registered, path)
+	if err := save(next); err != nil {
+		os.Remove(path)
+		return current, errors.New("settings_save_failed")
+	}
+	old := current.Collector.UploadTokenFile
+	if filepath.Dir(old) == dir && (old == defaultPath || strings.HasPrefix(filepath.Base(old), "server-token-")) {
+		_ = os.Remove(old)
+	}
+	return next, nil
+}
+
 // RegisterServer exchanges the WebUI verification code for a Server token,
 // stores the token privately and restarts the Agent with the new endpoint.
 func (s *AppService) RegisterServer(ctx context.Context, baseURL, code string) (ServerRegistration, error) {
@@ -153,13 +183,9 @@ func (s *AppService) RegisterServer(ctx context.Context, baseURL, code string) (
 	if err != nil {
 		return ServerRegistration{}, errors.New("token_store_failed")
 	}
-	if err := writePrivateToken(tokenPath, registered.Token); err != nil {
+	next, err := persistRegistration(s.sup.CurrentSettings(), base, registered, tokenPath, SaveSettings)
+	if err != nil {
 		return ServerRegistration{}, err
-	}
-	next := applyRegistration(s.sup.CurrentSettings(), base, registered, tokenPath)
-	if err := SaveSettings(next); err != nil {
-		_ = os.Remove(tokenPath)
-		return ServerRegistration{}, errors.New("settings_save_failed")
 	}
 	if err := s.sup.UpdateSettings(ctx, next); err != nil {
 		return ServerRegistration{DeviceID: registered.DeviceID, DeviceName: registered.Name, ServerURL: base}, errors.New("agent_restart_failed")

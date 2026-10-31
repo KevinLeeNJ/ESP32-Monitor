@@ -65,10 +65,18 @@ func (m *Monitor) report(e error) {
 		}
 	}
 }
+
+// announceContext remembers announced offers per discoverer. The host client
+// probes the subnet broadcast and loopback with one socket, so the same source
+// receives two announces with different response nonces and the offer may
+// reference either; contexts are therefore keyed by source and response nonce.
+type announceContext struct {
+	message wire.Discovery
+	created time.Time
+}
+
 func (m *Monitor) discover() {
-	var contextMsg *wire.Discovery
-	var source string
-	var created time.Time
+	contexts := map[string]announceContext{}
 	buf := make([]byte, 1025)
 	for {
 		n, a, e := m.UDP.ReadFromUDP(buf)
@@ -105,14 +113,19 @@ func (m *Monitor) discover() {
 			}
 			data, _ := wire.Marshal(r)
 			_, _ = m.UDP.WriteToUDP(data, a)
-			contextMsg = &r
-			source = a.String()
-			created = time.Now()
+			for k, v := range contexts {
+				if time.Since(v.created) > 10*time.Second {
+					delete(contexts, k)
+				}
+			}
+			contexts[a.String()+"|"+val(r.ResponseNonce)] = announceContext{message: r, created: time.Now()}
 		case "monitor_connect_offer":
-			if contextMsg == nil || source != a.String() || time.Since(created) > 10*time.Second || d.RequestID != contextMsg.RequestID || d.HostID != contextMsg.HostID || d.Nonce != contextMsg.Nonce || val(d.ResponseNonce) != val(contextMsg.ResponseNonce) || val(d.DeviceID) != m.DeviceID {
+			key := a.String() + "|" + val(d.ResponseNonce)
+			ctxMsg, ok := contexts[key]
+			if !ok || time.Since(ctxMsg.created) > 10*time.Second || d.RequestID != ctxMsg.message.RequestID || d.HostID != ctxMsg.message.HostID || d.Nonce != ctxMsg.message.Nonce || val(d.DeviceID) != m.DeviceID {
 				continue
 			}
-			contextMsg = nil
+			delete(contexts, key)
 			if pair == nil {
 				if d.HostPort == nil || !pairingOpen {
 					continue
