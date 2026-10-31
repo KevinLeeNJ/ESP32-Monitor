@@ -4,7 +4,6 @@ package collector
 
 import (
 	"context"
-	"encoding/json"
 	"net"
 	"os"
 	"os/exec"
@@ -86,37 +85,26 @@ func (d *linuxCollector) collect(ctx context.Context, ids []string) (Batch, map[
 				}
 			}
 		case "linux_disk":
-			usageData, err := linuxCommand(ctx, "lsblk", "--json", "--bytes", "--output", "NAME,TYPE,SIZE,FSTYPE,UUID,FSUSED")
-			if err != nil {
-				reasons[id] = gatherReason(err)
-				continue
-			}
-			mounted := linuxDiskUsage(usageData, "/sys/fs/btrfs")
 			health := linuxUDisksHealth(ctx)
-			if data, err := linuxCommand(ctx, "lsblk", "--json", "--bytes", "--nodeps", "--output", "NAME,TYPE,MODEL"); err == nil {
-				var result struct {
-					Devices []struct {
-						Name  string `json:"name"`
-						Type  string `json:"type"`
-						Model string `json:"model"`
-					} `json:"blockdevices"`
+			usage, arrays := linuxStorage("/proc/self/mountinfo", "/sys/class/block", "/sys/fs/btrfs")
+			for _, disk := range linuxPhysicalDisks("/sys/class/block") {
+				stat, ok := usage[disk.Name]
+				if !ok || stat.Total == 0 {
+					continue
 				}
-				if json.Unmarshal(data, &result) == nil {
-					for _, disk := range result.Devices {
-						if disk.Type != "disk" || disk.Name == "" {
-							continue
-						}
-						usage, ok := mounted[disk.Name]
-						if !ok || usage.Total == 0 {
-							continue
-						}
-						fields := map[string]float64{"total": float64(usage.Total)}
-						if healthy, ok := health[disk.Name]; ok {
-							fields["smart_healthy"] = healthy
-						}
-						add(id, map[string]string{"device": disk.Name, "model": strings.TrimSpace(disk.Model)}, fields, map[string]string{"total": strconv.FormatUint(usage.Total, 10)})
-					}
+				fields := map[string]float64{"total": float64(stat.Total)}
+				if healthy, ok := health[disk.Name]; ok {
+					fields["smart_healthy"] = healthy
 				}
+				add(id, map[string]string{"device": disk.Name, "model": disk.Model}, fields, map[string]string{"total": strconv.FormatUint(stat.Total, 10)})
+			}
+			raidHealth := linuxMDHealth("/sys/block", health)
+			for name, array := range arrays {
+				fields := map[string]float64{"total": float64(array.Total)}
+				if healthy, ok := raidHealth[name]; ok {
+					fields["smart_healthy"] = healthy
+				}
+				add(id, map[string]string{"device": name, "model": name + " " + strings.ToUpper(array.Level)}, fields, map[string]string{"total": strconv.FormatUint(array.Total, 10)})
 			}
 		case "linux_network":
 			if interfaces, err := net.Interfaces(); err == nil {
@@ -156,13 +144,17 @@ func (d *linuxCollector) collect(ctx context.Context, ids []string) (Batch, map[
 				reasons[id] = gatherReason(err)
 			}
 		case "linux_disk_usage":
-			data, err := linuxCommand(ctx, "lsblk", "--json", "--bytes", "--output", "NAME,TYPE,SIZE,FSTYPE,UUID,FSUSED")
-			if err != nil {
-				reasons[id] = gatherReason(err)
-				continue
+			usage, arrays := linuxStorage("/proc/self/mountinfo", "/sys/class/block", "/sys/fs/btrfs")
+			for name, array := range arrays {
+				if array.UsedKnown {
+					usage[name] = linuxDiskStat{Used: array.Used, UsedKnown: true}
+				}
 			}
-			for device, usage := range linuxDiskUsage(data, "/sys/fs/btrfs") {
-				add(id, map[string]string{"device": device}, map[string]float64{"used": float64(usage.Used)}, map[string]string{"used": strconv.FormatUint(usage.Used, 10)})
+			for device, stat := range usage {
+				if !stat.UsedKnown {
+					continue
+				}
+				add(id, map[string]string{"device": device}, map[string]float64{"used": float64(stat.Used)}, map[string]string{"used": strconv.FormatUint(stat.Used, 10)})
 			}
 		case "linux_battery":
 			if data, err := linuxCommand(ctx, "upower", "-i", "/org/freedesktop/UPower/devices/DisplayDevice"); err == nil {

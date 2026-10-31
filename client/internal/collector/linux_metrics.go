@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -60,93 +58,4 @@ func parseLinuxNVTop(data []byte) []Metric {
 		metrics = append(metrics, Metric{Tags: map[string]string{"device": fmt.Sprintf("nvtop-%x", hash[:16]), "model": name}, Fields: fields})
 	}
 	return metrics
-}
-
-type linuxBlockDevice struct {
-	Name     string             `json:"name"`
-	Type     string             `json:"type"`
-	Size     uint64             `json:"size"`
-	FSType   string             `json:"fstype"`
-	UUID     string             `json:"uuid"`
-	Used     *uint64            `json:"fsused"`
-	Children []linuxBlockDevice `json:"children"`
-}
-
-type linuxDiskStat struct {
-	Used  uint64
-	Total uint64
-}
-
-// Sum usage and capacity for mounted filesystems with an unambiguous physical parent.
-func linuxDiskUsage(data []byte, btrfsRoot string) map[string]linuxDiskStat {
-	var result struct {
-		Devices []linuxBlockDevice `json:"blockdevices"`
-	}
-	if json.Unmarshal(data, &result) != nil {
-		return nil
-	}
-	uuids := map[string]int{}
-	var count func(linuxBlockDevice)
-	count = func(d linuxBlockDevice) {
-		if d.UUID != "" {
-			uuids[d.UUID]++
-		}
-		for _, child := range d.Children {
-			count(child)
-		}
-	}
-	for _, d := range result.Devices {
-		count(d)
-	}
-	out := map[string]linuxDiskStat{}
-	for _, disk := range result.Devices {
-		if disk.Type != "disk" || disk.Name == "" || disk.Size == 0 {
-			continue
-		}
-		var used, capacity uint64
-		found, valid := false, true
-		var visit func(linuxBlockDevice)
-		visit = func(d linuxBlockDevice) {
-			if d.Type != "disk" && d.Type != "part" {
-				valid = false
-				return
-			}
-			if len(d.Children) == 0 && d.Used == nil && d.Type == "part" {
-				return
-			}
-			if d.UUID != "" && uuids[d.UUID] != 1 {
-				valid = false
-				return
-			}
-			if d.FSType == "btrfs" {
-				if d.UUID == "" || filepath.Base(d.UUID) != d.UUID {
-					valid = false
-					return
-				}
-				devices, err := os.ReadDir(filepath.Join(btrfsRoot, d.UUID, "devices"))
-				if err != nil || len(devices) != 1 {
-					valid = false
-					return
-				}
-			}
-			if d.FSType != "" && d.FSType != "swap" {
-				if d.Used == nil || d.UUID == "" || uuids[d.UUID] != 1 || *d.Used > d.Size || *d.Used > disk.Size ||
-					used > disk.Size-*d.Used || capacity > disk.Size-d.Size {
-					valid = false
-					return
-				}
-				used += *d.Used
-				capacity += d.Size
-				found = true
-			}
-			for _, child := range d.Children {
-				visit(child)
-			}
-		}
-		visit(disk)
-		if valid && found {
-			out[disk.Name] = linuxDiskStat{Used: used, Total: capacity}
-		}
-	}
-	return out
 }

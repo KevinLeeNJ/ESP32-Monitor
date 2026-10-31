@@ -145,6 +145,19 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 				_, _ = fmt.Fprintln(errOut, "collector_discovery_failed:", err)
 			}
 		}
+		if o.collectorConfig != "" && application.Collector.Snapshot().Revision == 0 {
+			data, err := os.ReadFile(o.collectorConfig)
+			if err != nil {
+				return err
+			}
+			var config collector.Config
+			if err := json.Unmarshal(data, &config); err != nil {
+				return errors.New("invalid_collector_config_file")
+			}
+			if _, err := application.Collector.Apply(ctx, config); err != nil {
+				return err
+			}
+		}
 		if o.collectorAPI != "" {
 			localAPI, err = application.Collector.ListenAPI(o.collectorAPI)
 			if err != nil {
