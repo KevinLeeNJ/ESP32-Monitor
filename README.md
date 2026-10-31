@@ -20,7 +20,80 @@ Historical documents and evidence are preserved byte-for-byte under [.bak/docs-c
 
 ## Linux Client prerequisites
 
-See the [Linux setup instructions](README.zh_CN.md#linux-client-使用准备) for Debian 13 package installation and AppImage usage.
+The Linux AppImage requires host-provided GTK4 and WebKitGTK 6.0. See the
+[Linux setup instructions](client/packaging/linux/README.txt) for dependency
+installation on Fedora, Debian and Ubuntu, and AppImage usage.
+
+## Headless Agent (Linux)
+
+Servers and NAS devices can run only the Agent: in-process collection and v2
+upload, with no GUI, WebView or desktop dependencies. Run it as an ordinary
+user; it must not run as root and needs no sudo, block-device write access or
+SMART refresh privileges.
+
+Build the Agent from source:
+
+```sh
+cd client
+make build        # bin/monitor-agent
+
+# Or cross-compile a static Linux binary elsewhere (adjust GOARCH for the target):
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o monitor-agent ./cmd/monitor-agent
+```
+
+Register the device once:
+
+1. In the Server WebUI, add a device and copy its six-digit code (valid for 10 minutes, single use).
+2. Exchange the code for the device token:
+
+```sh
+curl -sS -X POST https://server.example/v2/collector/register \
+  -H 'Content-Type: application/json' -d '{"code":"123456"}'
+```
+
+3. Save the returned `token` to a private file; the Agent re-reads and validates it for every upload:
+
+```sh
+mkdir -p ~/.config/esp32-monitor
+umask 077
+printf '%s\n' '<token>' > ~/.config/esp32-monitor/collector-token
+```
+
+Create a configuration file (`upload.optional` starts empty; the required CPU,
+memory and uptime values are always uploaded):
+
+```json
+{"interval_seconds": 10, "selections": [], "upload": {"enabled": true, "interval_seconds": 10, "optional": []}}
+```
+
+For optional metrics, list object IDs in `upload.optional`, for example
+`{"metric":"drive.read_rate","objects":[5]}`. Print available metrics and
+object IDs with:
+
+```sh
+monitor-agent --collector --collector-state-dir ~/.local/state/esp32-monitor/collector --collector-scan
+```
+
+IDs are specific to the machine and must not be copied from another host.
+
+Run the Agent:
+
+```sh
+monitor-agent --collector \
+  --collector-state-dir ~/.local/state/esp32-monitor/collector \
+  --collector-upload-url https://server.example/v2/collector/samples \
+  --collector-upload-token-file ~/.config/esp32-monitor/collector-token \
+  --collector-config ~/.config/esp32-monitor/collector.json
+```
+
+The Agent creates and requires a private `0700` state directory; the token file
+must be `0600`. `--collector-config` is applied only on first start, while no
+persisted configuration exists. Optional packages add metrics but are not
+required: `udisks2` (cached SMART health), `nvtop` with `--snapshot` (GPU) and
+`upower` (battery). Disk collection reads `/sys`, `/proc`, `statfs` and cached
+UDisks2 properties only, so it does not wake sleeping disks. See
+[Client capabilities](docs/CLIENT_CAPABILITIES.md) for the complete metric,
+RAID and Linux limits.
 
 ## License
 

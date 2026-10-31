@@ -52,7 +52,7 @@ Core 只使用 gopsutil 可提供的能力；Native 补平台专有字段。可�
 | CPU | 型号、物理/逻辑/可辨别P/E核数、总体/逐核占用、1/5/15分钟负载、平均温度 | Core占用/负载；sysctl型号/核数；SMC温度按硬件可用 | Windows Native 已实现型号/核数；负载以 Processor Queue Length + 总体占用按 Unix 60/300/900 秒 EWMA 估算（windows_exporter 本身无 load 指标）；温度经包内 LHM 0.9.4 helper 读取，需 Agent 提权与 .NET Framework 4.7.2+，否则按原因省略；Linux 使用 Core 与 gopsutil 温度传感器（仅识别 package/Tctl/Tdie），温度取决于驱动与权限 |
 | 内存 | 总量/已用/比例、App/Wired/压缩、Swap总量/已用、压力 | Core内存/Swap；vm_stat细分与可用压力级别 | Windows 仅 Core 内存/Swap；App/Wired/压缩/压力为 macOS 专有，不可用；Linux 使用 Core 内存/Swap，其他细分不可用 |
 | GPU | 占用、平均温度 | IOKit PerformanceStatistics；SMC温度 | Windows Native 已实现 GPU Engine 占用，经 D3DKMT 枚举把 LUID 映射到 WMI 显卡，唯一匹配时按卡归属，多 GPU 可分别归属；温度经 WDDM D3DKMT 驱动性能数据读取，NVIDIA/AMD/Intel 自动适配，需 WDDM 2.4+ 驱动支持；映射歧义时省略；Linux 使用 nvtop snapshot 读取 GPU 占用和温度；同型号多卡因缺少稳定身份而省略；无 GPU/计数器禁用不显示 0% |
-| 磁盘 | 型号、总量/已用、读写B/s、SMART健康 | diskutil档案/SMART；可可靠归属的APFS容器汇总；Core计数器速率 | Windows Native 已实现物理盘型号/总量/健康、可归属的物理盘已用，以及经包内 LHM helper 提供的温度（需提权与 .NET Framework 4.7.2+）；SMART 全平台只探测健康状态；Core `diskio` 为卷级计数，Windows 物理盘读写速率不可用；Linux 使用 lsblk 枚举含已挂载文件系统的物理盘并汇总已挂载文件系统的已用量与总容量、UDisks2 读取健康状态 |
+| 磁盘 | 型号、总量/已用、读写B/s、SMART健康 | diskutil档案/SMART；可可靠归属的APFS容器汇总；Core计数器速率 | Windows Native 已实现物理盘型号/总量/健康、可归属的物理盘已用，以及经包内 LHM helper 提供的温度（需提权与 .NET Framework 4.7.2+）；SMART 全平台只探测健康状态；Core `diskio` 为卷级计数，Windows 物理盘读写速率不可用；Linux 通过 sysfs 枚举物理盘与 md RAID 阵列，物理盘容量/用量按已挂载文件系统与 RAID 成员分区归属，RAID 用量按成员容量比例分摊到成员盘，UDisks2 提供缓存健康状态；RAID 卷健康为阵列状态与各成员状态的组合 |
 | 网络 | Wi-Fi/有线类型、上传/下载B/s、本地IPv4、公网IPv4 | 物理网卡介质/链路/IP及Core速率；公网IPv4外部查询 | Windows Native 已实现物理网卡介质/在线/IPv4，Core 速率仅映射已确认物理网卡，公网 IP 可在GUI预览或上传时查询；虚拟/隧道/蓝牙网卡不进入 v2 对象；Linux 识别具有设备节点的网卡并读取链路/IP、Core 速率及公网 IP；网卡类型判定仍需更多设备验证 |
 | 电池 | 电量百分比、充电状态 | 系统电源信息，两项成对 | Windows Native 已实现 `GetSystemPowerStatus`，两项成对；无电池整机不可用；Linux 通过 UPower DisplayDevice 读取电量和充电状态 |
 | 系统 | Uptime、OS类型/名称/版本/构建、硬件产品名 | Core Uptime；Native OS与产品映射 | Windows Native 读注册表 OS 名称/版本/构建与 BIOS 产品名；Linux 通过 gopsutil 与 DMI 读取系统及产品信息 |
@@ -94,11 +94,11 @@ macOS 和 Windows 公网 IPv4 先查询 `https://api.mac-stats.com/ip`，无有�
 | GPU平均温度 | macOS SMC有实现，依传感器/CGO；Windows 经 WDDM D3DKMT 驱动性能数据读取，NVIDIA/AMD/Intel 按厂商驱动自动适配，需 WDDM 2.4+ 与驱动支持，映射不唯一时省略；上传依赖同GPU占用率 | `gpu.temperature` |
 | GPU风扇转速 | 已移除：所有平台不再读取或上传风扇转速；Client 不产生 `fan.rpm` | 无 |
 | 磁盘型号 | macOS diskutil、Windows `MSFT_PhysicalDisk` 固定信息已实现；按盘选择 | `drive.model` |
-| 磁盘总容量 | macOS/Windows 为物理盘总量固定档案；Linux 为同一物理盘上已挂载文件系统的容量之和，与已用口径一致 | `drive.total` |
-| 磁盘已占用容量 | macOS 可归属APFS容器、Windows 卷符唯一归属单盘的分区已实现；存储空间/动态盘不猜测；不等于挂载点用量；Linux 使用 lsblk：仅列出含可归属已挂载文件系统的物理盘，已用量只统计已挂载文件系统 | `drive.used` |
+| 磁盘总容量 | macOS/Windows 为物理盘总量固定档案；Linux 物理盘为已挂载分区/整盘与 RAID 成员分区的容量之和，md RAID 卷为阵列容量固定档案 | `drive.total` |
+| 磁盘已占用容量 | macOS 可归属APFS容器、Windows 卷符唯一归属单盘的分区已实现；存储空间/动态盘不猜测；不等于挂载点用量；Linux 物理盘为直接挂载文件系统用量与所属 RAID 卷按成员容量比例分摊的用量之和；RAID 卷汇总其下经 md/LVM/加密层的已挂载文件系统；未挂载部分不虚构用量 | `drive.used` |
 | 磁盘正写入速度 | Core累计计数器差分为B/s，无有效基线时省略；Windows 卷级计数器无法映射物理盘，不可用 | `drive.write_rate` |
 | 磁盘正读取速度 | 同上，与写速率按组选择；Windows 不可用 | `drive.read_rate` |
-| SMART健康状态 | 所有平台只探测健康状态；macOS diskutil、Windows `MSFT_PhysicalDisk.HealthStatus`/包内 LHM helper、Linux UDisks2 提供可读状态；未勾选上传时仍随 GUI 预览显示；不支持/权限不足不伪造健康，也不提供细项或 `detail` | `drive.smart_health` |
+| SMART健康状态 | 所有平台只探测健康状态；macOS diskutil、Windows `MSFT_PhysicalDisk.HealthStatus`/包内 LHM helper、Linux UDisks2 缓存提供可读状态；Linux md RAID 卷的健康为阵列状态（array_state clean/active 且未降级）、全部成员 in_sync、已观测的错误/坏块计数为零、可观测时 SMART 健康的组合；未勾选上传时仍随 GUI 预览显示；不支持/权限不足不伪造健康，也不提供细项或 `detail` | `drive.smart_health` |
 | 网络连接类型Wi-Fi/LAN | macOS、Windows 物理网卡介质/在线状态已实现，按网卡列举，不猜唯一主链路 | `interface.medium`、`interface.up` |
 | 网络上传速度 | Core按网卡计数器差分B/s；Windows 仅映射已确认物理网卡；上传依赖同网卡连接组 | `interface.upload_rate` |
 | 网络下载速度 | 同上，与上传速率成组选择 | `interface.download_rate` |
@@ -197,4 +197,32 @@ macOS 应用构建入口为 `cd client && make build-app-darwin`，生成 `clien
 
 清理前的旧验收文件保存在 [.bak历史证据](../.bak/docs-cleanup-2026-10-28/client/docs/evidence)；其中 Telegraf 与早期 Core 结果只代表对应版本，不能为当前 Native/v2/GUI 完成背书。本次整理的验证结果由交付说明单独报告。
 
-Linux GPU 使用 [nvtop](https://github.com/Syllo/nvtop) 的 snapshot 输出；占用和温度取决于驱动支持，GPU 名称不能唯一识别时不上传。磁盘用量使用 lsblk：对可唯一归属的直接分区，已用量和总容量都只统计已挂载文件系统（FSUSED 与分区 SIZE）；未挂载分区和 swap 不计入，未挂载任何可归属文件系统的物理盘不显示。跨盘 Btrfs、重复 UUID、复杂设备拓扑不猜测。SMART 只读取 UDisks2 的 NVMe/ATA 健康缓存（仅接受 30 分钟内数据）；缓存不可用时省略。
+Linux GPU 使用 [nvtop](https://github.com/Syllo/nvtop) 的 snapshot 输出；占用和温度取决于驱动支持，GPU 名称不能唯一识别时不上传。磁盘与 RAID 完全通过 `/sys/class/block`、`/proc/self/mountinfo`、`statfs(2)`、`/proc/diskstats` 和 UDisks2 缓存属性读取：不调用 lsblk/smartctl，不触发 SMART 刷新，不打开块设备或原始设备，因此不会唤醒休眠磁盘。物理盘总容量为已挂载分区/整盘与 RAID 成员分区的 sysfs 容量之和，未挂载且不属于阵列的分区不计入，没有任何可归属容量的物理盘不列出；已用量为直接挂载文件系统的 `statfs` 已用量与所属 RAID 卷按成员成分容量比例分摊的用量之和，未挂载部分不报 0、不虚构。RAID 卷经 md 设备下的 LVM/加密链汇总已挂载文件系统，未挂载时只报容量、不报用量；成员盘也只在阵列用量已知时报告分摊用量。跨盘 Btrfs、重复 UUID、无法唯一归属的拓扑不猜测；多设备 Btrfs 的用量不归属到单个盘或阵列；未经 md 的 LVM/加密卷不归属物理盘。成员错误/坏块计数文件存在但为空时按“未跟踪”处理，不判失败；SMART 只读取 UDisks2 已缓存的 NVMe/ATA 健康（仅接受 30 分钟内数据），不可用时健康判断只依据 RAID 状态与成员状态，不把缺失当作健康或不健康。
+
+容量归属示例：
+
+- 普通单盘桌面：1TB 盘只挂载约 63GB 根分区和 EFI 时，只报这两个分区的容量/用量（约 64GB 总量），未挂载的约 930GB 分区和 swap 不计入。
+- sda 240GB：总容量为 sda1、sda2、sda3 三个分区容量之和（约 240GB）；已用量为 EFI、根分区的 `statfs` 已用加上 md0 按成员容量分摊的用量，合计约 67.2GB。
+- sdb 2TB：只有 md2 成员分区，总容量约 1.99TB；md2 未挂载，用量未知，物理盘和阵列都只报容量、不报 0。
+- md127（sdc/sdd/sde 各 4TB，RAID5）：阵列总容量取 md 设备容量（约 8TB，不是成员之和 12TB），已用量 750.5GB 只计一次；每块成员盘总容量 4TB，已用量按 `750.5GB × 4TB / 8TB` 分摊约 375.3GB，因此校验开销也计入成员盘。
+- 同一设备被多次挂载（含指向同一设备的 btrfs 子卷）只计一次；多设备 Btrfs 不归属单盘或阵列。
+- 已用量大于设备或阵列容量时省略该用量，不输出不可能值。
+
+### Linux 无头部署
+
+NAS 等无桌面环境只运行 Agent，不安装 Wails GUI。Agent 必须用普通用户运行，禁止 `sudo`/root：它不需要也不应获得写块设备或刷新 SMART 的权限。
+
+- 依赖均为可选，由管理员按需安装：`udisks2`（物理盘 SMART 缓存）、`nvtop`（GPU）、`upower`（电池）。未安装时对应指标省略，不影响上传。Go 静态二进制本身不依赖系统库。
+- 上传 Token 文件权限建议 `0600`，状态目录 `0700`，放在运行用户自己的目录下。
+- 示例（路径按实际部署调整）：
+
+```sh
+monitor-agent --collector \
+  --collector-state-dir ~/.local/state/esp32-monitor/collector \
+  --collector-upload-url https://server.example/v2/collector/samples \
+  --collector-upload-token-file ~/.config/esp32-monitor/collector-token \
+  --collector-config ~/.config/esp32-monitor/collector.json
+```
+
+- `--collector-config` 只在尚无持久化配置（revision 为 0）时首次应用，之后以 GUI/本地 API 应用的配置为准；无 GUI 时用它完成首次配置。
+- 磁盘休眠：采集路径只读 sysfs/proc、对已挂载文件系统执行 `statfs`，并读取 UDisks2 已缓存属性；不执行 `smartctl`、不发起 SMART 刷新、不读取块设备内容，因此不会因监控唤醒休眠磁盘。内核/UDisks2 自身策略性轮询除外。
