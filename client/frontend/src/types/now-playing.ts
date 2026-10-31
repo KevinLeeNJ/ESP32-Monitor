@@ -16,7 +16,7 @@ export interface NowPlayingCurrent {
 }
 export interface NowPlayingSnapshot {
   adapter: string;
-  coverage: 'system_current_source' | 'playing_first_lexical_bus_name' | 'none';
+  coverage: 'system_current_source' | 'playing_first_complete_metadata' | 'none';
   health: {
     state: 'disabled' | 'starting' | 'healthy' | 'degraded' | 'permission_denied' | 'unsupported';
     observed_at: string;

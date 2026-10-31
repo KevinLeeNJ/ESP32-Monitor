@@ -1,0 +1,86 @@
+ESP32 Monitor — Third-Party Notices
+===================================
+
+ESP32 Monitor itself is distributed under the MIT License; the full text is in
+LICENSE.txt, which accompanies this file.
+
+This package includes the third-party components and assets below. License
+texts for bundled assets are included next to this file.
+
+Go dependencies
+---------------
+1. Wails v3 (MIT)
+   https://github.com/wailsapp/wails
+   Copyright (c) 2018-Present Lea Anthony
+
+2. gopsutil v4 (BSD-3-Clause)
+   https://github.com/shirou/gopsutil
+   Copyright (c) 2014, WAKAYAMA Shirou
+
+3. go-keyring (MIT)
+   https://github.com/zalando/go-keyring
+   Copyright (c) 2016 Zalando SE
+   License text: LICENSE-go-keyring.txt
+
+4. mochi-mqtt server v2 (MIT)
+   https://github.com/mochi-mqtt/server
+
+5. go.bug.st/serial (BSD-3-Clause)
+   https://github.com/bugst/go-serial
+
+6. Google Protobuf for Go (BSD-3-Clause)
+   https://github.com/protocolbuffers/protobuf-go
+
+7. godbus v5 (BSD-2-Clause)
+   https://github.com/godbus/dbus
+
+8. modernc.org/sqlite and modernc.org/libc (BSD-3-Clause)
+   https://gitlab.com/cznic/sqlite
+   https://gitlab.com/cznic/libc
+
+9. Microsoft go-winio (MIT), Windows builds only
+   https://github.com/microsoft/go-winio
+
+10. yusufpapurcu/wmi (MIT), Windows builds only
+    https://github.com/yusufpapurcu/wmi
+
+Adapted source code
+-------------------
+The Client contains code adapted from the MIT-licensed projects below. Their
+license texts are kept in client/third_party/ in the source repository.
+
+- fastfetch, https://github.com/fastfetch-cli/fastfetch
+- stats, https://github.com/exelban/stats (SMC sensor access)
+- monitor, https://github.com/JustinTervala/monitor (desktop IPC)
+- windows_exporter, https://github.com/prometheus-community/windows_exporter
+  (Windows GPU sensors; adapted files also carry Apache-2.0 headers)
+
+Bundled assets
+--------------
+- pixelarticons (MIT), Copyright (c) 2019 Gerrit Halfmann
+  https://github.com/halfmage/pixelarticons
+  License text: LICENSE-pixelarticons.txt
+- Fusion Pixel Font (SIL Open Font License 1.1), Copyright (c) 2022 TakWolf
+  https://github.com/TakWolf/fusion-pixel-font
+  License text: LICENSE-fusion-pixel.txt
+- Unscii 8 (Public Domain), by Viznut
+  http://viznut.fi/unscii/
+  License terms: LICENSE-unscii.html
+
+Windows-only components
+-----------------------
+- LibreHardwareMonitorLib 0.9.4 (MPL-2.0)
+  https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
+  Used by helpers/lhm-helper for read-only CPU/GPU/storage sensors. Source for
+  the MPL-2.0 component is available at the URL above.
+- HidSharp 2.1.0 (Apache-2.0)
+  https://github.com/ffhighwind/HidSharp
+- Microsoft Edge WebView2 Runtime is a prerequisite installed separately and
+  is not redistributed with this package.
+
+Linux AppImage runtime libraries (AppImage only)
+-----------------------------------------------
+The AppImage bundles GTK 4 and WebKitGTK 6.0 from the build host. Both are
+distributed under the GNU Lesser General Public License, version 2.1 or later;
+the full text is in LICENSE-LGPL-2.1.txt inside the AppImage. Sources are
+available at https://www.gtk.org and https://webkitgtk.org.

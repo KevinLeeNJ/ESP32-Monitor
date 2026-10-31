@@ -10,6 +10,8 @@ monitor-client.exe        图形界面（GUI），启动后由它在后台托管
 monitor-agent.exe         采集/上传/ESP32 连接进程，GUI 会以管理员权限启动它
 helpers\lhm-helper\       LibreHardwareMonitor .NET Framework 4.7.2 硬件传感器助手
 app-icon.ico              应用图标
+LICENSE.txt               项目 MIT 许可证
+LICENSE-*.txt/html         第三方组件与内置素材许可证全文
 THIRD_PARTY_NOTICES.txt   第三方组件与许可证说明
 
 系统要求

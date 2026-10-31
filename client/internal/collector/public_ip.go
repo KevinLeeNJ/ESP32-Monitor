@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -26,15 +25,8 @@ func publicIPv4(ctx context.Context) (string, error) {
 	dialer := &net.Dialer{Timeout: 3 * time.Second}
 	resolver := proxy.Default()
 	transport := &http.Transport{
-		// Respect the user's system proxy (the same one the GUI providers use);
-		// a detection failure falls back to a direct connection.
-		Proxy: func(req *http.Request) (*url.URL, error) {
-			u, err := resolver.Proxy(req)
-			if err != nil {
-				return nil, nil
-			}
-			return u, nil
-		},
+		// Proxy detection errors must not silently send requests directly.
+		Proxy: resolver.Proxy,
 		DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
 			return dialer.DialContext(ctx, "tcp4", address)
 		},

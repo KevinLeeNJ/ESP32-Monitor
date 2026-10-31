@@ -450,11 +450,39 @@ func (s *Supervisor) SetLoginTask(ctx context.Context, enabled bool) error {
 // settings that decide its flags changed. UI-only preferences keep it alive.
 func (s *Supervisor) UpdateSettings(ctx context.Context, settings Settings) error {
 	s.mu.Lock()
-	restart := !slices.Equal(s.agentArgsFor(s.settings), s.agentArgsFor(settings))
+	previous := s.settings
+	restart := !slices.Equal(s.agentArgsFor(previous), s.agentArgsFor(settings))
 	s.settings = settings
 	s.mu.Unlock()
 	if !restart {
 		return nil
+	}
+	githubOnly := previous
+	githubOnly.GitHub.Login = settings.GitHub.Login
+	musicOnly := previous
+	musicOnly.Music.Enabled = settings.Music.Enabled
+	codexOnly := previous
+	codexOnly.Codex.Enabled = settings.Codex.Enabled
+	if slices.Equal(s.agentArgsFor(githubOnly), s.agentArgsFor(settings)) || slices.Equal(s.agentArgsFor(musicOnly), s.agentArgsFor(settings)) || slices.Equal(s.agentArgsFor(codexOnly), s.agentArgsFor(settings)) {
+		if err := s.awaitRestart(ctx); err != nil {
+			return err
+		}
+		err := s.Call(func(client *ipc.Client) error {
+			if previous.GitHub.Login != settings.GitHub.Login {
+				return client.SetGitHubLogin(ctx, settings.GitHub.Login)
+			}
+			if previous.Codex.Enabled != settings.Codex.Enabled {
+				return client.SetCodexEnabled(ctx, settings.Codex.Enabled)
+			}
+			return client.SetMusicEnabled(ctx, settings.Music.Enabled)
+		})
+		if err == nil {
+			return nil
+		}
+		var apiErr *ipc.APIError
+		if !errors.As(err, &apiErr) || apiErr.Status != 404 {
+			return err
+		}
 	}
 	return s.Restart(ctx)
 }

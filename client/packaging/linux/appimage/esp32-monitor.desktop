@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=ESP32 Monitor
+Comment=Desktop client for ESP32 Monitor
+Exec=monitor-client
+Icon=esp32-monitor
+Terminal=false
+Categories=System;Monitor;
+StartupWMClass=esp32-monitor

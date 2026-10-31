@@ -171,6 +171,19 @@ func (c *Client) NowPlaying(ctx context.Context) (nowplaying.Snapshot, error) {
 	return snapshot, err
 }
 
+// SetGitHubLogin switches the contribution provider without restarting the Agent.
+func (c *Client) SetGitHubLogin(ctx context.Context, login string) error {
+	return c.post(ctx, "/v1/github/account", githubLogoutRequest{Login: login}, nil)
+}
+
+func (c *Client) SetMusicEnabled(ctx context.Context, enabled bool) error {
+	return c.post(ctx, "/v1/companion/music", loginTaskRequest{Enabled: enabled}, nil)
+}
+
+func (c *Client) SetCodexEnabled(ctx context.Context, enabled bool) error {
+	return c.post(ctx, "/v1/companion/codex", loginTaskRequest{Enabled: enabled}, nil)
+}
+
 // GitHubSession returns the current login session state.
 func (c *Client) GitHubSession(ctx context.Context) (githubauth.Session, error) {
 	var session githubauth.Session

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from "vue";
+import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { monitorService } from "../services/bridge.js";
 import type { DiscoveryResult, DiscoveredDevice, PairingStatus } from "../types/monitors.js";
-import { cloneSettings, saveSettings, store, toast } from "../store.js";
+import { cloneSettings, refreshDevices, saveSettings, store, toast } from "../store.js";
 import { connectionLabel, connectionTypeLabel } from "../services/device-labels.js";
 import { fmtClockTime } from "../services/format.js";
 
@@ -11,6 +11,8 @@ const discovery = ref<DiscoveryResult | null>(null);
 const localPairing = ref<PairingStatus | null>(null);
 const pairTarget = ref<DiscoveredDevice | null>(null);
 const riskConfirmed = ref(false);
+const riskDialog = ref<HTMLDialogElement | null>(null);
+const pairingDialog = ref<HTMLDialogElement | null>(null);
 
 const paired = computed(() => store.devices.filter(device => device.paired));
 const companionOn = computed(() => Boolean(store.status?.companion_enabled));
@@ -90,9 +92,14 @@ async function beginPairing() {
 }
 
 async function confirmPairing(approve: boolean) {
-  if (!localPairing.value?.pairing_id) return;
+  const pairing = localPairing.value;
+  if (!pairing) return;
+  if (!pairing.pairing_id) {
+    if (!approve) cancelWaiting();
+    return;
+  }
   try {
-    const status = await monitorService.confirmPairing(localPairing.value.pairing_id, approve);
+    const status = await monitorService.confirmPairing(pairing.pairing_id, approve);
     stopPairingPoll();
     localPairing.value = status.state === "pending" ? status : null;
     toast(approve ? "已确认配对" : "已拒绝配对");
@@ -101,9 +108,22 @@ async function confirmPairing(approve: boolean) {
   }
 }
 
+// shortcut: closes the local wait UI only; the Agent pairing window expires after 120s.
+function cancelWaiting() {
+  stopPairingPoll();
+  localPairing.value = null;
+  toast("已取消等待配对");
+}
+
+function cancelPendingPairing() {
+  if (localPairing.value?.pairing_id) void confirmPairing(false);
+  else cancelWaiting();
+}
+
 async function revoke(deviceID: string) {
   try {
     await monitorService.revoke(deviceID);
+    await refreshDevices();
     toast("已解除配对");
   } catch (error) {
     toast(`解除失败：${String(error)}`);
@@ -113,11 +133,28 @@ async function revoke(deviceID: string) {
 async function toggleDevice(deviceID: string, enabled: boolean) {
   try {
     await monitorService.setEnabled(deviceID, enabled);
+    await refreshDevices();
     toast(enabled ? "设备已启用" : "设备已停用");
   } catch (error) {
     toast(`操作失败：${String(error)}`);
   }
 }
+
+// Native dialogs provide focus trapping and restoration; the watcher keeps
+// them open only while their corresponding pairing step is active.
+watch([pairTarget, localPairing], async ([target, pairing]) => {
+  await nextTick();
+  if (target && !pairing) {
+    if (!riskDialog.value?.open) riskDialog.value?.showModal();
+  } else if (riskDialog.value?.open) {
+    riskDialog.value.close();
+  }
+  if (pairing) {
+    if (!pairingDialog.value?.open) pairingDialog.value?.showModal();
+  } else if (pairingDialog.value?.open) {
+    pairingDialog.value.close();
+  }
+}, { flush: "post" });
 
 async function probeAndConnect(port: DiscoveredDevice) {
   try {
@@ -149,7 +186,8 @@ onUnmounted(stopPairingPoll);
     <div class="grid">
       <section class="card span7">
         <div class="card-title"><h2>已配对设备</h2></div>
-        <div v-if="!paired.length" class="muted">还没有已配对的设备。使用「发现设备」开始。</div>
+        <div v-if="store.devicesError" class="section-note">设备状态读取失败，以下为上次结果。</div>
+        <div v-if="!paired.length" class="muted">{{ store.devicesError ? "无法读取设备列表。" : "还没有已配对的设备。使用「发现设备」开始。" }}</div>
         <div v-for="device in paired" :key="device.device_id" class="device">
           <div class="device-icon" aria-hidden="true"><i class="pixelart-icons-font-cpu"></i></div>
           <div class="device-info">
@@ -157,7 +195,7 @@ onUnmounted(stopPairingPoll);
             <p>{{ device.device_id }}<br>{{ device.address || "—" }} · {{ connectionLabel(device.connection_state) }}<br>最近在线 {{ fmtClockTime(device.last_seen) }}</p>
           </div>
           <div class="actions">
-            <button class="btn" @click="toggleDevice(device.device_id, false)">停用</button>
+            <button class="btn" @click="toggleDevice(device.device_id, !device.enabled)">{{ device.enabled ? "停用" : "启用" }}</button>
             <button class="btn" @click="revoke(device.device_id)">解除配对</button>
           </div>
         </div>
@@ -188,8 +226,8 @@ onUnmounted(stopPairingPoll);
       </section>
     </div>
     <Teleport to="body">
-      <div v-if="pairTarget && !localPairing" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="pair-risk-title">
-        <section class="card modal-card">
+      <dialog ref="riskDialog" class="modal-dialog" aria-labelledby="pair-risk-title" @cancel.prevent="cancelPairingRequest">
+        <section v-if="pairTarget" class="card modal-card">
           <div class="card-title"><h2 id="pair-risk-title">配对风险确认</h2><span class="pill amber">{{ pairTarget.name || pairTarget.device_id }}</span></div>
           <p class="muted">配对会在局域网内明文传输密钥，请仅在可信网络中操作。勾选表示你已了解该风险，并确认与这台设备配对。</p>
           <label class="row modal-check">
@@ -201,27 +239,30 @@ onUnmounted(stopPairingPoll);
             <button class="btn" @click="cancelPairingRequest">取消</button>
           </div>
         </section>
-      </div>
-      <div v-if="localPairing" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="pairing-title">
-        <section class="card modal-card">
+      </dialog>
+      <dialog ref="pairingDialog" class="modal-dialog" aria-labelledby="pairing-title" @cancel.prevent="cancelPendingPairing">
+        <section v-if="localPairing" class="card modal-card">
           <div class="card-title"><h2 id="pairing-title">进行中的配对</h2><span class="pill">{{ connectionLabel(localPairing.state) }}</span></div>
           <p class="muted">设备短码：<strong class="code-big">{{ localPairing.code || "…" }}</strong>　{{ localPairing.code ? "请核对设备屏幕上的短码后确认。" : "等待设备发起配对…" }}</p>
           <div class="actions modal-actions">
             <button class="btn danger" :disabled="!localPairing.pairing_id" @click="confirmPairing(true)">确认配对</button>
-            <button class="btn" :disabled="!localPairing.pairing_id" @click="confirmPairing(false)">拒绝</button>
+            <button class="btn" @click="confirmPairing(false)">{{ localPairing.pairing_id ? "拒绝" : "取消等待" }}</button>
           </div>
         </section>
-      </div>
+      </dialog>
     </Teleport>
   </div>
 </template>
 
 <style scoped>
-.modal-backdrop{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:24px;background:#11191599}
-.modal-card{width:min(560px,100%);max-height:calc(100vh - 48px);overflow:auto;padding:24px;box-shadow:0 24px 70px #0006}
+.modal-dialog{width:min(560px,calc(100vw - 48px));max-width:none;max-height:none;padding:0;border:0;background:transparent;overflow:visible}
+.modal-dialog::backdrop{background:#11191599}
+.modal-card{width:100%;max-height:calc(100vh - 48px);overflow:auto;padding:24px;box-shadow:0 24px 70px #0006}
 .modal-check{border-bottom:0;padding:8px 0 18px}
 .modal-actions{justify-content:flex-end;margin-top:8px}
-.btn.danger{background:#8f3327;border-color:#6f241b;border-bottom-color:#571b14;color:#fff;box-shadow:inset 0 1px #c46a5d}
-.btn.danger:hover{background:#a13c2e}
-.btn.danger:disabled{opacity:.5;cursor:not-allowed}
+/* The pixel theme paints button faces on ::after, so set its custom colors. */
+.btn.danger{--button-frame:#6f241b;--button-face:#8f3327;color:#fff}
+.btn.danger:hover{--button-frame:#571b14;--button-face:#a13c2e}
+.btn.danger:disabled{--button-frame:#8f453b;--button-face:#a8564a;color:#fff;cursor:not-allowed}
+.code-big{font-family:ui-monospace,Menlo,monospace;font-size:24px;letter-spacing:.18em;color:#243c35}
 </style>

@@ -97,6 +97,24 @@ func TestEnvironmentFallbackSocksAndBypass(t *testing.T) {
 		t.Fatal("SOCKS ignored")
 	}
 }
+
+func TestBypassRespectsPort(t *testing.T) {
+	r := resolver(Settings{HTTPS: "http://proxy:8080", Bypass: []string{"example.com:8080"}})
+	for _, tc := range []struct {
+		endpoint string
+		direct   bool
+	}{
+		{"https://example.com:8080", true},
+		{"https://example.com", false},
+		{"https://example.com:443", false},
+	} {
+		req, _ := http.NewRequest("GET", tc.endpoint, nil)
+		u, err := r.Proxy(req)
+		if err != nil || (u == nil) != tc.direct {
+			t.Fatalf("%s: %v %v", tc.endpoint, u, err)
+		}
+	}
+}
 func TestAutomaticAndDetectionErrorsNeverFallBackDirect(t *testing.T) {
 	req, _ := http.NewRequest("GET", "https://api.github.com", nil)
 	for _, r := range []Resolver{resolver(Settings{Automatic: true}), {System: func(context.Context) (Settings, error) { return Settings{}, ErrDetection }, Environ: func() []string { return nil }}} {

@@ -1,6 +1,6 @@
 import { collectorService } from "./collector.js";
 import type { CollectorCapabilities, CollectorConfig, CollectorSnapshot } from "../types/collector.js";
-import { prepareMetricDraft, repairV2Selections, validateMetricDraft } from "./collector-metrics.js";
+import { ensureUploadConfig, prepareMetricDraft, repairV2Selections, validateMetricDraft } from "./collector-metrics.js";
 
 /** Keeps editing state separate from live snapshots. A failed apply preserves
  * the draft for repair and the previous committed config shown by the Agent. */
@@ -41,7 +41,10 @@ export class CollectorController {
   stop() { this.stopped = true; clearTimeout(this.timer); }
   private schedule() {
     if (this.stopped) return;
-    this.timer = setTimeout(async () => { await this.refresh(); this.schedule(); }, this.pollMS);
+    this.timer = setTimeout(async () => {
+      if (!document.hidden) await this.refresh();
+      this.schedule();
+    }, this.pollMS);
   }
   async refresh() {
     if (this.busy) return;
@@ -78,6 +81,25 @@ export class CollectorController {
   // draft never carries choices the GUI cannot display or uncheck.
   private repairDraft() {
     if (this.draft && this.capabilities?.v2) repairV2Selections(this.draft, this.capabilities.v2);
+  }
+  // Commits only the upload switch on top of the last applied config; unsaved
+  // edits on the metrics page stay in the draft.
+  async setUploadEnabled(enabled: boolean): Promise<boolean> {
+    if (this.busy) return false;
+    if (!this.snapshot) { this.error = "Agent 尚未就绪，请稍后重试"; this.emit(); return false; }
+    const config = prepareMetricDraft(this.snapshot.config, this.capabilities);
+    ensureUploadConfig(config).enabled = enabled;
+    this.busy = true; this.error = ""; this.emit();
+    try {
+      this.snapshot = await this.service.apply(config);
+      if (this.draft) ensureUploadConfig(this.draft).enabled = enabled;
+      return true;
+    } catch (error) {
+      this.error = String(error);
+      return false;
+    } finally {
+      this.busy = false; this.emit();
+    }
   }
   async apply(): Promise<boolean> {
     if (this.busy || !this.draft) return false;

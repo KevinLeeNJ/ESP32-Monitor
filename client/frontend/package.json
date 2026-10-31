@@ -1,6 +1,7 @@
 {
   "name": "esp32-monitor-client-frontend",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "vue-tsc -p tsconfig.vue.json && tsc -p tsconfig.json && vite build",

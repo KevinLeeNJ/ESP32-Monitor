@@ -27,7 +27,7 @@ function el(tag, attrs = {}, children = []) {
             e.append(typeof child === 'string' ? document.createTextNode(child) : child);
     return e;
 }
-const button = (label, fn, primary = false) => el('button', { type: 'button', class: 'btn' + (primary ? ' primary' : ''), text: label, onclick: fn });
+const button = (label, fn, primary = false, attrs = {}) => el('button', { type: 'button', class: 'btn' + (primary ? ' primary' : ''), text: label, onclick: fn, ...attrs });
 const card = (title, children, span = 'span12') => el('section', { class: 'card ' + span }, [el('div', { class: 'card-title' }, el('h2', { text: title })), ...children]);
 function notice(text) { const n = $('#notice'); n.textContent = text; n.hidden = false; clearTimeout(notice.timer); let seconds = 6; const tick = () => { n.textContent = text + ' · ' + seconds + 's'; if (seconds-- === 0)
     n.hidden = true;
@@ -152,17 +152,33 @@ function renderDevices() {
     content.append(card('添加设备', [form, el('p', { class: 'hint', text: '验证码单次使用。重新注册后，设备的旧上传凭据立即失效。' })]), el('div', { id: 'device-list', class: 'device-list' }));
     drawDevices();
 }
+function captureFocus(container) {
+    const active = document.activeElement;
+    if (!active || !container.contains(active))
+        return null;
+    return { device: active.closest('[data-device-id]')?.dataset.deviceId || '', action: active.dataset.action || '' };
+}
+function restoreFocus(container, focus) {
+    if (!focus)
+        return;
+    const card = focus.device ? container.querySelector('[data-device-id="' + focus.device + '"]') : container;
+    const target = focus.action && card ? card.querySelector('[data-action="' + focus.action + '"]') : null;
+    (target || container.querySelector('button') || container).focus();
+}
 function drawDevices() {
     const list = $('#device-list');
     if (!list)
         return;
+    list.tabIndex = -1;
+    const focus = captureFocus(list);
     list.replaceChildren();
     if (!devices.length) {
         list.append(card('设备列表', [el('p', { class: 'empty', text: '还没有设备。添加第一台设备，开始接收指标。' })]));
+        restoreFocus(list, focus);
         return;
     }
     devices.forEach(d => {
-        const actions = el('div', { class: 'actions' }, [button('查看指标', () => { selected = d.id; page = 'metrics'; render(); }), button(d.code ? '重新生成验证码' : '生成注册码', async () => { try {
+        const actions = el('div', { class: 'actions' }, [button('查看指标', () => { selected = d.id; page = 'metrics'; render(); }, false, { 'data-action': 'metrics' }), button(d.code ? '重新生成验证码' : '生成注册码', async () => { try {
                 if (d.code && !await confirmAction('重新生成验证码', '现有验证码将失效。已注册设备的上传凭据会在再次注册成功后轮换。'))
                     return;
                 await api('/api/devices/' + d.id + '/code', 'POST', {});
@@ -171,7 +187,7 @@ function drawDevices() {
             }
             catch (e) {
                 notice(e.message);
-            } }), button('删除设备', async () => { if (!await confirmAction('删除设备 ' + d.name, '设备、历史指标和注册凭据将一并删除，Client 需要重新注册。'))
+            } }, false, { 'data-action': 'code' }), button('删除设备', async () => { if (!await confirmAction('删除设备 ' + d.name, '设备、历史指标和注册凭据将一并删除，Client 需要重新注册。'))
                 return; try {
                 await api('/api/devices/' + d.id, 'DELETE');
                 await refreshDevices();
@@ -179,7 +195,7 @@ function drawDevices() {
             }
             catch (e) {
                 notice(e.message);
-            } })]);
+            } }, false, { 'data-action': 'delete' })]);
         const children = [el('div', { class: 'card-title' }, [el('h2', { text: d.name }), el('span', { class: 'pill ' + (d.status === 'online' ? '' : 'gray'), text: statusLabel(d) })]), el('div', { class: 'device-meta', text: '设备 ' + d.id + ' · 最近采样 ' + date(d.last_seen_at) })];
         if (d.code)
             children.push(el('div', { class: 'code-box' }, [el('strong', { class: 'code-value', text: d.code }), el('small', { class: 'code-note', text: remaining(d.code_expires_at) }), button('复制验证码', async () => { try {
@@ -188,10 +204,11 @@ function drawDevices() {
                 }
                 catch {
                     notice('请手动选择并复制验证码');
-                } })]));
+                } }, false, { 'data-action': 'copy' })]));
         children.push(actions);
-        list.append(el('section', { class: 'card' }, children));
+        list.append(el('section', { class: 'card', 'data-device-id': d.id }, children));
     });
+    restoreFocus(list, focus);
 }
 async function refreshDevices() { const data = await api('/api/devices'); devices = data.devices; if (page === 'devices')
     drawDevices(); if (page === 'metrics')
@@ -201,18 +218,26 @@ function drawSelector() {
     const list = $('#device-selector');
     if (!list)
         return;
+    list.tabIndex = -1;
+    const active = document.activeElement;
+    const focus = active && list.contains(active) ? active.dataset.deviceId || '' : '';
     list.replaceChildren();
     if (!devices.length) {
         $('#metric-detail').replaceChildren(card('设备指标', [el('p', { class: 'empty', text: '暂无设备，请先在设备注册页添加设备。' })]));
+        if (focus)
+            list.focus();
         return;
     }
     if (!devices.some(d => d.id === selected))
         selected = devices[0].id;
     for (const d of devices) {
         const b = button(d.name, () => { selected = d.id; render(); });
+        b.dataset.deviceId = d.id;
         b.setAttribute('aria-pressed', String(d.id === selected));
         list.append(b);
     }
+    if (focus)
+        (list.querySelector('[data-device-id="' + focus + '"]') || list).focus();
 }
 const labels = { 'cpu.usage': 'CPU 使用率', 'memory.usage': '内存使用率', 'system.uptime': '运行时间', 'cpu.load1': '1 分钟负载', 'cpu.load5': '5 分钟负载', 'cpu.load15': '15 分钟负载', 'cpu.temperature': 'CPU 温度', 'memory.used': '内存已用', 'memory.app': 'App 内存', 'memory.wired': '有线内存', 'memory.compressed': '压缩内存', 'memory.swap_total': 'Swap 总量', 'memory.swap_used': 'Swap 已用', 'memory.pressure': '内存压力', 'core.usage': '逻辑核使用率', 'gpu.usage': 'GPU 使用率', 'gpu.temperature': 'GPU 温度', 'drive.used': '磁盘已用', 'drive.read_rate': '读取速率', 'drive.write_rate': '写入速率', 'drive.smart_health': 'SMART 健康状态', 'interface.up': '网络连接', 'interface.upload_rate': '上传速率', 'interface.download_rate': '下载速率', 'interface.ipv4': 'IPv4 地址', 'network.public_ipv4': '公网 IPv4', 'battery.level': '电量', 'battery.charging': '正在充电', 'fan.rpm': '风扇转速' };
 function bytes(v) { let n = BigInt(v); const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB']; let divisor = 1n, i = 0; while (n >= divisor * 1024n && i < units.length - 1) {
@@ -374,14 +399,48 @@ function panelForm(data) {
     busyForm(form, async () => { await api('/api/devices/' + selected + '/panel', 'PUT', { enabled: checkbox.checked, name: name.value, disk_id: Number(select.value) }); form.closest('section').dataset.dirty = 'false'; await refreshDevices(); notice('面板设置已保存'); });
     return form;
 }
-function chart(samples, field, label) { const canvas = el('canvas', { class: 'sample-chart', width: 800, height: 160, role: 'img', 'aria-label': label + ' 历史使用率' }); requestAnimationFrame(() => { const ctx = canvas.getContext('2d'); if (!ctx)
-    return; ctx.strokeStyle = '#c7c7c0'; ctx.lineWidth = 1; [0, 50, 100].forEach(y => { ctx.beginPath(); ctx.moveTo(0, 150 - y * 1.4); ctx.lineTo(800, 150 - y * 1.4); ctx.stroke(); }); ctx.strokeStyle = '#222'; ctx.lineWidth = 2; ctx.beginPath(); samples.forEach((s, i) => { const x = samples.length > 1 ? i / (samples.length - 1) * 800 : 400, y = 150 - s[field] / 100 * 1.4; if (i === 0)
-    ctx.moveTo(x, y);
-else
-    ctx.lineTo(x, y); }); ctx.stroke(); if (samples.length === 1) {
-    ctx.fillStyle = '#222';
-    ctx.fillRect(397, 147 - samples[0][field] / 100 * 1.4, 6, 6);
-} }); return canvas; }
+function chart(samples, field, label) {
+    const width = 800, base = 150, unit = 1.4;
+    const first = samples[0].t, last = samples[samples.length - 1].t, span = last - first;
+    const deltas = [];
+    for (let i = 1; i < samples.length; i++)
+        if (samples[i].t > samples[i - 1].t)
+            deltas.push(samples[i].t - samples[i - 1].t);
+    deltas.sort((a, b) => a - b);
+    const gap = Math.max(60, (deltas.length ? deltas[Math.floor(deltas.length / 2)] : 0) * 6);
+    const metric = field === 'c' ? 'cpu.usage' : 'memory.usage';
+    const percent = v => Math.max(0, Math.min(100, v / 10));
+    const canvas = el('canvas', { class: 'sample-chart', width, height: 160, role: 'img', 'aria-label': label + ' 历史使用率，' + date(first) + ' 至 ' + date(last) + '，最新 ' + format(metric, samples[samples.length - 1][field]) });
+    requestAnimationFrame(() => {
+        const ctx = canvas.getContext('2d');
+        if (!ctx)
+            return;
+        ctx.strokeStyle = '#c7c7c0';
+        ctx.lineWidth = 1;
+        [0, 50, 100].forEach(y => { ctx.beginPath(); ctx.moveTo(0, base - y * unit); ctx.lineTo(width, base - y * unit); ctx.stroke(); });
+        ctx.strokeStyle = '#222';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        let previous = null;
+        samples.forEach(sample => {
+            const x = span > 0 ? (sample.t - first) / span * width : width / 2;
+            const y = base - percent(sample[field]) * unit;
+            if (previous === null || sample.t - previous > gap)
+                ctx.moveTo(x, y);
+            else
+                ctx.lineTo(x, y);
+            previous = sample.t;
+        });
+        ctx.stroke();
+        if (samples.length === 1) {
+            ctx.fillStyle = '#222';
+            ctx.fillRect(width / 2 - 3, base - percent(samples[0][field]) * unit - 3, 6, 6);
+        }
+    });
+    const rows = samples.slice().reverse().map(sample => el('tr', {}, [el('td', { text: date(sample.t) }), el('td', { text: format(metric, sample[field]) })]));
+    const table = el('table', {}, [el('caption', { text: label + ' 使用率历史数据' }), el('thead', {}, el('tr', {}, [el('th', { text: '时间' }), el('th', { text: '使用率' })])), el('tbody', {}, rows)]);
+    return el('div', {}, [canvas, el('div', { class: 'sr-only' }, table)]);
+}
 async function refreshMetrics() {
     if (!selected || !devices.some(d => d.id === selected))
         return;

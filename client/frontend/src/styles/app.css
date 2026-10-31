@@ -7,7 +7,7 @@ select{appearance:none;-webkit-appearance:none;min-width:118px;max-width:100%;pa
 select:hover{border-color:#9dbba1;background-color:#f2f8f0}select:focus-visible{border-color:#668f70;box-shadow:0 0 0 3px #c9dfca;outline:none}select:disabled{opacity:.55;cursor:not-allowed}
 @media(prefers-reduced-motion:reduce){select{transition:none}}
 
-.source-heading-icon,.source-icon .fa,.music-controls .fa{font-family:MonitorFontAwesome}.source-heading-icon{font-size:17px;color:#78927c}.preview-controls{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:0 0 18px;padding:11px 14px;border:1px dashed #cfddce;border-radius:10px;color:#829388;font-size:11px}.preview-controls>span{font-weight:700;margin-right:auto}.preview-controls label{display:flex;align-items:center;gap:8px}.preview-controls select{padding:7px 32px 7px 10px;min-width:100px}.source-empty{min-height:190px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:9px}.source-empty.compact{min-height:235px}.source-empty strong{font-size:14px}.source-empty p{margin:0 0 6px;color:#93a298;font-size:12px;line-height:1.6}.source-icon{width:50px;height:50px;display:grid;place-items:center;border-radius:14px;background:#eef5eb;color:#5e8366;font-size:25px}.wall-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.wall-top strong,.wall-top small{display:block}.wall-top strong{font-size:13px}.wall-top small{color:#9aa99e;font-size:11px;margin-top:4px}.wall-months{font-size:10px;color:#a0aea3;white-space:nowrap;overflow:hidden;margin-bottom:8px}.contribution-wall{display:grid;grid-template-rows:repeat(7,9px);grid-auto-flow:column;grid-auto-columns:minmax(5px,1fr);gap:3px;overflow:hidden}.contribution-wall i,.wall-legend i{display:block;border-radius:2px;background:#eaf0e9}.level-1{background:#cce2c9!important}.level-2{background:#a6cba6!important}.level-3{background:#77a980!important}.level-4{background:#4c805e!important}.wall-legend{display:flex;align-items:center;justify-content:flex-end;gap:4px;color:#a0aea3;font-size:10px;margin-top:12px}.wall-legend i{width:9px;height:9px}.wall-legend span{margin-left:12px}.text-action{border:0;background:none;padding:4px 0;color:#688a70;font-size:11px}.quota{margin:20px 0}.quota>div:first-child{display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:700}.quota small{font-size:10px;color:#9aab9e;font-weight:400}.quota>small{display:block;margin-top:7px}.quota-bar,.music-progress{height:7px;background:#edf3eb;border-radius:8px;overflow:hidden;margin-top:9px}.quota-bar i,.music-progress i{display:block;height:100%;background:#82aa85;border-radius:8px}.task-status{border-top:1px solid #edf2ec;padding-top:17px;display:flex;gap:12px;align-items:center}.task-dot{width:11px;height:11px;background:#75a781;border-radius:50%;box-shadow:0 0 0 5px #e9f3e8}.task-status small,.task-status strong{display:block}.task-status small{font-size:10px;color:#9aab9e}.task-status strong{font-size:12px;margin-top:4px}.music-meta{display:flex;align-items:start;justify-content:space-between;gap:10px;margin-top:22px}.music-meta strong,.music-meta small{display:block}.music-meta strong{font-size:17px}.music-meta small{font-size:12px;color:#899c8d;margin-top:7px}.music-source{font-size:11px;color:#a1b0a3;margin-top:14px}.music-progress{margin-top:22px}.music-progress i{width:37%}.music-times{display:flex;justify-content:space-between;color:#a1b0a3;font-size:10px;margin-top:7px}.music-controls{display:flex;align-items:center;justify-content:center;gap:18px;margin-top:18px}.music-controls button{border:0;background:none;color:#66866b;width:32px;height:32px;border-radius:50%}.music-controls button:hover{background:#eef5eb}.music-controls .play-button{width:42px;height:42px;background:#315e4c;color:white}.music-controls .play-button:hover{background:#274e3f}
+.source-heading-icon,.source-icon .fa,.music-controls .fa{font-family:MonitorFontAwesome}.source-heading-icon{font-size:17px;color:#78927c}.preview-controls{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:0 0 18px;padding:11px 14px;border:1px dashed #cfddce;border-radius:10px;color:#829388;font-size:11px}.preview-controls>span{font-weight:700;margin-right:auto}.preview-controls label{display:flex;align-items:center;gap:8px}.preview-controls select{padding:7px 32px 7px 10px;min-width:100px}.source-empty{min-height:190px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:9px}.source-empty.compact{min-height:235px}.source-empty strong{font-size:14px}.source-empty p{margin:0 0 6px;color:#93a298;font-size:12px;line-height:1.6}.source-icon{width:50px;height:50px;display:grid;place-items:center;border-radius:14px;background:#eef5eb;color:#5e8366;font-size:25px}.wall-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.wall-top strong,.wall-top small{display:block}.wall-top strong{font-size:13px}.wall-top small{color:#9aa99e;font-size:11px;margin-top:4px}.wall-months{font-size:10px;color:#a0aea3;white-space:nowrap;overflow:hidden;margin-bottom:8px}.contribution-wall{display:grid;grid-template-rows:repeat(7,9px);grid-auto-flow:column;grid-auto-columns:minmax(5px,1fr);gap:3px;overflow-x:auto;overflow-y:hidden;padding-bottom:2px;scrollbar-width:thin}.contribution-wall i,.wall-legend i{display:block;border-radius:2px;background:#eaf0e9}.level-1{background:#cce2c9!important}.level-2{background:#a6cba6!important}.level-3{background:#77a980!important}.level-4{background:#4c805e!important}.wall-legend{display:flex;align-items:center;justify-content:flex-end;gap:4px;color:#a0aea3;font-size:10px;margin-top:12px}.wall-legend i{width:9px;height:9px}.wall-legend span{margin-left:12px}.text-action{border:0;background:none;padding:4px 0;color:#688a70;font-size:11px}.quota{margin:20px 0}.quota>div:first-child{display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:700}.quota small{font-size:10px;color:#9aab9e;font-weight:400}.quota>small{display:block;margin-top:7px}.quota-bar,.music-progress{height:7px;background:#edf3eb;border-radius:8px;overflow:hidden;margin-top:9px}.quota-bar i,.music-progress i{display:block;height:100%;background:#82aa85;border-radius:8px}.task-status{border-top:1px solid #edf2ec;padding-top:17px;display:flex;gap:12px;align-items:center}.task-dot{width:11px;height:11px;background:#75a781;border-radius:50%;box-shadow:0 0 0 5px #e9f3e8}.task-status small,.task-status strong{display:block}.task-status small{font-size:10px;color:#9aab9e}.task-status strong{font-size:12px;margin-top:4px}.music-meta{display:flex;align-items:start;justify-content:space-between;gap:10px;margin-top:22px}.music-meta strong,.music-meta small{display:block}.music-meta strong{font-size:17px}.music-meta small{font-size:12px;color:#899c8d;margin-top:7px}.music-source{font-size:11px;color:#a1b0a3;margin-top:14px}.music-progress{margin-top:22px}.music-progress i{width:37%}.music-times{display:flex;justify-content:space-between;color:#a1b0a3;font-size:10px;margin-top:7px}.music-controls{display:flex;align-items:center;justify-content:center;gap:18px;margin-top:18px}.music-controls button{border:0;background:none;color:#66866b;width:32px;height:32px;border-radius:50%}.music-controls button:hover{background:#eef5eb}.music-controls .play-button{width:42px;height:42px;background:#315e4c;color:white}.music-controls .play-button:hover{background:#274e3f}
 
 /* Industrial control-console theme. Icons use the bundled Font Awesome assets. */
 :root{color:#ddd8c4;background:#1b211e;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"PingFang SC","Microsoft YaHei",monospace}
@@ -194,15 +194,18 @@ button,button:hover,button:active,button:focus,button:focus-visible{box-shadow:n
 .metric-object{min-height:42px;padding:8px 0;border-bottom:1px dashed #dcdcd6}
 .metric-object:last-child{border-bottom:0}
 
-/* 所有当前值都以像素风小卡片呈现：一个数值一格，组合指标并排成一行。 */
+/* 所有当前值都以像素风小卡片呈现：一个数值一格，等宽不收缩。
+   容器铺满数值列，放不下时整卡换行，数值不会顶出卡片边界。
+   不能让 .value-grid 按内容收缩：WebKit 对可换行 flex 容器的
+   max-content 估算偏小，窗口再宽也会提前折行。 */
 .value-grid,.core-grid{--value-card-width:144px}
-.value-grid{display:grid;grid-auto-flow:column;grid-auto-columns:var(--value-card-width);gap:8px;max-width:100%;justify-content:end;justify-self:end}
-.value-cell{display:flex;align-items:baseline;justify-content:space-between;gap:10px;min-width:0;padding:11px 14px;--pixel-border:#aaa;--pixel-surface:#fafaf5}
+.value-grid{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;width:100%;justify-self:end}
+.value-cell{display:flex;flex:0 0 var(--value-card-width);flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:2px 10px;min-width:0;padding:11px 14px;--pixel-border:#aaa;--pixel-surface:#fafaf5}
 .value-cell-name{flex:none;white-space:nowrap;color:#5e5e5e;font-size:12px}
 .value-cell-value{flex:1 1 auto;min-width:0;margin-left:auto;font-size:15px;text-align:right;font-variant-numeric:tabular-nums;word-break:normal;overflow-wrap:break-word}
-/* 逐核占用率单独成行，固定 4 列，右边缘与其它数值卡片对齐。 */
-.core-grid{grid-auto-flow:row;grid-template-columns:repeat(4,var(--value-card-width));justify-content:end;padding-top:12px}
-.metric-row.object-row>.core-grid{grid-column:1/-1;justify-self:stretch;padding-right:115px}
+/* 逐核占用率最多 4 列（4×144 + 3×8 = 600），右边缘与数值列对齐；窄窗口自动减列。 */
+.core-grid{max-width:min(100%,600px);padding-top:12px}
+.metric-row.object-row>.core-grid{grid-column:1/3;justify-self:end}
 .metric-row.object-row>.metric-objects{grid-column:1/-1;width:100%}
 
 /* 总览的「本机指标」沿用采集页的小卡片，左侧标题占剩余宽度。 */
@@ -210,7 +213,7 @@ button,button:hover,button:active,button:focus,button:focus-visible{box-shadow:n
 .row.overview-row>.value-grid{justify-self:end;max-width:100%}
 @media(max-width:1180px){
   .row.overview-row{grid-template-columns:minmax(0,1fr)}
-  .row.overview-row>.value-grid{grid-auto-flow:row;grid-template-columns:repeat(2,var(--value-card-width));justify-content:end;justify-self:end;padding-top:6px}
+  .row.overview-row>.value-grid{padding-top:6px}
 }
 
 /* Pixel listbox replaces the native select popup. */
@@ -225,6 +228,8 @@ button,button:hover,button:active,button:focus,button:focus-visible{box-shadow:n
 .pixel-select-option[aria-selected=true]{color:#fff}
 
 @media(max-width:1180px){
+  /* 数值列改按比例分配，窄窗口先让位，标题不会被挤成竖排。 */
+  :root{--metric-cols:minmax(0,1fr) minmax(0,52%) 96px}
   .span3{grid-column:span 6}
   .stat-value{font-size:24px}
 }
@@ -234,10 +239,9 @@ button,button:hover,button:active,button:focus,button:focus-visible{box-shadow:n
   .metric-object-name{padding-left:0}
   .metric-row.object-row>.metric-title,.metric-object{grid-template-columns:var(--metric-cols)}
   .table-head,.metric-row:not(.object-row),.metric-object{grid-template-columns:minmax(0,1fr) minmax(0,52%) 55px}
-  .value-grid.core-grid{grid-template-columns:repeat(2,var(--value-card-width));justify-content:end;gap:6px}
-  .metric-row.object-row>.core-grid{padding-top:10px;padding-right:60px}
-  .value-grid{grid-auto-flow:row;grid-template-columns:repeat(var(--value-cols,1),minmax(0,1fr));justify-content:stretch;justify-self:stretch;gap:6px}
-  .value-cell{flex-direction:column;align-items:stretch;gap:2px;padding:9px 11px}
+  .metric-row.object-row>.core-grid{padding-top:10px}
+  .value-grid{gap:6px}
+  .value-cell{flex-direction:column;flex:1 1 auto;align-items:stretch;gap:2px;padding:9px 11px}
   .value-cell-value{text-align:left}
   .pixel-select-menu{max-width:70vw}
 }

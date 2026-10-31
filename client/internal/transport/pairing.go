@@ -67,6 +67,11 @@ func (p *pairingServer) open(device, ip string) error {
 	if len(p.service.store.pairs()) >= 8 {
 		return errors.New("capacity_exceeded")
 	}
+	// A loopback discovery candidate still reaches the pairing listener through
+	// the bound interface, so its request source is bindIP, not 127.0.0.1.
+	if host := net.ParseIP(ip); host != nil && host.IsLoopback() {
+		ip = p.service.bindIP()
+	}
 	if p.listener == nil {
 		l, e := net.Listen("tcp4", p.service.httpAddress())
 		if e != nil {

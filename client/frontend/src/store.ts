@@ -26,6 +26,7 @@ interface Store {
   companion: CompanionSnapshot | null;
   companionError: string;
   devices: DeviceStatus[];
+  devicesError: string;
   restarting: boolean;
   toast: string;
 }
@@ -38,6 +39,7 @@ export const store = reactive<Store>({
   companion: null,
   companionError: "",
   devices: [],
+  devicesError: "",
   restarting: false,
   toast: "",
 });
@@ -94,8 +96,9 @@ export async function refreshCompanion() {
 export async function refreshDevices() {
   try {
     store.devices = await monitorService.devices();
-  } catch {
-    store.devices = [];
+    store.devicesError = "";
+  } catch (error) {
+    if (!store.restarting) store.devicesError = String(error);
   }
 }
 
@@ -132,6 +135,13 @@ export function cloneSettings(settings: GuiSettings): GuiSettings {
   return JSON.parse(JSON.stringify(settings)) as GuiSettings;
 }
 
+function onVisibilityChange() {
+  if (document.hidden) return;
+  void refreshStatus();
+  void refreshCompanion();
+  void refreshDevices();
+}
+
 let timers: ReturnType<typeof setInterval>[] = [];
 export function startPolling() {
   void refreshStatus();
@@ -147,15 +157,18 @@ export function startPolling() {
   void collector.start();
   timers = [
     setInterval(() => {
+      if (document.hidden) return;
       void refreshStatus();
       void refreshCompanion();
       void refreshDevices();
     }, GUI_REFRESH_MS),
   ];
+  document.addEventListener("visibilitychange", onVisibilityChange);
 }
 
 export function stopPolling() {
   timers.forEach(clearInterval);
   timers = [];
+  document.removeEventListener("visibilitychange", onVisibilityChange);
   collector.stop();
 }

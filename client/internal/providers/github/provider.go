@@ -91,6 +91,27 @@ func New(opts Options) (*Provider, error) {
 	return p, nil
 }
 
+// SetLogin swaps the account while preserving the provider referenced by the
+// Agent and device transport. An in-flight refresh completes before the swap.
+func (p *Provider) SetLogin(login, cachePath string) error {
+	p.refreshMu.Lock()
+	defer p.refreshMu.Unlock()
+	p.mu.Lock()
+	opts := p.opts
+	p.mu.Unlock()
+	opts.Login, opts.Enabled, opts.CachePath = login, login != "", cachePath
+	next, err := New(opts)
+	if err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.opts, p.client, p.url = next.opts, next.client, next.url
+	p.cache, p.health, p.next = next.cache, next.health, next.next
+	p.blockedUntil, p.lastAttempt, p.failures, p.cacheErr = next.blockedUntil, next.lastAttempt, next.failures, next.cacheErr
+	return nil
+}
+
 // Refresh serializes callers, enforces 60s manual / 15m automatic refresh and upstream reset times.
 func (p *Provider) Refresh(ctx context.Context, manual bool) Snapshot {
 	p.refreshMu.Lock()

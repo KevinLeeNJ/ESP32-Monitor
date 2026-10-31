@@ -9,7 +9,7 @@ export const metricNames: Record<string, string> = {
   "memory.usage": "内存占用率", "memory.total": "内存总量", "memory.used": "已用内存", "memory.app": "App 内存", "memory.wired": "Wired 内存", "memory.compressed": "压缩内存",
   "memory.swap_total": "Swap 总量", "memory.swap_used": "Swap 已用", "memory.pressure": "内存压力",
   "gpu.usage": "GPU 占用率", "gpu.temperature": "GPU 平均温度",
-  "drive.model": "磁盘型号", "drive.total": "物理磁盘容量", "drive.used": "磁盘已用容量", "drive.read_rate": "磁盘读取速度", "drive.write_rate": "磁盘写入速度", "drive.smart_health": "SMART 健康状态",
+  "drive.model": "磁盘型号", "drive.total": "磁盘总容量", "drive.used": "磁盘已用容量", "drive.read_rate": "磁盘读取速度", "drive.write_rate": "磁盘写入速度", "drive.smart_health": "SMART 健康状态",
   "volume.filesystem": "文件系统", "volume.total": "文件系统总容量", "volume.used": "文件系统已用容量",
   "interface.medium": "网络连接类型", "interface.up": "网卡连接状态", "interface.upload_rate": "网络上传速度", "interface.download_rate": "网络下载速度", "interface.ipv4": "本地 IPv4", "network.public_ipv4": "公网 IPv4",
   "battery.level": "电池电量与充电状态", "battery.charging": "充电状态", "system.uptime": "运行时间", "system.os": "操作系统", "system.product": "硬件产品名称",
@@ -286,6 +286,8 @@ export function rowCells(row: MetricRow, caps: CollectorV2Capabilities, snapshot
   const cells = !row.bundle
     ? [{ key: row.metric, label: "", value: metricValue(row.members[0], caps, snapshot, objectID) }]
     : row.members
+      .filter(metric => metric.metric !== "network.public_ipv4" || objectID === undefined ||
+        array(record(snapshot?.v2_sample).net).some(item => Number(item.i) === objectID && Array.isArray(item.ip) && item.ip.some(ip => typeof ip === "string" && ip.trim() !== "")))
       .map(metric => {
         const value = metricValue(metric, caps, snapshot, objectID);
         return { key: metric.metric, label: memberLabels[metric.metric] ?? metric.metric, value: metric.metric === "interface.up" && value === "—" ? "未知" : value };

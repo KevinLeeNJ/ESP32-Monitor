@@ -20,7 +20,12 @@ type Snapshot struct {
 type Service struct {
 	Music  nowplaying.Adapter
 	GitHub *github.Provider
-	Codex  *codex.Provider
+	Codex  interface {
+		Refresh(context.Context) codex.Snapshot
+		Snapshot() codex.Snapshot
+		RunTasks(context.Context)
+		WaitTasks(context.Context)
+	}
 }
 
 func (s *Service) Refresh(ctx context.Context) Snapshot {

@@ -156,6 +156,7 @@ type DeviceStatus struct {
 	DeviceID         string    `json:"device_id"`
 	Name             string    `json:"device_name"`
 	Paired           bool      `json:"paired"`
+	Enabled          bool      `json:"enabled"`
 	Address          string    `json:"address"`
 	ConfirmedOnline  bool      `json:"confirmed_online"`
 	ConnectionState  string    `json:"connection_state"`

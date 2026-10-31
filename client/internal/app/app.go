@@ -23,6 +23,7 @@ type Application struct {
 	GitHubAuth *githubauth.Client
 	Monitor    *transport.Backend
 	Collector  *collector.Manager
+	cacheDir   string
 }
 
 func New(c config.Config, cacheDir string) (*Application, error) {
@@ -35,11 +36,11 @@ func New(c config.Config, cacheDir string) (*Application, error) {
 	if err != nil {
 		return nil, err
 	}
-	music, err := adapters.New(adapters.Options{Enabled: c.Music.Enabled, Adapter: c.Music.Adapter, NativeLibrary: c.Music.NativeLibrary})
+	music, err := adapters.NewSwitchable(adapters.Options{Enabled: c.Music.Enabled, Adapter: c.Music.Adapter, NativeLibrary: c.Music.NativeLibrary})
 	if err != nil {
 		return nil, err
 	}
-	application := &Application{GitHubAuth: auth, Companion: &companion.Service{Music: music, GitHub: githubProvider, Codex: codex.New(codex.Options{Enabled: c.Codex.Enabled, Executable: c.Codex.Executable, DesktopEnabled: c.Codex.DesktopEnabled, TaskAdapter: c.Codex.TaskAdapter, Home: c.Codex.Home, ThreadIDs: c.Codex.ThreadIDs})}}
+	application := &Application{GitHubAuth: auth, cacheDir: cacheDir, Companion: &companion.Service{Music: music, GitHub: githubProvider, Codex: codex.NewSwitchable(codex.Options{Enabled: c.Codex.Enabled, Executable: c.Codex.Executable, DesktopEnabled: c.Codex.DesktopEnabled, TaskAdapter: c.Codex.TaskAdapter, Home: c.Codex.Home, ThreadIDs: c.Codex.ThreadIDs})}}
 	if c.Companion.Enabled {
 		dir := c.Companion.StateDirectory
 		if dir == "" {
@@ -74,6 +75,22 @@ func New(c config.Config, cacheDir string) (*Application, error) {
 		application.Collector = manager
 	}
 	return application, nil
+}
+
+func (a *Application) SetGitHubLogin(login string) error {
+	path := ""
+	if a.cacheDir != "" && login != "" {
+		path = filepath.Join(a.cacheDir, "github-"+login+".json")
+	}
+	return a.Companion.GitHub.SetLogin(login, path)
+}
+
+func (a *Application) SetMusicEnabled(enabled bool) error {
+	return a.Companion.Music.(*adapters.Switchable).SetEnabled(enabled)
+}
+
+func (a *Application) SetCodexEnabled(enabled bool) {
+	a.Companion.Codex.(*codex.Switchable).SetEnabled(enabled)
 }
 
 // GetNowPlayingSnapshot is a nonblocking, detached DTO for future GUI bindings.

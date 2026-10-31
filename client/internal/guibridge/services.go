@@ -12,6 +12,7 @@ import (
 	"esp32-monitor/client/internal/ipc"
 	"esp32-monitor/client/internal/logging"
 	"esp32-monitor/client/internal/nowplaying"
+	"esp32-monitor/client/internal/platform"
 	"esp32-monitor/client/internal/transport"
 )
 
@@ -102,6 +103,9 @@ func (s *AppService) GetSettings() Settings { return s.sup.CurrentSettings() }
 // SaveSettings persists settings and restarts the Agent with new flags.
 func (s *AppService) SaveSettings(ctx context.Context, settings Settings) (Settings, error) {
 	current := s.sup.CurrentSettings()
+	if settings.GitHub.Login != "" && !platform.ValidGitHubLogin(settings.GitHub.Login) {
+		return current, errors.New("invalid_github_login")
+	}
 	if settings.Launch.LaunchAtLogin != current.Launch.LaunchAtLogin {
 		configureTask := func(enabled bool) error {
 			taskCtx, cancel := context.WithTimeout(ctx, 20*time.Second)

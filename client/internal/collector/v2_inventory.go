@@ -73,7 +73,15 @@ func (s *v2State) buildInventory(b Batch) error {
 	// have no confirmed medium; keep v2 interface objects to physical adapters
 	// so rate and medium selections describe the same device.
 	confirmedInterfaces := map[string]bool{}
-	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+	confirmedDrives := map[string]bool{}
+	if runtime.GOOS == "linux" {
+		for _, m := range b.Metrics {
+			if m.Name == nativeSourceID("disk") {
+				confirmedDrives[m.Tags["device"]] = true
+			}
+		}
+	}
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
 		for _, m := range b.Metrics {
 			if m.Name == nativeSourceID("network") {
 				confirmedInterfaces[m.Tags["interface"]] = true
@@ -85,7 +93,10 @@ func (s *v2State) buildInventory(b Batch) error {
 		if kind == "" {
 			continue
 		}
-		if m.Name == "net" && (runtime.GOOS == "windows" || runtime.GOOS == "darwin") && !confirmedInterfaces[m.Tags["interface"]] {
+		if m.Name == "net" && (runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux") && !confirmedInterfaces[m.Tags["interface"]] {
+			continue
+		}
+		if runtime.GOOS == "linux" && m.Name == "diskio" && !confirmedDrives[m.Tags["name"]] {
 			continue
 		}
 		id, e := s.allocate(kind, m)

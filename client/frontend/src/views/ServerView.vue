@@ -4,7 +4,6 @@ import { appService } from "../services/bridge.js";
 import type { ServerTestResult } from "../types/app.js";
 import { cloneSettings, collector, saveSettings, store, toast, useCollectorRevision } from "../store.js";
 import { serverBase } from "../services/server-url.js";
-import { ensureUploadConfig } from "../services/collector-metrics.js";
 import { fmtClockTime } from "../services/format.js";
 import { errCode } from "../services/wails.js";
 
@@ -91,11 +90,7 @@ async function setUpload(on: boolean): Promise<boolean> {
       next.collector.enabled = true;
       await saveSettings(next);
     }
-    const draft = collector.draft;
-    if (!draft) { toast("Agent 尚未就绪，请稍后重试"); return false; }
-    ensureUploadConfig(draft).enabled = on;
-    collector.notifyDraftChanged();
-    if (await collector.apply()) return true;
+    if (await collector.setUploadEnabled(on)) return true;
     toast(`操作失败：${collector.error}`);
     return false;
   } catch (error) { toast(`操作失败：${String(error)}`); return false; }

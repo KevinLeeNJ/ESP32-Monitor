@@ -299,7 +299,7 @@ func (b *Backend) Devices() ([]DeviceStatus, bool) {
 	seen := map[string]bool{}
 	for _, p := range b.store.pairs() {
 		c := b.candidates[p.DeviceID]
-		s := DeviceStatus{DeviceID: p.DeviceID, Name: p.DeviceName, Paired: true, ConnectionState: "disconnected", LastSeen: c.Seen}
+		s := DeviceStatus{DeviceID: p.DeviceID, Name: p.DeviceName, Paired: true, Enabled: !b.disabled[p.DeviceID], ConnectionState: "disconnected", LastSeen: c.Seen}
 		if c.Addr != nil {
 			s.Address = c.Addr.IP.String()
 		}
@@ -320,7 +320,7 @@ func (b *Backend) Devices() ([]DeviceStatus, bool) {
 		if seen[id] {
 			continue
 		}
-		out = append(out, DeviceStatus{DeviceID: id, Name: value(c.Message.DeviceName), Address: c.Addr.IP.String(), ConfirmedOnline: time.Since(c.Seen) <= 10*time.Second, ConnectionState: "discovered", LastSeen: c.Seen})
+		out = append(out, DeviceStatus{DeviceID: id, Name: value(c.Message.DeviceName), Enabled: !b.disabled[id], Address: c.Addr.IP.String(), ConfirmedOnline: time.Since(c.Seen) <= 10*time.Second, ConnectionState: "discovered", LastSeen: c.Seen})
 	}
 	return out, b.discoveryOverflow
 }
