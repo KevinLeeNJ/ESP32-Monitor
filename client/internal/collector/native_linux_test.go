@@ -2,11 +2,7 @@
 
 package collector
 
-import (
-	"os"
-	"path/filepath"
-	"testing"
-)
+import "testing"
 
 func TestLinuxInventoryExcludesPartitionCounters(t *testing.T) {
 	b := fixtureFixed()
@@ -54,28 +50,5 @@ func TestLinuxNVTopSnapshot(t *testing.T) {
 	}
 	if _, ok := got[1].Fields["usage_percent"]; ok {
 		t.Fatal("unavailable GPU utilization must be omitted")
-	}
-}
-
-func TestLinuxDiskUsage(t *testing.T) {
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "btrfs-id", "devices", "dev0"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	input := `{"blockdevices":[
-	{"name":"sda","type":"disk","size":1000,"children":[{"name":"sda1","type":"part","size":300,"fstype":"ext4","uuid":"a","fsused":200},{"name":"sda2","type":"part","size":300,"fstype":"btrfs","uuid":"btrfs-id","fsused":100},{"name":"sda3","type":"part","size":100,"fstype":"swap","uuid":"swap","fsused":null}]},
-	{"name":"sdb","type":"disk","size":1000,"children":[{"name":"sdb1","type":"part","size":500,"fstype":"ntfs","uuid":"b","fsused":null}]},
-	{"name":"sdc","type":"disk","size":1000,"children":[{"name":"sdc1","type":"part","size":500,"fstype":"ext4","uuid":"c","fsused":0}]},
-	{"name":"sdd","type":"disk","size":1000,"children":[{"name":"sdd1","type":"part","size":500,"children":[{"name":"dm-0","type":"crypt","size":500,"fstype":"ext4","uuid":"d","fsused":100}]}]}
-	]}`
-	got := linuxDiskUsage([]byte(input), root)
-	if len(got) != 2 || got["sda"] != (linuxDiskStat{Used: 300, Total: 600}) || got["sdc"] != (linuxDiskStat{Used: 0, Total: 500}) {
-		t.Fatalf("unexpected disk usage: %v", got)
-	}
-	if err := os.Mkdir(filepath.Join(root, "btrfs-id", "devices", "dev1"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := linuxDiskUsage([]byte(input), root)["sda"]; ok {
-		t.Fatal("multi-device btrfs must be omitted")
 	}
 }

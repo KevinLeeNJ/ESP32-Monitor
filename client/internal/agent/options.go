@@ -9,13 +9,14 @@ import (
 )
 
 type options struct {
-	config        config.Config
-	cacheDir      string
-	watch         bool
-	login         bool
-	collectorAPI  string
-	collectorScan bool
-	ipcSocket     string
+	config          config.Config
+	cacheDir        string
+	watch           bool
+	login           bool
+	collectorAPI    string
+	collectorConfig string
+	collectorScan   bool
+	ipcSocket       string
 }
 
 func parseOptions(args []string, errOut io.Writer) (options, error) {
@@ -45,6 +46,7 @@ func parseOptions(args []string, errOut io.Writer) (options, error) {
 	fs.StringVar(&c.Collector.UploadURL, "collector-upload-url", "", "Server v2 samples URL (.../v2/collector/samples); HTTPS recommended")
 	fs.StringVar(&c.Collector.UploadTokenFile, "collector-upload-token-file", "", "private 0600 Server token file; never returned by the GUI API")
 	fs.StringVar(&o.collectorAPI, "collector-api", "", "authenticated native bridge API at 127.0.0.1:PORT; enables collector")
+	fs.StringVar(&o.collectorConfig, "collector-config", "", "collector configuration JSON applied on first start when no persisted config exists")
 	fs.BoolVar(&o.collectorScan, "collector-scan", false, "print actual Core/Native collector metric capabilities as JSON and exit")
 	fs.StringVar(&o.ipcSocket, "ipc-socket", "", "user-authenticated Unix socket for the GUI host; implies persistent mode")
 	if err := fs.Parse(args); err != nil {
@@ -54,6 +56,6 @@ func parseOptions(args []string, errOut io.Writer) (options, error) {
 		return o, errors.New("unexpected_arguments")
 	}
 	o.config.GitHub.Enabled = o.config.GitHub.Login != ""
-	o.config.Collector.Enabled = o.config.Collector.Enabled || o.collectorAPI != "" || o.collectorScan
+	o.config.Collector.Enabled = o.config.Collector.Enabled || o.collectorAPI != "" || o.collectorConfig != "" || o.collectorScan
 	return o, nil
 }
