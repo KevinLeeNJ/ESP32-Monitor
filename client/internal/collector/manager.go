@@ -50,6 +50,10 @@ type Manager struct {
 	// previewStarting prevents concurrent GUI snapshot requests from starting
 	// more than one transient, local-only preview generation.
 	previewStarting bool
+	target          atomic.Pointer[uploadTarget]
+	// disabled pauses collection and preview while keeping the Manager, its
+	// persisted configuration and its state-directory lock alive.
+	disabled atomic.Bool
 	// dropLogAt rate-limits queue-overflow logging during long outages.
 	dropLogAt time.Time
 }
@@ -153,9 +157,63 @@ func (m *Manager) Apply(ctx context.Context, c Config) (Snapshot, error) {
 	defer m.op.Unlock()
 	return m.apply(ctx, c)
 }
+
+// CollectingEnabled reports whether collection and preview are currently allowed.
+func (m *Manager) CollectingEnabled() bool { return !m.disabled.Load() }
+
+// SetCollecting pauses or resumes collection without rebuilding the Manager or
+// releasing its state-directory lock. Enabling returns immediately; the
+// committed configuration is applied in the background.
+func (m *Manager) SetCollecting(enabled bool) {
+	if enabled {
+		if m.disabled.Swap(false) {
+			go m.resume()
+		}
+		return
+	}
+	if m.disabled.Swap(true) {
+		return
+	}
+	m.previewAt.Store(0)
+	m.mu.Lock()
+	g := m.current
+	m.current = nil
+	m.snapshot.DroppedMetrics += uint64(queueMetrics(m.queue))
+	m.queue = nil
+	m.snapshot.State = "disabled"
+	m.snapshot.ErrorCode = ""
+	m.snapshot.UploadError = ""
+	m.snapshot.PID = 0
+	m.snapshot.Preview = Batch{Metrics: []Metric{}}
+	m.snapshot.LastReceivedAt = nil
+	m.snapshot.LastUploadAt = nil
+	m.snapshot.V2Sample = nil
+	m.mu.Unlock()
+	if g != nil {
+		go m.stopGeneration(g)
+	}
+	logging.L("collector").Info("collector_disabled", "revision", m.Snapshot().Revision)
+}
+
+func (m *Manager) resume() {
+	m.op.Lock()
+	defer m.op.Unlock()
+	if m.closed || m.disabled.Load() || m.current != nil {
+		return
+	}
+	c := m.Snapshot().Config
+	// Nothing committed yet; MarkPreview starts a local preview on GUI demand.
+	if len(c.Selections) == 0 && (c.Upload == nil || !c.Upload.Enabled) {
+		return
+	}
+	_, _ = m.apply(m.ctx, c)
+}
 func (m *Manager) apply(ctx context.Context, c Config) (Snapshot, error) {
 	if m.closed {
 		return m.Snapshot(), errClosed
+	}
+	if m.disabled.Load() {
+		return m.Snapshot(), nil
 	}
 	c = detached(c)
 	var prepareErr error
@@ -170,11 +228,18 @@ func (m *Manager) apply(ctx context.Context, c Config) (Snapshot, error) {
 	if len(c.Selections) == 0 && (c.Upload == nil || !c.Upload.Enabled) {
 		return m.disable(ctx, c)
 	}
-	// Re-probe on every configuration change, including vanished objects or dependencies.
-	caps, err := m.discover(ctx)
-	if err != nil {
-		return m.failure(err)
+	// The GUI builds selections from the last scan, and start() still validates
+	// the gathered batch. Re-probing on every save made settings responses slow;
+	// only a cold Manager needs a fresh capability scan here.
+	caps := m.Capabilities()
+	if caps.SchemaVersion == 0 || caps.V2 == nil {
+		var err error
+		caps, err = m.discover(ctx)
+		if err != nil {
+			return m.failure(err)
+		}
 	}
+	var err error
 	if c.Upload != nil && c.Upload.Enabled && caps.V2 != nil {
 		bundleAvailableSelections(c.Upload, caps.V2)
 		if err = validateDeviceDependencies(c.Upload); err != nil {
@@ -190,6 +255,10 @@ func (m *Manager) apply(ctx context.Context, c Config) (Snapshot, error) {
 	}
 	if err = validate(c, caps); err != nil {
 		return m.failure(err)
+	}
+	// A Settings change may have paused collection while discovery ran.
+	if m.disabled.Load() {
+		return m.Snapshot(), nil
 	}
 	old := m.Snapshot()
 	revision := old.Revision + 1
@@ -243,7 +312,7 @@ func (m *Manager) disable(ctx context.Context, c Config) (Snapshot, error) {
 	m.snapshot.LastReceivedAt = nil
 	m.snapshot.LastUploadAt = nil
 	m.snapshot.V2Sample = nil
-	if m.v2 != nil && m.opts.UploadURL != "" {
+	if m.v2 != nil && m.uploadTarget().URL != "" {
 		m.enqueueV2ProfileLocked(c, revision)
 	}
 	m.mu.Unlock()

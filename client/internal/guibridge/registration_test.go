@@ -3,7 +3,6 @@ package guibridge
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -155,54 +154,31 @@ func TestApplyRegistration(t *testing.T) {
 	}
 }
 
-func TestPersistRegistrationPreservesOldTokenOnSaveFailure(t *testing.T) {
+func TestStageRegistrationKeepsOldTokenUntilCommit(t *testing.T) {
 	dir := t.TempDir()
-	old := filepath.Join(dir, "server-token")
+	defaultPath := filepath.Join(dir, "server-token")
+	old := filepath.Join(dir, "server-token-old")
 	if err := os.WriteFile(old, []byte("old-token"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	current := DefaultSettings()
 	current.Collector.UploadTokenFile = old
-	_, err := persistRegistration(current, "https://new.example", registrationResponse{Token: strings.Repeat("a", 64)}, old, func(Settings) error { return fmt.Errorf("write failed") })
-	if err == nil {
-		t.Fatal("expected failure")
-	}
-	data, err := os.ReadFile(old)
-	if err != nil || string(data) != "old-token" {
-		t.Fatalf("old token lost: %q %v", data, err)
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("temporary token not removed: %v %v", entries, err)
-	}
-}
-
-func TestPersistRegistrationCommitsNewTokenBeforeRemovingOld(t *testing.T) {
-	dir := t.TempDir()
-	old := filepath.Join(dir, "server-token")
-	if err := os.WriteFile(old, []byte("old-token"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	current := DefaultSettings()
-	current.Collector.UploadTokenFile = old
-	var saved Settings
-	next, err := persistRegistration(current, "https://new.example", registrationResponse{Token: strings.Repeat("a", 64)}, old, func(s Settings) error {
-		if _, err := os.Stat(old); err != nil {
-			t.Fatal("old token removed before settings commit")
-		}
-		saved = s
-		return nil
-	})
+	next, staged, err := stageRegistration(current, "https://new.example", registrationResponse{Token: strings.Repeat("a", 64)}, defaultPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if next.Collector.UploadTokenFile == old || saved.Collector.UploadTokenFile != next.Collector.UploadTokenFile {
-		t.Fatal("new token path not committed")
+	if next.Collector.UploadTokenFile != staged || staged == old {
+		t.Fatal("new token path not staged")
 	}
-	data, err := os.ReadFile(next.Collector.UploadTokenFile)
+	data, err := os.ReadFile(staged)
 	if err != nil || strings.TrimSpace(string(data)) != strings.Repeat("a", 64) {
 		t.Fatalf("new token: %q %v", data, err)
 	}
+	// The old credential must survive until the new endpoint is committed.
+	if data, err := os.ReadFile(old); err != nil || string(data) != "old-token" {
+		t.Fatalf("old token lost: %q %v", data, err)
+	}
+	removeReplacedToken(current, defaultPath)
 	if _, err := os.Stat(old); !os.IsNotExist(err) {
 		t.Fatalf("old token remains: %v", err)
 	}

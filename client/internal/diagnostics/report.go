@@ -63,11 +63,11 @@ func Build(application *app.Application, now time.Time) Report {
 	if application == nil {
 		return report
 	}
-	if application.Collector != nil {
-		report.Collector = collectorSection(application.Collector.Snapshot())
+	if manager := application.Collector(); manager != nil && application.CollectorEnabled() {
+		report.Collector = collectorSection(manager.Snapshot())
 	}
 	report.Companion = companionSection(application.Companion.Snapshot())
-	if application.Monitor != nil {
+	if application.Monitor() != nil {
 		report.Monitor = monitorSection(application)
 	}
 	return report

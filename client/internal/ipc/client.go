@@ -184,6 +184,18 @@ func (c *Client) SetCodexEnabled(ctx context.Context, enabled bool) error {
 	return c.post(ctx, "/v1/companion/codex", loginTaskRequest{Enabled: enabled}, nil)
 }
 
+// SetCollectorSettings applies collection state and the upload target without
+// restarting the Agent.
+func (c *Client) SetCollectorSettings(ctx context.Context, enabled bool, uploadURL, tokenFile string) error {
+	return c.post(ctx, "/v1/collector/settings", collectorSettingsRequest{Enabled: enabled, UploadURL: uploadURL, UploadTokenFile: tokenFile}, nil)
+}
+
+// SetCompanionSettings starts, stops or rebinds the Companion backend without
+// restarting the Agent.
+func (c *Client) SetCompanionSettings(ctx context.Context, enabled bool, bindIP string) error {
+	return c.post(ctx, "/v1/companion/settings", companionSettingsRequest{Enabled: enabled, BindIP: bindIP}, nil)
+}
+
 // GitHubSession returns the current login session state.
 func (c *Client) GitHubSession(ctx context.Context) (githubauth.Session, error) {
 	var session githubauth.Session

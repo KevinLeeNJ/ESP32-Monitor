@@ -60,6 +60,19 @@ func (s *Server) routeGitHub(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) routeCompanion(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && r.URL.Path == "/v1/companion/settings" {
+		var req companionSettingsRequest
+		if err := decodeBody(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		if err := s.app.SetCompanionSettings(req.Enabled, req.BindIP); err != nil {
+			writeAppError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
 	if r.Method == http.MethodPost && (r.URL.Path == "/v1/companion/music" || r.URL.Path == "/v1/companion/codex") {
 		var req loginTaskRequest
 		if err := decodeBody(r, &req); err != nil {

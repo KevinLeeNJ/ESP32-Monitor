@@ -134,38 +134,37 @@ func applyRegistration(current Settings, base string, registered registrationRes
 	return current
 }
 
-func persistRegistration(current Settings, base string, registered registrationResponse, defaultPath string, save func(Settings) error) (Settings, error) {
+func stageRegistration(current Settings, base string, registered registrationResponse, defaultPath string) (Settings, string, error) {
 	dir := filepath.Dir(defaultPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return current, errors.New("token_store_failed")
+		return current, "", errors.New("token_store_failed")
 	}
 	f, err := os.CreateTemp(dir, "server-token-*")
 	if err != nil {
-		return current, errors.New("token_store_failed")
+		return current, "", errors.New("token_store_failed")
 	}
 	path := f.Name()
 	if err := f.Close(); err != nil {
 		os.Remove(path)
-		return current, errors.New("token_store_failed")
+		return current, "", errors.New("token_store_failed")
 	}
 	if err := writePrivateToken(path, registered.Token); err != nil {
 		os.Remove(path)
-		return current, err
+		return current, "", err
 	}
-	next := applyRegistration(current, base, registered, path)
-	if err := save(next); err != nil {
-		os.Remove(path)
-		return current, errors.New("settings_save_failed")
-	}
+	return applyRegistration(current, base, registered, path), path, nil
+}
+
+func removeReplacedToken(current Settings, defaultPath string) {
 	old := current.Collector.UploadTokenFile
+	dir := filepath.Dir(defaultPath)
 	if filepath.Dir(old) == dir && (old == defaultPath || strings.HasPrefix(filepath.Base(old), "server-token-")) {
 		_ = os.Remove(old)
 	}
-	return next, nil
 }
 
 // RegisterServer exchanges the WebUI verification code for a Server token,
-// stores the token privately and restarts the Agent with the new endpoint.
+// applies the new endpoint to the running Agent and stores the token privately.
 func (s *AppService) RegisterServer(ctx context.Context, baseURL, code string) (ServerRegistration, error) {
 	base, err := normalizeServerBase(baseURL)
 	if err != nil {
@@ -183,12 +182,25 @@ func (s *AppService) RegisterServer(ctx context.Context, baseURL, code string) (
 	if err != nil {
 		return ServerRegistration{}, errors.New("token_store_failed")
 	}
-	next, err := persistRegistration(s.sup.CurrentSettings(), base, registered, tokenPath, SaveSettings)
+	current := s.sup.CurrentSettings()
+	next, newToken, err := stageRegistration(current, base, registered, tokenPath)
 	if err != nil {
 		return ServerRegistration{}, err
 	}
+	result := ServerRegistration{DeviceID: registered.DeviceID, DeviceName: registered.Name, ServerURL: base}
 	if err := s.sup.UpdateSettings(ctx, next); err != nil {
-		return ServerRegistration{DeviceID: registered.DeviceID, DeviceName: registered.Name, ServerURL: base}, errors.New("agent_restart_failed")
+		_ = os.Remove(newToken)
+		_ = s.sup.UpdateSettings(ctx, current)
+		return result, errors.New("settings_apply_failed")
 	}
-	return ServerRegistration{DeviceID: registered.DeviceID, DeviceName: registered.Name, ServerURL: base}, nil
+	if err := SaveSettings(next); err != nil {
+		_ = os.Remove(newToken)
+		_ = s.sup.UpdateSettings(ctx, current)
+		return result, errors.New("settings_save_failed")
+	}
+	removeReplacedToken(current, tokenPath)
+	if s.onSettings != nil {
+		s.onSettings(next)
+	}
+	return result, nil
 }

@@ -69,8 +69,8 @@ export async function refreshStatus() {
     store.status = await appService.status();
     store.statusError = "";
   } catch (error) {
-    // A settings save may restart the Agent; its socket is briefly absent and is
-    // not a real failure. Keep the last known status until the save settles.
+    // A manual restart briefly removes the Agent socket; keep the last known
+    // status until the restart settles.
     if (store.restarting) return;
     store.statusError = String(error);
   }

@@ -24,16 +24,64 @@ type queued struct {
 	profile  *v2.Profile
 }
 
-func (m *Manager) initUploader() error {
-	if m.opts.UploadURL != "" {
-		u, err := platform.ParseHTTPURL(m.opts.UploadURL)
+type uploadTarget struct {
+	URL   string
+	token func(context.Context) (string, error)
+}
+
+func (m *Manager) uploadTarget() *uploadTarget {
+	if t := m.target.Load(); t != nil {
+		return t
+	}
+	return &uploadTarget{URL: m.opts.UploadURL, token: m.opts.UploadToken}
+}
+
+func validateUploadTarget(uploadURL string, token func(context.Context) (string, error)) error {
+	if uploadURL != "" {
+		u, err := platform.ParseHTTPURL(uploadURL)
 		if err != nil || u.Path != "/v2/collector/samples" {
 			return errors.New("invalid_upload_url")
 		}
-		if m.opts.UploadToken == nil {
+		if token == nil {
 			return errors.New("upload_token_required")
 		}
 	}
+	return nil
+}
+
+// SetUploadTarget switches the Server endpoint in place. Pending samples belong
+// to the previous endpoint and are dropped; the next delivery re-binds the V2
+// profile and credential to the new target.
+func (m *Manager) SetUploadTarget(uploadURL, tokenFile string) error {
+	var token func(context.Context) (string, error)
+	if uploadURL != "" {
+		token = TokenFile(tokenFile)
+	}
+	if err := validateUploadTarget(uploadURL, token); err != nil {
+		return err
+	}
+	m.target.Store(&uploadTarget{URL: uploadURL, token: token})
+	m.mu.Lock()
+	m.snapshot.DroppedMetrics += uint64(queueMetrics(m.queue))
+	m.queue = nil
+	uploadEnabled := m.snapshot.Config.Upload != nil && m.snapshot.Config.Upload.Enabled
+	m.snapshot.UploadError = ""
+	switch {
+	case uploadEnabled && uploadURL == "":
+		m.snapshot.UploadError = "upload_not_configured"
+	case uploadEnabled && !m.disabled.Load():
+		m.enqueueV2ProfileLocked(m.snapshot.Config, m.snapshot.Revision)
+	}
+	m.mu.Unlock()
+	logging.L("collector").Info("upload_target_changed", "configured", uploadURL != "")
+	return nil
+}
+
+func (m *Manager) initUploader() error {
+	if err := validateUploadTarget(m.opts.UploadURL, m.opts.UploadToken); err != nil {
+		return err
+	}
+	m.target.Store(&uploadTarget{URL: m.opts.UploadURL, token: m.opts.UploadToken})
 	if m.opts.HTTPClient == nil {
 		m.opts.HTTPClient = platform.NewHTTPClient(8 * time.Second)
 	}

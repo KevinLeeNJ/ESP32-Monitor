@@ -12,7 +12,7 @@ watch(settings, value => {
   if (value && !saving.value) applied = cloneSettings(value);
 }, { immediate: true, deep: true });
 
-// 开关即生效：每次改动立即保存，必要时重启 Agent，避免再点一次「保存」。
+// 开关即生效：每次改动立即保存并由 Agent 热应用，无需再点「保存」。
 async function persist() {
   const current = settings.value;
   if (!current) return;
@@ -72,7 +72,7 @@ async function persist() {
           <div><strong>状态栏图标</strong><small>在菜单栏或系统托盘常驻图标，可快速打开窗口或退出；需开启「后台运行」才能关闭窗口后继续驻留</small></div>
           <input v-model="settings.launch.show_in_status_bar" class="switch" type="checkbox" aria-label="状态栏图标" :disabled="saving" @change="persist">
         </div>
-        <div class="section-note">登录项、状态栏图标、系统播放和 Codex 设置即时生效；采集与上位机服务切换时 Agent 会自动重启。自动启动会在后台运行；需要界面时点状态栏图标或重新打开应用。</div>
+        <div class="section-note">所有设置即时生效，采集与上位机服务在后台自动启停，无需重启 Agent。自动启动会在后台运行；需要界面时点状态栏图标或重新打开应用。</div>
       </section>
       <section class="card span5">
         <div class="card-title"><h2>后台状态</h2></div>

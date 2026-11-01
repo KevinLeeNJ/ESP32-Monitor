@@ -100,34 +100,46 @@ func (s *AppService) QuitApp(context.Context) error {
 // GetSettings returns the currently applied settings.
 func (s *AppService) GetSettings() Settings { return s.sup.CurrentSettings() }
 
-// SaveSettings persists settings and restarts the Agent with new flags.
+// SaveSettings applies settings to the running Agent and persists them. The
+// Agent is not restarted; failures roll the process state and the file back.
 func (s *AppService) SaveSettings(ctx context.Context, settings Settings) (Settings, error) {
 	current := s.sup.CurrentSettings()
 	if settings.GitHub.Login != "" && !platform.ValidGitHubLogin(settings.GitHub.Login) {
 		return current, errors.New("invalid_github_login")
 	}
-	if settings.Launch.LaunchAtLogin != current.Launch.LaunchAtLogin {
+	loginChanged := settings.Launch.LaunchAtLogin != current.Launch.LaunchAtLogin
+	setLogin := func(enabled bool) error {
 		configureTask := func(enabled bool) error {
 			taskCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			defer cancel()
 			return s.sup.SetLoginTask(taskCtx, enabled)
 		}
-		if err := setLaunchAtLogin(settings.Launch.LaunchAtLogin, configureTask); err != nil {
+		return setLaunchAtLogin(enabled, configureTask)
+	}
+	if loginChanged {
+		if err := setLogin(settings.Launch.LaunchAtLogin); err != nil {
 			return current, err
 		}
 	}
+	if err := s.sup.UpdateSettings(ctx, settings); err != nil {
+		if loginChanged {
+			_ = setLogin(current.Launch.LaunchAtLogin)
+		}
+		logging.L("gui").Warn("settings_apply_failed", "error", err)
+		return current, err
+	}
 	if err := SaveSettings(settings); err != nil {
+		_ = s.sup.UpdateSettings(ctx, current)
+		if loginChanged {
+			_ = setLogin(current.Launch.LaunchAtLogin)
+		}
 		logging.L("gui").Warn("settings_save_failed", "error", err)
-		return s.sup.CurrentSettings(), err
+		return current, err
 	}
 	logging.L("gui").Info("settings_saved", "collector", settings.Collector.Enabled, "companion", settings.Companion.Enabled,
 		"codex", settings.Codex.Enabled, "music", settings.Music.Enabled, "launch_at_login", settings.Launch.LaunchAtLogin)
 	if s.onSettings != nil {
 		s.onSettings(settings)
-	}
-	if err := s.sup.UpdateSettings(ctx, settings); err != nil {
-		logging.L("gui").Warn("settings_apply_failed", "error", err)
-		return s.sup.CurrentSettings(), err
 	}
 	return s.sup.CurrentSettings(), nil
 }

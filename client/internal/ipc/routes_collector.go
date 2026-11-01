@@ -29,8 +29,19 @@ func (s *Server) routeCollector(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, snapshot)
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/collector/settings":
+		var req collectorSettingsRequest
+		if err := decodeBody(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		if err := s.app.SetCollectorSettings(req.Enabled, req.UploadURL, req.UploadTokenFile); err != nil {
+			writeAppError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	case r.Method == http.MethodPut && r.URL.Path == "/v1/collector/config":
-		if s.app.Collector == nil {
+		if s.app.Collector() == nil || !s.app.CollectorEnabled() {
 			writeError(w, http.StatusConflict, "collector_disabled")
 			return
 		}

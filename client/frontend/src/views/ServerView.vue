@@ -52,7 +52,7 @@ function registrationError(error: unknown): string {
     case "registration_unsupported": return "Server 不支持验证码注册，请升级 Server";
     case "token_store_failed": return "无法在本机保存令牌";
     case "settings_save_failed": return "保存设置失败";
-    case "agent_restart_failed": return "注册信息已保存，但 Agent 重启失败；请在「诊断」页重启 Agent";
+    case "settings_apply_failed": return "注册失败：无法应用到 Agent，请重试";
     default: return `注册失败：${String(error)}`;
   }
 }

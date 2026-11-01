@@ -78,7 +78,8 @@ type v2State struct {
 
 func ptr[T any](v T) *T { return &v }
 func (m *Manager) initV2() error {
-	s := &v2State{IDs: map[string]uint16{}, Next: 1, Endpoint: m.opts.UploadURL}
+	target := m.uploadTarget()
+	s := &v2State{IDs: map[string]uint16{}, Next: 1, Endpoint: target.URL}
 	path := filepath.Join(m.opts.StateDirectory, "collector-v2.json")
 	if _, err := os.Lstat(path); err == nil {
 		data, e := readPrivateFile(path, maxV2StateBody)
@@ -91,8 +92,8 @@ func (m *Manager) initV2() error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if s.Endpoint != m.opts.UploadURL {
-		s.Endpoint = m.opts.UploadURL
+	if s.Endpoint != target.URL {
+		s.Endpoint = target.URL
 		s.Profile = nil
 		s.Revision = 0
 		s.AuthHash = ""
@@ -203,8 +204,8 @@ func text(tags map[string]string, key string) *string {
 	}
 	return nil
 }
-func (m *Manager) profileURL() string {
-	u, _ := url.Parse(m.opts.UploadURL)
+func (m *Manager) profileURL(target *uploadTarget) string {
+	u, _ := url.Parse(target.URL)
 	u.Path = "/v2/collector/profile"
 	return u.String()
 }

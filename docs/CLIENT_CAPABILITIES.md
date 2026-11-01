@@ -17,14 +17,15 @@ Wails GUI + Vue 页面
 | 能力 | 状态 | 当前事实 / 剩余边界 | 源码依据 |
 | --- | --- | --- | --- |
 | GUI 宿主与前端 | 已实现 | Wails v3 宿主、Vue 3/TypeScript/Vite 页面、打包静态资源；三平台安装/真实 WebView 验收未齐 | [main.go](../client/cmd/monitor-client/main.go)、[App.vue](../client/frontend/src/App.vue) |
-| GUI/Agent 分进程 | 已实现 | Supervisor 启动/停止/重启 Agent，业务服务走 IPC；Windows 以 IPC Quit 优雅退出并在超时后 Kill，Unix 使用 SIGTERM；后台行为受设置控制 | [supervisor.go](../client/internal/guibridge/supervisor.go)、[process_windows.go](../client/internal/guibridge/process_windows.go) |
+| GUI/Agent 分进程 | 已实现 | Supervisor 启动/停止 Agent，业务服务走 IPC；设置更改在 Agent 进程内热应用，不触发重启；Windows 以 IPC Quit 优雅退出并在超时后 Kill，Unix 使用 SIGTERM；后台行为受设置控制 | [supervisor.go](../client/internal/guibridge/supervisor.go)、[process_windows.go](../client/internal/guibridge/process_windows.go) |
+| 设置热更新 | 已实现 | GUI 开关、Server 注册和上传目标变更均通过 IPC 原地应用，Agent PID 不变；采集器常驻并保留状态目录锁，上传目标切换会丢弃旧目标队列；只有手动重启或崩溃恢复才重启 Agent | [app.go](../client/internal/app/app.go)、[upload.go](../client/internal/collector/upload.go)、[client.go](../client/internal/ipc/client.go) |
 | 用户认证 IPC | 已实现 | macOS/Linux 用 Unix socket + 同 UID 对端校验；Windows 用每用户 Named Pipe + 双端进程 Token SID 校验；均拒绝浏览器 Origin，每次请求独立连接复验对端 | [ipc.go](../client/internal/ipc/ipc.go)、[transport_unix.go](../client/internal/ipc/transport_unix.go)、[transport_windows.go](../client/internal/ipc/transport_windows.go) |
 | Windows IPC | 已实现/已验证 | `\\.\pipe\ESP32-Monitor-<SID>`，SDDL 仅当前用户；Agent 管道上 Status/Quit 与 Supervisor 生命周期已原生实测；Unix 对等行为待对应平台复跑 | [transport_windows.go](../client/internal/ipc/transport_windows.go)、[ipcpath_windows.go](../client/internal/guibridge/ipcpath_windows.go) |
 | 独立 Agent | 已实现 | 一次 JSON、watch JSONL、Collector/Companion/IPC 后台入口；不强制使用 GUI | [run.go](../client/internal/agent/run.go) |
 | 后台运行与完整退出 | 部分实现 | 关窗后台、Supervisor/OnShutdown 清理、可选状态栏图标与重新唤出；Windows 已实测关闭窗口后进程/Agent 存活且窗口隐藏、重新显示成功，托盘点击/菜单与系统会话切换仍待验收 | [GUI 入口](../client/cmd/monitor-client/main.go)、[icons.go](../client/internal/guibridge/icons.go) |
 | 登录自启 | 已实现 | 通用开关；macOS 写 LaunchAgent、Windows 写 HKCU Run、Linux 写 XDG autostart；以 `--login-item` 后台启动且不显示窗口 | [settings.go](../client/internal/guibridge/settings.go)、[loginitem_darwin.go](../client/internal/guibridge/loginitem_darwin.go) |
 | 系统采集服务 | 待实现 | 用户会话音乐/账号与系统服务隔离、跨模式所有权未产品化 | [lifecycle](../client/internal/platform/lifecycle/doc.go) |
-| macOS 应用打包 | 部分实现 | `.app` 构建脚本含 GUI、Agent、播放 dylib 与本地 ad-hoc 签名；正式签名/公证/升级/卸载未完成 | [build-darwin-app.sh](../client/scripts/build-darwin-app.sh) |
+| macOS 应用打包 | 部分实现 | `.app` 构建脚本含 GUI、Agent、播放 dylib 与本地 ad-hoc 签名；默认部署目标 macOS 13，可用 `MACOSX_DEPLOYMENT_TARGET` 覆盖，`GO=/path/to/go` 可换用上游或更老的 Go（工具链运行时对象要求更高版本时会告警）；正式签名/公证/升级/卸载未完成 | [build-darwin-app.sh](../client/scripts/build-darwin-app.sh) |
 | Windows/Linux 分发 | 部分实现 | Windows 绿色 zip（GUI/Agent/LHM helper、内嵌图标与版本信息、WebView2 启动检测、README/第三方声明）已构建并在本机启动；安装器（已提供 `.iss`，无 ISCC 未编译）、签名、干净机器与 Linux 分发仍待验收 | [packaging/windows](../client/packaging/windows)、[build-windows-app.ps1](../client/scripts/build-windows-app.ps1) |
 
 默认 GUI 开启 Collector，Companion、Codex、音乐默认关闭；GitHub 在完成 Device Flow 登录后启用，GUI 内置本项目公开的 OAuth App Client ID（无需 Client Secret）。模块独立，采集不强制登录第三方账号，Companion 不强制注册指标 Server。当前 Collector 已是 **进程内 Core/Native**，不再管理 Telegraf 子进程。

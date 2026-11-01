@@ -12,23 +12,10 @@ import (
 	"esp32-monitor/client/internal/logging"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"sync/atomic"
 	"time"
 )
-
-func defaultRouteIPv4() string {
-	conn, err := net.Dial("udp4", "8.8.8.8:80")
-	if err != nil {
-		return ""
-	}
-	defer conn.Close()
-	if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
-		return addr.IP.String()
-	}
-	return ""
-}
 
 // Run emits one JSON snapshot by default. --watch, --collector, --companion
 // and --ipc-socket stay in the background and emit JSONL while services own
@@ -44,20 +31,12 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		return err
 	}
 	c := o.config
-	if c.Companion.Enabled && c.Companion.BindIP == "" {
-		// The GUI has no interface picker; without an IP transport.New would
-		// reject the whole agent. Pick the default-route IPv4 locally — a UDP
-		// "connect" consults the routing table and sends no packets.
-		ip := defaultRouteIPv4()
-		if ip == "" {
-			return errors.New("select_lan_interface")
-		}
-		c.Companion.BindIP = ip
-	}
 	log := logging.L("agent")
 	log.Info("agent_start", "pid", os.Getpid(), "collector", c.Collector.Enabled, "companion", c.Companion.Enabled,
 		"codex", c.Codex.Enabled, "music", c.Music.Enabled, "github", c.GitHub.Enabled, "ipc", o.ipcSocket != "")
-	application, err := app.New(c, o.cacheDir)
+	// A GUI-capable Agent keeps the collector Manager prepared even when the
+	// Settings switch is off, so enabling collection stays a hot update.
+	application, err := app.NewWithOptions(c, o.cacheDir, app.Options{PrepareCollector: o.ipcSocket != "", CollectorAPI: o.collectorAPI})
 	if err != nil {
 		return err
 	}
@@ -127,7 +106,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		_, _ = fmt.Fprintln(errOut, "ipc_listening:", o.ipcSocket)
 	}
 	var localAPI *collector.API
-	if application.Collector != nil {
+	if manager := application.Collector(); manager != nil {
 		if o.collectorScan {
 			caps, e := application.DiscoverCollectorMetrics(ctx)
 			if e != nil {
@@ -135,17 +114,24 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 			}
 			return json.NewEncoder(out).Encode(caps)
 		}
-		if err := application.Collector.Restore(ctx); err != nil {
-			log.Warn("collector_restore_failed", "error", err)
-			_, _ = fmt.Fprintln(errOut, "collector_restore_failed:", err)
+		if application.CollectorEnabled() {
+			if err := manager.Restore(ctx); err != nil {
+				log.Warn("collector_restore_failed", "error", err)
+				_, _ = fmt.Fprintln(errOut, "collector_restore_failed:", err)
+			}
+		} else if err := manager.Load(); err != nil {
+			log.Warn("collector_load_failed", "error", err)
+			_, _ = fmt.Fprintln(errOut, "collector_load_failed:", err)
 		}
-		if application.Collector.Capabilities().SchemaVersion == 0 {
-			if _, err := application.DiscoverCollectorMetrics(ctx); err != nil {
+		// Warm capabilities even while paused so a Settings enable starts
+		// without paying a fresh hardware discovery on the request path.
+		if manager.Capabilities().SchemaVersion == 0 {
+			if _, err := manager.Discover(ctx); err != nil {
 				log.Warn("collector_discovery_failed", "error", err)
 				_, _ = fmt.Fprintln(errOut, "collector_discovery_failed:", err)
 			}
 		}
-		if o.collectorConfig != "" && application.Collector.Snapshot().Revision == 0 {
+		if o.collectorConfig != "" && application.CollectorEnabled() && manager.Snapshot().Revision == 0 {
 			data, err := os.ReadFile(o.collectorConfig)
 			if err != nil {
 				return err
@@ -154,12 +140,12 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 			if err := json.Unmarshal(data, &config); err != nil {
 				return errors.New("invalid_collector_config_file")
 			}
-			if _, err := application.Collector.Apply(ctx, config); err != nil {
+			if _, err := manager.Apply(ctx, config); err != nil {
 				return err
 			}
 		}
 		if o.collectorAPI != "" {
-			localAPI, err = application.Collector.ListenAPI(o.collectorAPI)
+			localAPI, err = manager.ListenAPI(o.collectorAPI)
 			if err != nil {
 				return err
 			}
@@ -168,13 +154,14 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	}
 	service := application.Companion
 	writeSnapshot := func() error {
-		if application.Collector == nil {
+		manager := application.Collector()
+		if manager == nil || !application.CollectorEnabled() {
 			return json.NewEncoder(out).Encode(service.Snapshot())
 		}
 		return json.NewEncoder(out).Encode(struct {
 			companion.Snapshot
 			Collector collector.Snapshot `json:"collector"`
-		}{Snapshot: service.Snapshot(), Collector: application.Collector.Snapshot()})
+		}{Snapshot: service.Snapshot(), Collector: manager.Snapshot()})
 	}
 	// Provider requests execute on a worker; the snapshot loop stays responsive.
 	done := make(chan struct{})

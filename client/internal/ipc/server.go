@@ -114,6 +114,17 @@ type loginTaskRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
+type collectorSettingsRequest struct {
+	Enabled         bool   `json:"enabled"`
+	UploadURL       string `json:"upload_url"`
+	UploadTokenFile string `json:"upload_token_file"`
+}
+
+type companionSettingsRequest struct {
+	Enabled bool   `json:"enabled"`
+	BindIP  string `json:"bind_ip"`
+}
+
 type serverTestRequest struct {
 	BaseURL string `json:"base_url"`
 }
@@ -219,8 +230,8 @@ func (s *Server) status() Status {
 		SchemaVersion:    SchemaVersion,
 		PID:              os.Getpid(),
 		StartTime:        s.startAt,
-		CollectorEnabled: s.app.Collector != nil,
-		CompanionEnabled: s.app.Monitor != nil,
+		CollectorEnabled: s.app.CollectorEnabled(),
+		CompanionEnabled: s.app.Monitor() != nil,
 		SocketPath:       s.opts.SocketPath,
 	}
 	snapshot := s.app.Companion.Snapshot()

@@ -17,7 +17,7 @@ func (m *Manager) prepareV2(c Config) (Config, error) {
 	if c.Upload == nil {
 		return c, nil
 	}
-	if c.Upload.Enabled && m.opts.UploadURL == "" {
+	if c.Upload.Enabled && m.uploadTarget().URL == "" {
 		return c, errors.New("upload_not_configured")
 	}
 	if c.Upload.IntervalSeconds == 0 {

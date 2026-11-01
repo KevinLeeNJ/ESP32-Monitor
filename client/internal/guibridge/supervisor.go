@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"sync"
 	"time"
 
@@ -15,9 +14,9 @@ import (
 	"esp32-monitor/client/internal/logging"
 )
 
-// Supervisor owns the Agent child process. It spawns the binary with settings
-// derived flags, restarts it with capped backoff after crashes, and performs
-// graceful restarts when settings change.
+// Supervisor owns the Agent child process. Flags only define the Agent's
+// initial state: Settings changes are applied over IPC, while manual restarts
+// and crash recovery use the latest settings to respawn it.
 type Supervisor struct {
 	mu        sync.Mutex
 	settings  Settings
@@ -446,45 +445,68 @@ func (s *Supervisor) SetLoginTask(ctx context.Context, enabled bool) error {
 	})
 }
 
-// UpdateSettings replaces settings and restarts the Agent only when the
-// settings that decide its flags changed. UI-only preferences keep it alive.
+// UpdateSettings applies every change to the running Agent. The Agent keeps
+// running; only a manual restart or crash recovery respawns it.
 func (s *Supervisor) UpdateSettings(ctx context.Context, settings Settings) error {
 	s.mu.Lock()
 	previous := s.settings
-	restart := !slices.Equal(s.agentArgsFor(previous), s.agentArgsFor(settings))
-	s.settings = settings
 	s.mu.Unlock()
-	if !restart {
+	if previous == settings {
 		return nil
 	}
-	githubOnly := previous
-	githubOnly.GitHub.Login = settings.GitHub.Login
-	musicOnly := previous
-	musicOnly.Music.Enabled = settings.Music.Enabled
-	codexOnly := previous
-	codexOnly.Codex.Enabled = settings.Codex.Enabled
-	if slices.Equal(s.agentArgsFor(githubOnly), s.agentArgsFor(settings)) || slices.Equal(s.agentArgsFor(musicOnly), s.agentArgsFor(settings)) || slices.Equal(s.agentArgsFor(codexOnly), s.agentArgsFor(settings)) {
-		if err := s.awaitRestart(ctx); err != nil {
-			return err
-		}
-		err := s.Call(func(client *ipc.Client) error {
-			if previous.GitHub.Login != settings.GitHub.Login {
-				return client.SetGitHubLogin(ctx, settings.GitHub.Login)
-			}
-			if previous.Codex.Enabled != settings.Codex.Enabled {
-				return client.SetCodexEnabled(ctx, settings.Codex.Enabled)
-			}
-			return client.SetMusicEnabled(ctx, settings.Music.Enabled)
-		})
-		if err == nil {
-			return nil
-		}
+	err := s.Call(func(client *ipc.Client) error {
+		callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		return applySettingsDiff(callCtx, client, previous, settings)
+	})
+	if err != nil {
 		var apiErr *ipc.APIError
-		if !errors.As(err, &apiErr) || apiErr.Status != 404 {
+		if errors.As(err, &apiErr) && apiErr.Status == 404 {
+			return errors.New("agent_hot_update_unsupported")
+		}
+		// A later field may have failed after earlier fields were applied.
+		_ = s.Call(func(client *ipc.Client) error {
+			callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			return applySettingsDiff(callCtx, client, settings, previous)
+		})
+		return err
+	}
+	s.mu.Lock()
+	s.settings = settings
+	s.mu.Unlock()
+	return nil
+}
+
+func applySettingsDiff(ctx context.Context, client *ipc.Client, from, to Settings) error {
+	if from.GitHub.Login != to.GitHub.Login {
+		if err := client.SetGitHubLogin(ctx, to.GitHub.Login); err != nil {
 			return err
 		}
 	}
-	return s.Restart(ctx)
+	if from.Music.Enabled != to.Music.Enabled {
+		if err := client.SetMusicEnabled(ctx, to.Music.Enabled); err != nil {
+			return err
+		}
+	}
+	if from.Codex.Enabled != to.Codex.Enabled {
+		if err := client.SetCodexEnabled(ctx, to.Codex.Enabled); err != nil {
+			return err
+		}
+	}
+	if from.Companion.Enabled != to.Companion.Enabled || from.Companion.BindIP != to.Companion.BindIP {
+		if err := client.SetCompanionSettings(ctx, to.Companion.Enabled, to.Companion.BindIP); err != nil {
+			return err
+		}
+	}
+	if from.Collector.Enabled != to.Collector.Enabled ||
+		from.Collector.UploadURL != to.Collector.UploadURL ||
+		from.Collector.UploadTokenFile != to.Collector.UploadTokenFile {
+		if err := client.SetCollectorSettings(ctx, to.Collector.Enabled, to.Collector.UploadURL, to.Collector.UploadTokenFile); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Stop terminates the Agent and the management loop.

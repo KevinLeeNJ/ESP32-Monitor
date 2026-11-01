@@ -11,6 +11,9 @@ const previewTTL = 15 * time.Second
 // MarkPreview records that a GUI is consuming snapshots. Preview gathering
 // stops once the TTL expires, so a headless Agent only reads upload selections.
 func (m *Manager) MarkPreview() {
+	if m.disabled.Load() {
+		return
+	}
 	now := time.Now()
 	previous := m.previewAt.Swap(now.UnixNano())
 	if previous == 0 || now.Sub(time.Unix(0, previous)) >= previewTTL {
@@ -41,7 +44,7 @@ func (m *Manager) startPreview() {
 		m.previewStarting = false
 		m.mu.Unlock()
 	}()
-	if m.closed || m.current != nil || !m.previewActive() {
+	if m.closed || m.disabled.Load() || m.current != nil || !m.previewActive() {
 		return
 	}
 	snapshot := m.Snapshot()

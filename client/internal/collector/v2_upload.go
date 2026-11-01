@@ -31,7 +31,7 @@ func queueBytes(q []queued) int {
 func (m *Manager) enqueueV2ProfileLocked(c Config, revision uint64) {
 	// The same V2 state also powers local previews.  Without an endpoint there
 	// is nowhere to deliver a profile, so do not create a retrying upload job.
-	if m.v2 == nil || m.opts.UploadURL == "" {
+	if m.v2 == nil || m.uploadTarget().URL == "" {
 		return
 	}
 	p := m.profileV2(c)
@@ -71,8 +71,11 @@ func (m *Manager) enqueueV2Locked(g *generation, s v2.Sample, at time.Time) {
 	default:
 	}
 }
-func (m *Manager) requestV2(ctx context.Context, method, path string, body []byte, condition string) (int, http.Header, []byte, error) {
-	token, e := m.opts.UploadToken(ctx)
+func (m *Manager) requestV2(ctx context.Context, target *uploadTarget, method, path string, body []byte, condition string) (int, http.Header, []byte, error) {
+	if target == nil || target.token == nil {
+		return 401, nil, nil, errors.New("upload_auth_required")
+	}
+	token, e := target.token(ctx)
 	if e != nil || token == "" {
 		return 401, nil, nil, errors.New("upload_auth_required")
 	}
@@ -111,10 +114,20 @@ func revisionHeader(h http.Header) (uint64, error) {
 	}
 	return n, nil
 }
-func (m *Manager) syncV2(ctx context.Context, want *v2.Profile) (int, http.Header, error) {
-	// A new registration may issue a different device token at the same URL.
-	// Never let an old device's confirmed cache suppress the first Profile upload.
-	token, err := m.opts.UploadToken(ctx)
+func (m *Manager) syncV2(ctx context.Context, target *uploadTarget, want *v2.Profile) (int, http.Header, error) {
+	if target == nil || target.URL == "" {
+		return 401, nil, errors.New("upload_auth_required")
+	}
+	// A new registration may issue a different device token, and the GUI may
+	// switch Servers without restarting the Agent. Never let a cache confirmed
+	// against another endpoint or credential suppress the first Profile upload.
+	if m.v2.Endpoint != target.URL {
+		m.v2.Endpoint = target.URL
+		m.v2.Profile = nil
+		m.v2.Revision = 0
+		m.v2.AuthHash = ""
+	}
+	token, err := target.token(ctx)
 	if err != nil || token == "" {
 		return 401, nil, errors.New("upload_auth_required")
 	}
@@ -129,7 +142,7 @@ func (m *Manager) syncV2(ctx context.Context, want *v2.Profile) (int, http.Heade
 	if m.v2.Profile != nil && m.v2.Revision > 0 && reflect.DeepEqual(*m.v2.Profile, *want) {
 		return 200, nil, nil
 	}
-	status, headers, data, e := m.requestV2(ctx, "GET", m.profileURL(), nil, "")
+	status, headers, data, e := m.requestV2(ctx, target, "GET", m.profileURL(target), nil, "")
 	if e != nil {
 		return status, headers, e
 	}
@@ -162,7 +175,7 @@ func (m *Manager) syncV2(ctx context.Context, want *v2.Profile) (int, http.Heade
 	if len(body) > maxBody {
 		return 413, nil, errors.New("v2_profile_too_large")
 	}
-	status, headers, data, e = m.requestV2(ctx, method, m.profileURL(), body, condition)
+	status, headers, data, e = m.requestV2(ctx, target, method, m.profileURL(target), body, condition)
 	if e != nil {
 		return status, headers, e
 	}
@@ -184,9 +197,14 @@ func (m *Manager) syncV2(ctx context.Context, want *v2.Profile) (int, http.Heade
 	return 200, headers, m.persistV2()
 }
 func (m *Manager) deliverV2(q queued) {
+	target := m.uploadTarget()
+	if target == nil || target.URL == "" || target.token == nil {
+		m.finishDelivery(q, 503, nil)
+		return
+	}
 	ctx, cancel := context.WithTimeout(m.ctx, 8*time.Second)
 	defer cancel()
-	status, headers, e := m.syncV2(ctx, q.profile)
+	status, headers, e := m.syncV2(ctx, target, q.profile)
 	if e != nil {
 		if status >= 200 && status < 300 {
 			status = 503
@@ -212,7 +230,7 @@ func (m *Manager) deliverV2(q queued) {
 		m.finishDelivery(q, 413, nil)
 		return
 	}
-	status, headers, data, e := m.requestV2(ctx, "POST", m.opts.UploadURL, body, "")
+	status, headers, data, e := m.requestV2(ctx, target, "POST", target.URL, body, "")
 	if e != nil && status == 0 {
 		m.finishDelivery(q, 0, headers)
 		return
