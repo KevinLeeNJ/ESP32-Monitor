@@ -33,14 +33,15 @@ static monitor_sensor_data_t s_data = {
 
 static int battery_percent_from_voltage(float v)
 {
-    /* Typical 1S NMC/NCA discharge curve, measured under light load. Voltage
-     * is intentionally piecewise-linear rather than a straight 3.0..4.2 V
-     * fit, preserving the long flat plateau and steep end-of-discharge knee. */
+    /* Approximate NMC OCV/SOC curve, normalized to 3.00 V = 0% and
+     * 4.16 V = 100%. Loaded cell voltage and temperature affect accuracy.
+     * Reference: REIL-UConn SOC-OCV-NMC.txt (Applied Energy 2026). */
     static const struct { float v; int pct; } curve[] = {
-        {4.20f, 100}, {4.15f, 95}, {4.10f, 90}, {4.05f, 85},
-        {4.00f, 80}, {3.95f, 70}, {3.90f, 60}, {3.85f, 50},
-        {3.80f, 40}, {3.75f, 30}, {3.70f, 20}, {3.65f, 15},
-        {3.50f, 12}, {3.30f, 0},
+        {4.16f, 100}, {4.13f, 97}, {4.10f, 95}, {4.05f, 90},
+        {4.00f, 86}, {3.95f, 81}, {3.90f, 76}, {3.85f, 71},
+        {3.80f, 65}, {3.75f, 60}, {3.70f, 53}, {3.65f, 39},
+        {3.60f, 24}, {3.50f, 13}, {3.40f, 4}, {3.30f, 2},
+        {3.20f, 1}, {3.00f, 0},
     };
     if (v >= curve[0].v) return 100;
     if (v <= curve[sizeof(curve) / sizeof(curve[0]) - 1].v) return 0;

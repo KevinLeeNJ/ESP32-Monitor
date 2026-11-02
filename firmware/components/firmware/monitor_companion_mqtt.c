@@ -181,8 +181,13 @@ static void run_session(void *arg)
     const char *why="resource";
     bool host_revoked=false, peer_goodbye=false;
     log_heap("worker start");
-    uint8_t *rx=malloc(RX_CAPACITY);
-    esp32monitor_companion_Config *config=calloc(1,sizeof *config), *candidate=calloc(1,sizeof *candidate);
+    /* Protocol data is CPU-only; preserve internal RAM for Wi-Fi and task stacks. */
+    uint8_t *rx=heap_caps_malloc_prefer(RX_CAPACITY,2,
+        MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT,MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    esp32monitor_companion_Config *config=heap_caps_calloc_prefer(1,sizeof *config,2,
+        MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT,MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    esp32monitor_companion_Config *candidate=heap_caps_calloc_prefer(1,sizeof *candidate,2,
+        MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT,MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
     monitor_lan_session_t *session=NULL;
     if (!rx || !config || !candidate) goto done;
     job->socket=dial(job->address,job->port);

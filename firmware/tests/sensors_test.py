@@ -66,8 +66,16 @@ static void reset(void) {
 int main(void) {
     /* Independent datasheet CRC reference: BE EF -> 92 (SHTC3 polynomial 0x31). */
     const uint8_t vector[]={0xbe,0xef}; assert(shtc3_crc(vector)==0x92);
-    assert(battery_percent_from_voltage(3.3f)==0);
-    assert(battery_percent_from_voltage(3.85f)==50);
+    assert(battery_percent_from_voltage(2.9f)==0);
+    assert(battery_percent_from_voltage(3.0f)==0);
+    assert(battery_percent_from_voltage(3.3f)==2);
+    assert(battery_percent_from_voltage(3.5f)==13);
+    assert(battery_percent_from_voltage(3.6f)==24);
+    assert(battery_percent_from_voltage(3.7f)==53);
+    assert(battery_percent_from_voltage(3.85f)==71);
+    assert(battery_percent_from_voltage(4.1f)==95);
+    assert(battery_percent_from_voltage(4.13f)==97);
+    assert(battery_percent_from_voltage(4.16f)==100);
     assert(battery_percent_from_voltage(4.2f)==100);
     int previous=-1;
     for (unsigned mv=2500;mv<=5000;++mv) {

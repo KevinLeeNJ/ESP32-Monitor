@@ -186,7 +186,8 @@ static bool send_frame(serial_ctx_t *ctx, uint8_t type, const uint8_t *payload, 
 static bool send_envelope(serial_ctx_t *ctx, uint8_t type, const esp32monitor_companion_Envelope *envelope,
                           bool authenticated)
 {
-    uint8_t *buffer = malloc(8192);
+    uint8_t *buffer = heap_caps_malloc_prefer(8192, 2,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!buffer) return false;
     size_t length = 0;
     bool ok = monitor_serial_envelope_encode(envelope, buffer, 8192, &length) &&
@@ -345,10 +346,16 @@ static bool send_config(serial_ctx_t *ctx)
     uint32_t seq = ctx->tx_seq + 1;
     if (!monitor_serial_config_nonce(seq, nonce)) return false;
 
-    /* Config plus ciphertext exceeds the task stack; keep every large buffer on the heap. */
+    /* CPU-only encoding buffers prefer PSRAM; USB frames stay internal in send_frame(). */
     enum { PLAIN_CAP = 2048, SEALED_CAP = PLAIN_CAP + 16, INNER_CAP = 2560, WRAPPED_CAP = 2688 };
-    uint8_t *buffers = malloc(WRAPPED_CAP);
-    uint8_t *plain = malloc(PLAIN_CAP), *sealed = malloc(SEALED_CAP), *inner = malloc(INNER_CAP);
+    uint8_t *buffers = heap_caps_malloc_prefer(WRAPPED_CAP, 2,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    uint8_t *plain = heap_caps_malloc_prefer(PLAIN_CAP, 2,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    uint8_t *sealed = heap_caps_malloc_prefer(SEALED_CAP, 2,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    uint8_t *inner = heap_caps_malloc_prefer(INNER_CAP, 2,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     heap_sample(ctx);
     if (!buffers || !plain || !sealed || !inner) {
         free(buffers); free(plain); free(sealed); free(inner);

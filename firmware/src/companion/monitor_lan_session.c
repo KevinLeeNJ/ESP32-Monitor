@@ -83,7 +83,7 @@ monitor_lan_session_t *monitor_lan_create(const char *host, const char *device, 
                                          uint64_t now)
 {
     if (!config || !send || !apply) return NULL;
-    monitor_lan_session_t *s = calloc(1, sizeof *s);
+    monitor_lan_session_t *s = large_calloc(sizeof *s);
     if (!s) return NULL;
     if (!copy_id(s->host, host) || !copy_id(s->device, device) || !copy_id(s->pairing, pairing) ||
         !copy_id(s->session, session) || !copy_id(s->open_request, open_request) ||
@@ -103,7 +103,7 @@ monitor_lan_session_t *monitor_lan_create_serial(const char *host, const char *d
                                                  uint64_t now)
 {
     if (!config || !send || !apply) return NULL;
-    monitor_lan_session_t *s = calloc(1, sizeof *s);
+    monitor_lan_session_t *s = large_calloc(sizeof *s);
     if (!s) return NULL;
     if (!copy_id(s->host, host) || !copy_id(s->device, device) || !copy_id(s->pairing, pairing) ||
         !copy_id(s->session, session) ||

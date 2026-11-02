@@ -33,7 +33,9 @@ code = r'''
 #include <zlib.h>
 #define ESP_OK 0
 #define ESP_FAIL -1
+#define ESP_ERR_HTTP_CONNECT -2
 #define ESP_LOGW(...) ((void)0)
+#define ESP_LOGI(...) ((void)0)
 #define TAG "fixture"
 #define HTTP_EVENT_ON_DATA 1
 #define HTTP_EVENT_ON_HEADER 2
@@ -47,6 +49,14 @@ static struct {esp_http_client_config_t config;} client;
 static unsigned created,cleaned,watchdogs,headers,performed,allocations,alloc_calls,fail_alloc;
 static unsigned chunk=3;
 static bool fail_init,fail_perform,fail_header,complete=true,redirect,partial_output;
+static bool s_wifi_available=true,s_companion_active,disconnect_on_delay,companion_on_delay;
+static unsigned connect_failures,delays;
+#define pdMS_TO_TICKS(ms) (ms)
+static void vTaskDelay(unsigned ms){
+    assert(ms==1000 && created==cleaned && !allocations);++delays;
+    if(disconnect_on_delay)s_wifi_available=false;
+    if(companion_on_delay)s_companion_active=true;
+}
 static int http_status=200;
 static const uint8_t *wire;static size_t wire_size;
 static const char *encoding;
@@ -80,7 +90,7 @@ static int esp_http_client_get_status_code(esp_http_client_handle_t c){assert(c)
 static bool esp_http_client_is_complete_data_received(esp_http_client_handle_t c){assert(c);return complete;}
 static void esp_http_client_cleanup(esp_http_client_handle_t c){assert(c);++cleaned;}
 '''
-code += defines(source, ['HTTP_TIMEOUT_MS']) + '\n'
+code += defines(source, ['HTTP_TIMEOUT_MS', 'HTTP_CONNECT_ATTEMPTS', 'HTTP_CONNECT_RETRY_MS']) + '\n'
 code += source[source.index('typedef struct {'):source.index('static bool parse_coordinate')]
 for name, body in [('gzip_body', compressed), ('extended', extended), ('large_header', large_header),
                    ('large_json', large_json), ('large_gzip', gzip.compress(large_json, mtime=0)),
@@ -94,7 +104,8 @@ static void emit(esp_http_client_handle_t c,int id,void *data,int len,const char
     (void)c->config.event_handler(&e);
 }
 static int esp_http_client_perform(esp_http_client_handle_t c){
-    assert(headers==1);++performed;
+    assert(headers==created);++performed;
+    if(performed<=connect_failures)return ESP_ERR_HTTP_CONNECT;
     if(fail_perform)return ESP_FAIL;
     emit(c,HTTP_EVENT_HEADERS_SENT,NULL,0,NULL,NULL);
     if(redirect){
@@ -119,6 +130,8 @@ static void reset(void){
     assert(!allocations);
     created=cleaned=watchdogs=headers=performed=alloc_calls=fail_alloc=0;
     chunk=3;fail_init=fail_perform=fail_header=redirect=partial_output=false;
+    s_wifi_available=true;s_companion_active=disconnect_on_delay=companion_on_delay=false;
+    connect_failures=delays=0;
     complete=true;encoding=NULL;http_status=200;
     wire=(const uint8_t *)"{\"code\":\"200\"}";wire_size=strlen((const char *)wire);
 }
@@ -140,8 +153,23 @@ int main(void){
     reset();fail_init=true;assert(!http_get("url",out,sizeof(out),NULL) && !created && !out[0]);
     reset();fail_header=true;assert(!http_get("url",out,sizeof(out),NULL) && headers==1 && !performed && created==cleaned);
     reset();fail_perform=true;assert(!http_get("url",out,sizeof(out),NULL) && created==cleaned);
+    // Cold-start DNS failure must recover before the next scheduled refresh.
+    reset();connect_failures=1;assert(http_get("url",out,sizeof(out),NULL));
+    assert(performed==2 && delays==1 && created==cleaned && !allocations);
+    reset();connect_failures=2;assert(http_get("url",out,sizeof(out),NULL));
+    assert(performed==3 && delays==2 && created==cleaned);
+    reset();connect_failures=10;assert(!http_get("url",out,sizeof(out),NULL));
+    assert(performed==3 && delays==2 && created==cleaned && !out[0]);
+    reset();connect_failures=1;disconnect_on_delay=true;
+    assert(!http_get("url",out,sizeof(out),NULL) && performed==1 && delays==1);
+    reset();connect_failures=1;companion_on_delay=true;
+    assert(!http_get("url",out,sizeof(out),NULL) && performed==1 && delays==1);
+    reset();connect_failures=1;s_wifi_available=false;
+    assert(!http_get("url",out,sizeof(out),NULL) && performed==1 && !delays);
+    reset();connect_failures=1;s_companion_active=true;
+    assert(!http_get("url",out,sizeof(out),NULL) && performed==1 && !delays);
     const int errors[]={301,400,401,403,404,429,500,503};
-    for(unsigned i=0;i<sizeof(errors)/sizeof(*errors);++i){reset();http_status=errors[i];assert(!http_get("url",out,sizeof(out),NULL) && created==cleaned);}
+    for(unsigned i=0;i<sizeof(errors)/sizeof(*errors);++i){reset();http_status=errors[i];assert(!http_get("url",out,sizeof(out),NULL) && created==cleaned && performed==1 && !delays);}
     reset();wire_size=0;assert(!http_get("url",out,sizeof(out),NULL) && created==cleaned);
     reset();assert(!http_get("url",out,5,NULL) && !out[0] && created==cleaned);
     reset();assert(http_get("url",out,wire_size+1,NULL) && out[wire_size]==0);

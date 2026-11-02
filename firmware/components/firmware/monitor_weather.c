@@ -14,7 +14,9 @@
 #include "esp_check.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_netif.h"
 #include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -25,6 +27,8 @@
 #define WEATHER_EVT_UPDATE BIT0
 #define WEATHER_EVT_WIFI_CHANGED BIT1
 #define HTTP_TIMEOUT_MS 4000
+#define HTTP_CONNECT_ATTEMPTS 3
+#define HTTP_CONNECT_RETRY_MS 1000
 #define RESPONSE_MAX 8192
 
 static TaskHandle_t s_task;
@@ -127,8 +131,10 @@ static esp_err_t http_collect_event(esp_http_client_event_t *event)
     return ctx->failed ? ESP_FAIL : ESP_OK;
 }
 
-static bool http_get(const char *url, char *out, size_t out_size, const char *api_key)
+static bool http_get_once(const char *url, char *out, size_t out_size, const char *api_key,
+                          bool *retryable)
 {
+    *retryable = false;
     if (out_size == 0 || out_size > UINT_MAX) return false;
     response_context_t response = {.buffer = out, .capacity = out_size};
     out[0] = '\0';
@@ -145,6 +151,7 @@ static bool http_get(const char *url, char *out, size_t out_size, const char *ap
     if (client == NULL) return false;
     esp_err_t perform_err = esp_http_client_set_header(client, "Accept-Encoding", "gzip, identity");
     if (perform_err == ESP_OK) perform_err = esp_http_client_perform(client);
+    *retryable = perform_err == ESP_ERR_HTTP_CONNECT;
     int status = esp_http_client_get_status_code(client);
     bool ok = perform_err == ESP_OK && status == 200 && !response.failed &&
               response.length > 0 && (!response.gzip || response.finished) &&
@@ -158,6 +165,24 @@ static bool http_get(const char *url, char *out, size_t out_size, const char *ap
     esp_http_client_cleanup(client);
     if (response.initialized) inflateEnd(&response.inflater);
     return ok;
+}
+
+static bool http_get(const char *url, char *out, size_t out_size, const char *api_key)
+{
+    for (unsigned attempt = 0; attempt < HTTP_CONNECT_ATTEMPTS; ++attempt) {
+        bool retryable;
+        if (http_get_once(url, out, out_size, api_key, &retryable)) return true;
+        if (!retryable || attempt + 1 == HTTP_CONNECT_ATTEMPTS ||
+            !s_wifi_available || s_companion_active) return false;
+        /* DHCP/DNS can lag the first request. Release the failed client before
+         * retrying, and let Companion ownership or disconnect cancel recovery. */
+        ESP_LOGI(TAG, "connection retry %u/%u", attempt + 2, HTTP_CONNECT_ATTEMPTS);
+        feed_task_watchdog();
+        vTaskDelay(pdMS_TO_TICKS(HTTP_CONNECT_RETRY_MS));
+        feed_task_watchdog();
+        if (!s_wifi_available || s_companion_active) return false;
+    }
+    return false;
 }
 
 static bool parse_coordinate(const char *text, float min, float max, float *out)
@@ -209,7 +234,8 @@ static bool locate_by_public_ip(float *lat, float *lon)
 {
     /* PERF may inline this function into update_weather and keep its stack
      * frame alive during the later TLS requests. Do not reserve 8 KB there. */
-    char *response = malloc(RESPONSE_MAX);
+    char *response = heap_caps_malloc_prefer(RESPONSE_MAX, 2,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (response == NULL) return false;
     if (!http_get("http://ipwho.is/", response, RESPONSE_MAX, NULL)) {
         free(response);
@@ -293,7 +319,8 @@ static void update_weather(void)
     snprintf(aqi_url, sizeof(aqi_url),
              "https://%s/airquality/v1/current/%.5f/%.5f?key=%s&lang=zh", host, lat, lon, key);
 
-    char *response = (char *)malloc(RESPONSE_MAX);
+    char *response = heap_caps_malloc_prefer(RESPONSE_MAX, 2,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (response == NULL) {
         ESP_LOGE(TAG, "weather response allocation failed (%d bytes), free heap=%u",
                  RESPONSE_MAX, (unsigned)esp_get_free_heap_size());
@@ -395,9 +422,23 @@ void monitor_weather_set_companion_active(bool active)
     if (!active) monitor_weather_request_refresh();
 }
 
+static void log_dns_servers(void)
+{
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (!netif) return;
+    for (unsigned i = 0; i < ESP_NETIF_DNS_MAX; ++i) {
+        esp_netif_dns_info_t dns = {0};
+        if (esp_netif_get_dns_info(netif, (esp_netif_dns_type_t)i, &dns) == ESP_OK &&
+            dns.ip.type == ESP_IPADDR_TYPE_V4 && dns.ip.u_addr.ip4.addr) {
+            ESP_LOGI(TAG, "DNS server[%u]: " IPSTR, i, IP2STR(&dns.ip.u_addr.ip4));
+        }
+    }
+}
+
 void monitor_weather_on_wifi_connected(void)
 {
     s_wifi_available = true;
+    log_dns_servers();
     monitor_weather_request_refresh();
 }
 

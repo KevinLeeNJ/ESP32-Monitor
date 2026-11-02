@@ -5,7 +5,9 @@ source = (REPO / 'firmware/components/firmware/monitor_clock.c').read_text()
 code = r'''
 #include <assert.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+#include <time.h>
 #define ESP_OK 0
 #define eNoAction 0
 #define TAG "clock"

@@ -4,6 +4,7 @@ from host_harness import REPO, defines, function, run
 source=(REPO/'firmware/components/firmware/monitor_weather.c').read_text()
 code=r'''
 #include <assert.h>
+#include <stdarg.h>
 #include <setjmp.h>
 #include <math.h>
 #include <limits.h>
@@ -66,8 +67,18 @@ static const char *weather_body="{\"code\":\"200\",\"now\":{\"icon\":\"100\"}}";
 static const char *aqi_body="{\"indexes\":[{\"aqiDisplay\":\"42\"}]}";
 static void *test_malloc(size_t size){return alloc_ok?malloc(size):NULL;}
 #define malloc test_malloc
+#define MALLOC_CAP_SPIRAM 1u
+#define MALLOC_CAP_INTERNAL 2u
+#define MALLOC_CAP_8BIT 4u
+static void *heap_caps_malloc_prefer(size_t size,size_t count,...) {
+    va_list caps;va_start(caps,count);
+    assert(count==2 && va_arg(caps,unsigned)==(MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+    assert(va_arg(caps,unsigned)==(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
+    va_end(caps);return test_malloc(size);
+}
 static unsigned esp_get_free_heap_size(void){return 100000;}
 static void feed_task_watchdog(void) {}
+static void log_dns_servers(void) {}
 static int nvs_open(const char *ns,int mode,nvs_handle_t *out){assert(!strcmp(ns,"monitor_loc") && mode==0);if(!nvs_ok)return ESP_FAIL;*out=1;++opened;return ESP_OK;}
 static int nvs_get_str(int handle,const char *name,char *out,size_t *size){
     assert(handle==1);
