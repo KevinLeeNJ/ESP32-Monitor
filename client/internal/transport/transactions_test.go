@@ -161,6 +161,32 @@ func TestSerialDiscoveryHidesNonUSBVirtualPorts(t *testing.T) {
 	}
 }
 
+func TestLikelyMonitorSerialRecognizesWindowsPorts(t *testing.T) {
+	cases := []struct {
+		name string
+		port DiscoveredDevice
+		want bool
+	}{
+		{"esp32 usb jtag", DiscoveredDevice{Port: "COM5", VID: "303A"}, true},
+		{"esp32 usb jtag prefixed vid", DiscoveredDevice{Port: "COM10", VID: "0x303A"}, true},
+		{"cp210x", DiscoveredDevice{Port: "COM12", VID: "10C4"}, true},
+		{"ch340", DiscoveredDevice{Port: "COM7", VID: "1A86"}, true},
+		{"ftdi", DiscoveredDevice{Port: "COM11", VID: "0403"}, true},
+		{"unknown usb serial", DiscoveredDevice{Port: "COM6"}, false},
+		{"bluetooth virtual port", DiscoveredDevice{Port: "COM4", VID: ""}, false},
+		{"linux usb serial", DiscoveredDevice{Port: "/dev/ttyUSB0"}, true},
+		{"mac usb modem", DiscoveredDevice{Port: "/dev/cu.usbmodem1101"}, true},
+		{"mac bluetooth port", DiscoveredDevice{Port: "/dev/cu.Bluetooth-Incoming-Port"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := likelyMonitorSerial(c.port); got != c.want {
+				t.Fatalf("likelyMonitorSerial(%+v) = %v, want %v", c.port, got, c.want)
+			}
+		})
+	}
+}
+
 func TestPairedSerialPortKeepsIdentityFromStore(t *testing.T) {
 	b, e := New(Options{StoreDirectory: filepath.Join(t.TempDir(), "vault"), HostName: "frontend-host", BindIP: "127.0.0.1", MQTTAddress: "127.0.0.1:0", HTTPAddress: "127.0.0.1:0", EnumerateSerial: func() ([]DiscoveredDevice, error) {
 		return []DiscoveredDevice{{Name: "USB JTAG serial", ConnectionType: "serial", Port: "/dev/cu.usbmodem1101", VID: "303A", PID: "1001", State: "unverified"}}, nil

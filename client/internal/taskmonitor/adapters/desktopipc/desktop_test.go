@@ -117,6 +117,24 @@ func TestDesktopHistoricalCompletionStaysIdle(t *testing.T) {
 		t.Fatal("historical completion replayed as new")
 	}
 }
+func TestDesktopQuietConnectedStreamKeepsTaskFresh(t *testing.T) {
+	d, now := desktopFixture(t)
+	snapshot(d, rawState("a", "active", "inProgress", "t"), 1)
+	first := d.Snapshot()
+	if first.State != taskmonitor.Running || first.Health.State != providers.Healthy || first.Health.LastSuccessAt == nil {
+		t.Fatal("task not observed")
+	}
+	*now = now.Add(20 * time.Second)
+	quiet := d.Snapshot()
+	if quiet.State != taskmonitor.Running || quiet.Health.LastSuccessAt == nil || !quiet.Health.LastSuccessAt.Equal(*now) {
+		t.Fatalf("quiet connected stream did not renew the task: %+v", quiet.Health)
+	}
+	d.connected = false
+	if s := d.Snapshot(); s.State != taskmonitor.Unknown || s.Health.State != providers.Degraded {
+		t.Fatal("disconnect did not invalidate the task")
+	}
+}
+
 func TestDesktopRevisionsOwnerVersionAndDisconnect(t *testing.T) {
 	d, now := desktopFixture(t)
 	snapshot(d, rawState("a", "active", "inProgress", "t"), 10)
@@ -136,9 +154,14 @@ func TestDesktopRevisionsOwnerVersionAndDisconnect(t *testing.T) {
 	}
 	snapshot(d, rawState("a", "active", "inProgress", "t"), 30)
 	*now = now.Add(16 * time.Second)
-	if d.Snapshot().State != taskmonitor.Unknown {
-		t.Fatal("stale runtime still running")
+	if d.Snapshot().State != taskmonitor.Running {
+		t.Fatal("quiet connected stream lost the last state")
 	}
+	d.connected = false
+	if d.Snapshot().State != taskmonitor.Unknown {
+		t.Fatal("disconnected runtime still running")
+	}
+	d.connected = true
 	snapshot(d, rawState("a", "active", "inProgress", "t"), 30)
 	d.accept("client-status-changed", 1, "", json.RawMessage(`{"clientId":"owner","status":"disconnected"}`))
 	if d.Snapshot().State != taskmonitor.Unknown {

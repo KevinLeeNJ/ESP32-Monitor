@@ -36,7 +36,6 @@ type session struct {
 	receivedHeartbeats int
 
 	lastMusic map[string]any
-	leased    map[string]int64
 
 	id                                                     string
 	pair                                                   Pairing
@@ -121,7 +120,6 @@ func (s *session) run(b *Backend) {
 	s.ages = map[string]ageObservation{}
 	s.transactions = map[string]transaction{}
 	s.sentProof = map[uint32]bool{}
-	s.leased = map[string]int64{}
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -478,9 +476,6 @@ func (s *session) snapshot(b *Backend, sections wire.Sections, sig string) error
 		s.semantic = semantic(sections)
 	}
 	s.recordProof(seq)
-	for _, lease := range leases(sections, seq) {
-		s.leased[lease.Path] = lease.LastSuccessAt
-	}
 	if music, ok := sections.Music.Data.(map[string]any); ok {
 		s.lastMusic, _ = music["current"].(map[string]any)
 	}
@@ -496,15 +491,12 @@ func (s *session) recordProof(seq uint32) {
 }
 func (s *session) heartbeat(b *Backend, sections wire.Sections) error {
 	seq := s.next()
+	/* Every heartbeat repeats the current lease set. Each lease carries the
+	 * age recomputed for this send, so repeating does not fake freshness.
+	 * Omitting an unchanged lease is not neutral: the monitor falls back to
+	 * the snapshot age for that path and can expire a live source between
+	 * two observations of a slow provider. */
 	h := wire.Heartbeat{ProtocolVersion: 1, HostID: b.HostID(), DeviceID: s.pair.DeviceID, SessionID: s.id, Seq: seq, SentAt: time.Now().Unix(), LastSnapshotSeq: &s.lastSnapshot, Epoch: &s.config.Epoch, Revision: &s.config.Revision, Time: &wire.HeartbeatTime{UnixMS: time.Now().UnixMilli(), Offset: s.config.Time.Offset, Trusted: false}, SourceUpdates: leases(sections, s.lastSnapshot)}
-	updates := make([]wire.SourceLease, 0, 7)
-	for _, lease := range h.SourceUpdates {
-		if lease.LastSuccessAt > s.leased[lease.Path] {
-			updates = append(updates, lease)
-			s.leased[lease.Path] = lease.LastSuccessAt
-		}
-	}
-	h.SourceUpdates = updates
 	if s.transport == "serial" {
 		s.outputSeq--
 	}

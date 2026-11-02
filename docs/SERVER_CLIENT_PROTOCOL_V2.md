@@ -201,4 +201,4 @@ Server 仅提供 `GET /v2/devices/summary`，使用独立只读 Bearer。旧 Tel
 
 摘要最多四台在线设备、4096 字节。`device_count` 与 `devices` 长度一致，每台含 `name`、`uptime`、`metric_count:3`、按 CPU/MEM/DISK 排列的 `metrics`；每项含 `name,value,percent`。名称/文本最多 8 字节，缺值为 `--`/null，离线设备省略。CPU/MEM 来自 v2 最新有效值，DISK 在 WebUI 显式选择物理磁盘 ID，以该盘已用量/总容量计算，不沿用挂载点映射。普通指标和在线时效取 `max(3×interval_seconds,30 秒)`。
 
-**当前固件 monitor_devices.c 和 Client Companion 的 proxy.go 仍访问 `/v1/devices/summary`，本次 Server 开发没有修改这些读取方。** 接通摘要链路需另行将它们迁移到 `/v2/devices/summary`。当前验收包括真实 Client Agent → 正式 Server 的注册/档案/采样，不宣称固件摘要全链路已验收。
+固件 [monitor_devices.c](../firmware/components/firmware/monitor_devices.c) 和 Client Companion 的 proxy.go 现已请求 `/v2/devices/summary`。当前验收仍限于本地模拟器和 Companion 代理联调；生产 Server 的摘要链路尚未做真机验收。

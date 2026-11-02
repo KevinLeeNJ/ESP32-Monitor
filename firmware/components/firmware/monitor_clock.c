@@ -26,10 +26,16 @@ static TaskHandle_t s_sync_task;
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool s_time_valid;
 static volatile bool s_rtc_healthy;
+/* The RTC reading is the preferred source until 02:00 invalidates it. Being
+ * readable is not enough: after invalidation the stored time must not be
+ * adopted again before NTP or the Client supplies a fresh reading. */
+static volatile bool s_rtc_trusted;
 static bool s_rtc_present;
 static volatile bool s_wifi_connected;
 static unsigned s_sync_retry_index;
 static int64_t s_last_sync_us;
+/* The daily RTC invalidation must not be swallowed by the 10-minute dedupe. */
+static volatile bool s_force_sync;
 
 static void publish_time_valid(bool valid, bool rtc_healthy)
 {
@@ -51,9 +57,11 @@ static void read_rtc_and_update_system(void)
     esp_err_t err = monitor_rtc_read(&sample);
     if (err != ESP_OK) {
         s_rtc_present = false;
+        s_rtc_trusted = false;
         if (s_time_valid) {
             time_t now; time(&now);
             esp_err_t repair = monitor_rtc_write_utc((int64_t)now);
+            if (repair == ESP_OK) s_rtc_trusted = true;
             publish_time_valid(true, repair == ESP_OK);
         } else {
             publish_time_valid(false, false);
@@ -62,13 +70,21 @@ static void read_rtc_and_update_system(void)
     }
     s_rtc_present = sample.present;
     if (!sample.time_valid) {
+        s_rtc_trusted = false;
         if (s_time_valid) {
             time_t now; time(&now);
             err = monitor_rtc_write_utc((int64_t)now);
+            if (err == ESP_OK) s_rtc_trusted = true;
             publish_time_valid(true, err == ESP_OK);
         } else {
             publish_time_valid(false, sample.present && sample.running && !sample.oscillator_stopped);
         }
+        return;
+    }
+    if (!s_rtc_trusted) {
+        /* Invalidated at 02:00. Keep the running system clock until a fresh
+         * NTP or Client reading replaces the stored value. */
+        publish_time_valid(s_time_valid, sample.present && sample.running && !sample.oscillator_stopped);
         return;
     }
     struct timeval current;
@@ -91,9 +107,11 @@ static void sync_worker(void *arg)
     for (;;) {
         if (!retry_due) ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         retry_due = false;
-        if (!s_wifi_connected) continue;
+        bool force = s_force_sync;
+        s_force_sync = false;
+        if (!s_wifi_connected || s_rtc_trusted) continue;
         const int64_t now_us = esp_timer_get_time();
-        if (s_last_sync_us != 0 && now_us - s_last_sync_us < 10LL * 60 * 1000000) continue;
+        if (!force && s_last_sync_us != 0 && now_us - s_last_sync_us < 10LL * 60 * 1000000) continue;
         bool initialized = false;
         const esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(
             3, ESP_SNTP_SERVER_LIST("time.cloudflare.com", "time.google.com", "pool.ntp.org"));
@@ -107,6 +125,7 @@ static void sync_worker(void *arg)
             time_t now;
             time(&now);
             esp_err_t rtc_err = monitor_rtc_write_utc((int64_t)now);
+            s_rtc_trusted = rtc_err == ESP_OK;
             bool time_was_valid = monitor_clock_is_valid();
             publish_time_valid(true, rtc_err == ESP_OK);
             s_last_sync_us = esp_timer_get_time();
@@ -148,6 +167,7 @@ static void clock_task(void *arg)
     uint32_t rtc_retry_s = 5;
     int64_t next_rtc_retry = 0;
     int64_t last_schedule_time = -1;
+    int rtc_invalidate_yday = -1;
     if (s_time_valid) {
         time_t initial_time;
         time(&initial_time);
@@ -187,8 +207,16 @@ static void clock_task(void *arg)
         if (due & MONITOR_SCHEDULE_WEATHER) monitor_weather_request_refresh();
         if (due & MONITOR_SCHEDULE_DEVICES) monitor_devices_request_refresh();
         struct tm local; localtime_r(&now, &local);
-        if ((due & MONITOR_SCHEDULE_DEVICES) && local.tm_hour == 2 && local.tm_min == 0 && s_sync_task)
-            xTaskNotifyGive(s_sync_task);
+        /* The daily refresh invalidates the stored RTC time once, then NTP or
+         * a Client reading replaces it. Without either, the running clock
+         * stays visible instead of falling back to SYNCING. */
+        if ((due & MONITOR_SCHEDULE_DEVICES) && local.tm_hour == 2 && local.tm_min == 0 &&
+            rtc_invalidate_yday != local.tm_yday) {
+            rtc_invalidate_yday = local.tm_yday;
+            s_rtc_trusted = false;
+            s_force_sync = true;
+            if (s_sync_task) xTaskNotifyGive(s_sync_task);
+        }
         if (due) monitor_display_refresh_request_reason(MONITOR_REFRESH_CLOCK);
     }
 }
@@ -200,8 +228,14 @@ esp_err_t monitor_clock_start(void)
     if (s_clock_task != NULL) return ESP_OK;
     esp_err_t err = monitor_i2c_init();
     if (err == ESP_OK) err = monitor_rtc_init(monitor_i2c_get_bus());
-    if (err == ESP_OK) read_rtc_and_update_system();
-    else ESP_LOGW(TAG, "RTC initialization failed: %s", esp_err_to_name(err));
+    if (err == ESP_OK) {
+        /* Let the first read adopt a valid stored time. An invalid sample
+         * clears the flag before any RF or Client source is consulted. */
+        s_rtc_trusted = true;
+        read_rtc_and_update_system();
+        ESP_LOGI(TAG, "initial time %s; RTC %s", s_time_valid ? "valid" : "invalid",
+                 s_rtc_trusted ? "trusted" : "untrusted");
+    } else ESP_LOGW(TAG, "RTC initialization failed: %s", esp_err_to_name(err));
     if (xTaskCreate(sync_worker, "monitor_sntp", 4096, NULL, 3, &s_sync_task) != pdPASS)
         return ESP_ERR_NO_MEM;
     if (xTaskCreate(clock_task, "monitor_clock", 4096, NULL, 4, &s_clock_task) != pdPASS) {
@@ -221,6 +255,37 @@ void monitor_clock_on_wifi_disconnected(void)
 {
     s_wifi_connected = false;
     if (s_sync_task != NULL) xTaskNotifyGive(s_sync_task);
+}
+
+/* Client time is the last resort: a trusted RTC wins, and Wi-Fi means NTP is
+ * available. Once the Client reading is stored, the RTC is trusted again. */
+void monitor_clock_offer_client_time(int64_t utc_epoch_s)
+{
+    if (utc_epoch_s < 1704067200LL || utc_epoch_s >= 4102444800LL) return;
+    if (s_rtc_trusted || s_wifi_connected) return;
+    struct timeval current;
+    gettimeofday(&current, NULL);
+    int64_t difference = (int64_t)current.tv_sec - utc_epoch_s;
+    bool changed = !s_time_valid || difference < -2 || difference > 2;
+    if (changed) {
+        struct timeval supplied = {.tv_sec = (time_t)utc_epoch_s, .tv_usec = 0};
+        if (settimeofday(&supplied, NULL) != 0) return;
+    }
+    bool was_trusted = s_rtc_trusted;
+    esp_err_t rtc_err = monitor_rtc_write_utc(utc_epoch_s);
+    s_rtc_trusted = rtc_err == ESP_OK;
+    bool time_was_valid = s_time_valid;
+    publish_time_valid(true, rtc_err == ESP_OK);
+    if (changed || (!was_trusted && s_rtc_trusted))
+        ESP_LOGI(TAG, "Client time adopted; RTC write %s", rtc_err == ESP_OK ? "verified" : "failed");
+    if (!time_was_valid) {
+        monitor_weather_on_time_valid();
+        monitor_devices_request_refresh();
+    }
+    if (changed) {
+        monitor_display_refresh_request();
+        if (s_clock_task != NULL) xTaskNotify(s_clock_task, 0, eNoAction);
+    }
 }
 
 bool monitor_clock_is_valid(void)

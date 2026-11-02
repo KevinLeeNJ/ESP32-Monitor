@@ -128,7 +128,7 @@ health.state：disabled、starting、healthy、degraded、auth_required、permis
 | devices | 45秒 / 90秒 |
 | time | LAN 45秒、Serial 15秒 / 60秒 |
 
-source_updates 只在来源成功观测推进时续租，包含 path、snapshot_seq、真实观测/成功时间和 age；仅匹配已有完整快照时才能更新来源寿命。当前串口心跳不带此续租数组。任一来源不可用只影响自身卡片，不触发整个设备回退；传输/session 不可用才触发模式回退。
+source_updates 在每次心跳中携带当前健康来源的续租，包含 path、snapshot_seq、真实观测/成功时间和发送时重新计算的 age；重复发送同一观测不会延长来源寿命，只有匹配已有完整快照时才能更新来源寿命。LAN 与串口心跳都携带此数组。任一来源不可用只影响自身卡片，不触发整个设备回退；传输/session 不可用才触发模式回退。
 
 ## 7. 串口帧、认证与配置加密
 

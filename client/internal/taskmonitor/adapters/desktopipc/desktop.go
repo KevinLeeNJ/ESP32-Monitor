@@ -501,10 +501,6 @@ func (d *Observer) Snapshot() taskmonitor.Tasks {
 		scope = "desktop_latest_thread"
 	}
 	out := taskmonitor.Tasks{Adapter: d.ID(), Scope: scope, State: taskmonitor.Unknown, Health: providers.Health{State: providers.Starting, ObservedAt: now, SourceVersion: "codex-desktop-ipc-v11"}, Items: []taskmonitor.Task{}}
-	if d.success != nil {
-		v := *d.success
-		out.Health.LastSuccessAt = &v
-	}
 	code := d.code
 	for _, id := range d.threadIDs {
 		s := d.states[id]
@@ -512,7 +508,11 @@ func (d *Observer) Snapshot() taskmonitor.Tasks {
 		if code == "" && s.code != "" {
 			code = s.code
 		}
-		if !d.connected || s.observed.IsZero() || now.Sub(s.observed) > 15*time.Second {
+		/* The IPC stream pushes state changes, so a registered connection with
+		 * no traffic still confirms the last state. Only a disconnect or an
+		 * unobserved thread invalidates it; the transport read deadline bounds
+		 * a silent half-open bridge. */
+		if !d.connected || s.observed.IsZero() {
 			task.State = taskmonitor.Unknown
 			if code == "" {
 				code = s.code
@@ -544,6 +544,14 @@ func (d *Observer) Snapshot() taskmonitor.Tasks {
 		}
 	} else {
 		out.Health.State = providers.Healthy
+		/* A connected bridge keeps observing the level state even when the
+		 * desktop has no new revision to push. */
+		v := now
+		d.success = &v
+	}
+	if d.success != nil {
+		v := *d.success
+		out.Health.LastSuccessAt = &v
 	}
 	active := 0
 	out.State = taskmonitor.Idle

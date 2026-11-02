@@ -10,6 +10,8 @@ add_test(NAME monitor_pm_profile_tests
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/pm_profile_test.py")
 add_test(NAME monitor_clock_sync_tests
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/clock_sync_test.py")
+add_test(NAME monitor_clock_client_time_tests
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/clock_client_time_test.py")
 add_test(NAME monitor_station_scan_tests
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/station_scan_test.py")
 add_test(NAME monitor_wifi_buttons_tests

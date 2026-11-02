@@ -179,10 +179,31 @@ watch([pairTarget, localPairing], async ([target, pairing]) => {
   }
 }, { flush: "post" });
 
+// A freshly paired Monitor ends the pairing session on its own watchdog while
+// the Agent's serial watcher claims the port again. That handoff is expected,
+// so a closed session is only a failure if the watcher never reconnects.
+const handoffErrors = ["context canceled", "session_expired", "serial_disconnected", "serial_write_failed"];
+
+async function serialReconnected(deviceID: string, timeoutMS: number) {
+  const deadline = Date.now() + timeoutMS;
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    await refreshDevices();
+    const known = store.devices.find(device => device.device_id === deviceID);
+    if (!known) return false; // pairing was not stored, so the watcher cannot reconnect
+    if (known.transport === "serial" && known.connection_state === "connected") return true;
+  }
+  return false;
+}
+
 async function probeAndConnect(port: DiscoveredDevice) {
   let serialPairing = false;
+  let deviceID = "";
+  let deviceName = "";
   try {
     const device = await monitorService.probeSerial(port.port);
+    deviceID = device.device_id;
+    deviceName = device.name;
     if (!device.paired) {
       serialPairing = true;
       serialCancelRequested.value = false;
@@ -203,9 +224,23 @@ async function probeAndConnect(port: DiscoveredDevice) {
     await refreshDevices();
     toast(`串口 ${port.port} 已连接`);
   } catch (error) {
-    if (serialCancelRequested.value) toast("已取消串口配对");
-    else if (String(error).includes("serial_port_busy")) toast("串口正在连接，请稍候");
-    else toast(`串口连接失败：${String(error)}`);
+    const message = String(error);
+    if (serialCancelRequested.value) {
+      toast("已取消串口配对");
+    } else if (message.includes("serial_port_busy")) {
+      toast("串口正在连接，请稍候");
+    } else if (serialPairing && handoffErrors.some(reason => message.includes(reason)) && await serialReconnected(deviceID, 12000)) {
+      const item = discovery.value?.devices.find(d => d.connection_type === "serial" && d.port === port.port);
+      if (item) {
+        item.device_id = deviceID;
+        item.name = deviceName;
+        item.paired = true;
+        item.state = "connected";
+      }
+      toast(`串口 ${port.port} 已连接`);
+    } else {
+      toast(`串口连接失败：${message}`);
+    }
   } finally {
     if (serialPairing) {
       stopPairingPoll();
@@ -324,5 +359,5 @@ onUnmounted(stopPairingPoll);
 .btn.danger{--button-frame:#6f241b;--button-face:#8f3327;color:#fff}
 .btn.danger:hover{--button-frame:#571b14;--button-face:#a13c2e}
 .btn.danger:disabled{--button-frame:#8f453b;--button-face:#a8564a;color:#fff;cursor:not-allowed}
-.code-big{font-family:ui-monospace,Menlo,monospace;font-size:24px;letter-spacing:.18em;color:#243c35}
+.code-big{font-family:inherit;font-size:24px;letter-spacing:.18em;color:#243c35}
 </style>

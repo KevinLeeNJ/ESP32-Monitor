@@ -27,8 +27,9 @@ static int64_t total_age(bool has_age, int64_t age, uint64_t elapsed_ms)
 }
 
 /* Renew one source only when the heartbeat names it for the snapshot we hold.
- * The client sends a lease when a real upstream observation advanced; a
- * missing or older lease leaves the snapshot-based age untouched. */
+ * The client repeats the current lease set on every heartbeat and recomputes
+ * age_ms at send time, so a repeated lease keeps aging instead of extending
+ * freshness. A missing lease leaves the snapshot-based age untouched. */
 static int64_t leased_age(const view_clock_t *clock, const char *path, int64_t fallback)
 {
     const esp32monitor_companion_Heartbeat *h = clock->heartbeat;
@@ -271,6 +272,7 @@ static void build_time(const esp32monitor_companion_TimeSection *section,
              (int)(rest / 3600), (int)((rest % 3600) / 60));
     snprintf(out->date_text, sizeof out->date_text, "%s %02u %s",
              weekdays[weekday], day, months[month - 1]);
+    out->time_utc_ms = unix_ms;
     out->time_valid = true;
 }
 

@@ -24,6 +24,12 @@ const github = computed(() => store.companion?.github);
 const codex = computed(() => store.companion?.codex);
 const music = computed(() => store.companion?.music);
 const calendar = computed(() => github.value?.data ?? null);
+const githubLoading = computed(() => {
+  if (calendar.value) return false;
+  if (store.status && !store.status.github_enabled) return false;
+  const state = github.value?.health.state;
+  return !state || (state !== "auth_required" && state !== "disabled");
+});
 const wallDays = computed(() => {
   if (!calendar.value) return [];
   return calendar.value.days.slice(-371).map(day => ({ ...day, level: Math.max(0, Math.min(4, day.level)) }));
@@ -140,7 +146,7 @@ onUnmounted(() => {
     <div class="grid activity-layout">
       <section class="card span12">
         <div class="card-title"><h2>GitHub 贡献墙</h2>
-          <span class="pill" :class="github?.health.state === 'healthy' ? '' : 'gray'">{{ github?.health.state === "healthy" ? "已授权" : "未就绪" }}</span>
+          <span class="pill" :class="github?.health.state === 'healthy' ? '' : 'gray'">{{ github?.health.state === "healthy" ? "已授权" : githubLoading ? "加载中" : "未就绪" }}</span>
         </div>
         <template v-if="calendar">
           <div class="wall-top">
@@ -161,6 +167,13 @@ onUnmounted(() => {
             <p>在浏览器打开 {{ session.verification_uri }} 并输入代码。</p>
             <p class="code-big">{{ session.user_code }}</p>
             <div class="actions"><button class="btn" @click="cancelLogin">取消登录</button></div>
+          </div>
+        </template>
+        <template v-else-if="githubLoading">
+          <div class="source-empty">
+            <div class="loading-dots" role="status" aria-label="正在加载 GitHub 贡献数据"><i></i><i></i><i></i></div>
+            <strong>正在加载贡献数据</strong>
+            <p>{{ github?.health.error_code ? `暂时无法读取（${github.health.error_code}），正在重试…` : "已连接 GitHub，正在读取最近一年的贡献记录…" }}</p>
           </div>
         </template>
         <template v-else>
@@ -222,3 +235,12 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.loading-dots{height:50px;display:flex;align-items:center;justify-content:center;gap:7px;color:inherit}
+.loading-dots i{width:8px;height:8px;background:currentColor;animation:loading-pulse 1.2s ease-in-out infinite}
+.loading-dots i:nth-child(2){animation-delay:.18s}
+.loading-dots i:nth-child(3){animation-delay:.36s}
+@keyframes loading-pulse{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-6px)}}
+@media(prefers-reduced-motion:reduce){.loading-dots i{animation:none;opacity:.75}}
+</style>

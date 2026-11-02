@@ -90,7 +90,7 @@ Profile/revision、原始批次、去重哈希和有效值在 SQLite WAL 中原�
 
 管理 API 时间字段为 Unix 秒。上传细节见 [通信协议](SERVER_CLIENT_PROTOCOL_V2.md)。
 
-**现有固件 monitor_devices.c 与 Client Companion 的 proxy.go 仍读取 `/v1/devices/summary`，本次没有修改这些读取方。** 接通摘要链路需要另行迁移到 `/v2/devices/summary`；当前真实联调验证的是 Client Agent 到正式 Server 的 v2 注册、档案、采样链路。
+固件 monitor_devices.c 与 Client Companion 的 proxy.go 现已读取 `/v2/devices/summary`。当前真实联调验证的是 Client Agent 到正式 Server 的 v2 注册、档案、采样链路；生产 Server 摘要链路仍待真机验收。
 
 ## 备份与验收
 

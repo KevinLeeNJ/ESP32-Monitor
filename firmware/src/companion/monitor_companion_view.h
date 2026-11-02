@@ -20,6 +20,7 @@ typedef struct {
     bool aqi_valid;
     int aqi;
     bool time_valid;
+    int64_t time_utc_ms;
     char time_text[8];
     char date_text[16];
     bool proxy_owned;

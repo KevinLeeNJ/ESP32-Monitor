@@ -161,44 +161,65 @@ func (f *fixtureDoer) Do(r *http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: code, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 }
 
-// A simulator on loopback is discovered with a 127.0.0.1 source address but
-// must POST its pairing begin through the bound LAN interface.
-func TestLoopbackPairingWithLANBind(t *testing.T) {
-	bind := ""
+// Windows exposes tentative link-local addresses that cannot be bound before
+// the routable interface address, so try candidates rather than taking the
+// first one.
+func lanBindCandidates() []string {
+	var preferred, fallback []string
 	ifaces, _ := net.Interfaces()
 	for _, i := range ifaces {
+		if i.Flags&net.FlagUp == 0 || i.Flags&net.FlagLoopback != 0 {
+			continue
+		}
 		as, _ := i.Addrs()
 		for _, a := range as {
 			n, ok := a.(*net.IPNet)
-			if ok && n.IP.To4() != nil && !n.IP.IsLoopback() {
-				bind = n.IP.String()
-				break
+			if !ok || n.IP.To4() == nil || n.IP.IsLoopback() {
+				continue
+			}
+			if n.IP.IsLinkLocalUnicast() {
+				fallback = append(fallback, n.IP.String())
+			} else {
+				preferred = append(preferred, n.IP.String())
 			}
 		}
-		if bind != "" {
-			break
+	}
+	return append(preferred, fallback...)
+}
+
+// A simulator bound to the same LAN interface must receive its pairing begin
+// through that interface. A LAN-bound socket cannot reach loopback on Windows,
+// so the simulator cannot live on 127.0.0.1 there.
+func TestLANPairingWithLANBind(t *testing.T) {
+	var m *simesp32.Monitor
+	var b *transport.Backend
+	var attempts []string
+	for _, bind := range lanBindCandidates() {
+		attempts = append(attempts, bind)
+		sim, e := simesp32.New("LAN monitor", net.JoinHostPort(bind, "0"))
+		if e != nil {
+			continue
 		}
+		backend, e := transport.New(transport.Options{StoreDirectory: filepath.Join(t.TempDir(), "vault"), HostName: "lan-host", BindIP: bind, MQTTAddress: net.JoinHostPort(bind, "0"), HTTPAddress: net.JoinHostPort(bind, "0"), DiscoveryTarget: sim.Address()})
+		if e != nil {
+			sim.Close()
+			continue
+		}
+		m, b = sim, backend
+		break
 	}
-	if bind == "" {
-		t.Skip("no non-loopback IPv4 address")
-	}
-	m, e := simesp32.New("loopback monitor", "127.0.0.1:0")
-	if e != nil {
-		t.Fatal(e)
+	if b == nil {
+		t.Skipf("no bindable non-loopback IPv4 address (tried %v)", attempts)
 	}
 	m.Start()
 	defer m.Close()
-	b, e := transport.New(transport.Options{StoreDirectory: filepath.Join(t.TempDir(), "vault"), HostName: "lan-host", BindIP: bind, MQTTAddress: net.JoinHostPort(bind, "0"), HTTPAddress: net.JoinHostPort(bind, "0"), DiscoveryTarget: m.Address()})
-	if e != nil {
-		t.Fatal(e)
-	}
 	defer b.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if e = b.Discover(ctx, ""); e != nil {
+	if e := b.Discover(ctx, ""); e != nil {
 		t.Fatal(e)
 	}
-	if e = b.BeginPairing(m.DeviceID, true); e != nil {
+	if e := b.BeginPairing(m.DeviceID, true); e != nil {
 		t.Fatal(e)
 	}
 	waitFor(t, 3*time.Second, func() bool { return b.PairingStatus().Code != "" })

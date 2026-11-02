@@ -131,7 +131,14 @@ func (b *Backend) query(ctx context.Context, target string, pair *Pairing, durat
 	if e != nil {
 		return nil, errors.New("network_unreachable")
 	}
-	conn, e := net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP(b.bindIP())})
+	listenIP := net.ParseIP(b.bindIP())
+	// Windows rejects a LAN-bound socket sending to loopback; an explicit
+	// loopback target (local simulator or manual IP) must use a loopback
+	// socket. Pairing still opens its listener on the bound LAN interface.
+	if a.IP.IsLoopback() {
+		listenIP = net.IPv4(127, 0, 0, 1)
+	}
+	conn, e := net.ListenUDP("udp4", &net.UDPAddr{IP: listenIP})
 	if e != nil {
 		return nil, errors.New("discovery_listen_failed")
 	}

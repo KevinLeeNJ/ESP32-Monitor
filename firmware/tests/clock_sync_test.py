@@ -22,7 +22,7 @@ code = r'''
 #define ESP_SNTP_SERVER_LIST(...) 0
 #define ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(...) 0
 typedef int esp_err_t, esp_sntp_config_t;
-static bool s_wifi_connected, valid, healthy;
+static bool s_wifi_connected, valid, healthy, s_rtc_trusted, s_force_sync;
 static int64_t s_last_sync_us;
 static unsigned s_sync_retry_index, waits, weather, devices, display, clock_wakes, writes;
 static int sync_result, rtc_result;
@@ -50,21 +50,44 @@ static void xTaskNotify(void *task, unsigned bits, int action) {
 '''
 code += function(source, 'sync_worker')
 code += r'''
-static void scenario(bool rtc_valid, int sync, int rtc) {
-    s_wifi_connected = true; valid = rtc_valid; healthy = false;
+static void scenario(bool rtc_trusted, bool time_valid, bool wifi, int sync, int rtc) {
+    s_wifi_connected = wifi; s_rtc_trusted = rtc_trusted;
+    valid = time_valid; healthy = false;
     waits = weather = devices = display = clock_wakes = writes = 0;
     s_last_sync_us = s_sync_retry_index = 0; sync_result = sync; rtc_result = rtc;
+    s_force_sync = false;
     if (!setjmp(done)) sync_worker(NULL);
 }
 int main(void) {
-    scenario(true, ESP_OK, ESP_OK);
+    /* A trusted RTC reading suppresses SNTP entirely. */
+    scenario(true, true, true, ESP_OK, ESP_OK);
+    assert(valid && !healthy && !writes && !weather && !devices && !clock_wakes && s_rtc_trusted);
+    scenario(false, false, true, ESP_OK, ESP_OK);
+    assert(valid && healthy && writes == 1 && weather == 1 && devices == 1 &&
+           clock_wakes == 1 && s_rtc_trusted);
+    scenario(false, true, true, ESP_OK, ESP_OK);
     assert(valid && healthy && writes == 1 && !weather && !devices && clock_wakes == 1);
-    scenario(false, ESP_OK, ESP_OK);
-    assert(valid && healthy && weather == 1 && devices == 1 && clock_wakes == 1);
-    scenario(false, ESP_OK, ESP_FAIL);
-    assert(valid && !healthy && weather == 1 && devices == 1);
-    scenario(false, ESP_FAIL, ESP_OK);
+    scenario(false, false, true, ESP_OK, ESP_FAIL);
+    assert(valid && !healthy && writes == 1 && weather == 1 && devices == 1 && !s_rtc_trusted);
+    scenario(false, false, true, ESP_FAIL, ESP_OK);
     assert(!valid && !weather && !devices && !writes);
+    scenario(false, true, true, ESP_FAIL, ESP_OK);
+    assert(valid && !writes);
+    scenario(false, false, false, ESP_OK, ESP_OK);
+    assert(!valid && !writes && !weather && !devices);
+    /* The daily 02:00 invalidation bypasses the 10-minute dedupe. */
+    s_wifi_connected = true; s_rtc_trusted = false; valid = true; healthy = false;
+    waits = weather = devices = display = clock_wakes = writes = 0;
+    s_last_sync_us = esp_timer_get_time(); s_sync_retry_index = 0;
+    sync_result = ESP_OK; rtc_result = ESP_OK; s_force_sync = true;
+    if (!setjmp(done)) sync_worker(NULL);
+    assert(valid && healthy && writes == 1 && s_rtc_trusted && !s_force_sync);
+    /* Without the flag a recent success suppresses the sync. */
+    s_force_sync = false; s_rtc_trusted = false; healthy = false;
+    waits = weather = devices = display = clock_wakes = writes = 0;
+    s_last_sync_us = esp_timer_get_time();
+    if (!setjmp(done)) sync_worker(NULL);
+    assert(!writes && !healthy && !s_rtc_trusted);
 }
 '''
 run(code)

@@ -124,7 +124,7 @@ idf.py -C firmware/tests -B "$PWD/firmware/tests/build/esp32s3" build
 
 | 阶段 | 工作 | 验证依据 |
 | --- | --- | --- |
-| 阶段0 修复Devices链路 | 固件 [monitor_devices.c](../firmware/components/firmware/monitor_devices.c) 与 Client proxy 从 `/v1/devices/summary` 迁移到 v2（Server 已删 v1，当前设备卡片断数据） | 真机第一页设备卡片恢复在线设备显示 |
+| 阶段0 修复Devices链路（已完成） | 固件 [monitor_devices.c](../firmware/components/firmware/monitor_devices.c) 与 Client proxy 已迁移到 `/v2/devices/summary`（Server 已删 v1） | 本地模拟器联调通过；生产 Server 摘要与真机设备卡片仍待验收 |
 | 阶段1 Companion LAN | 引入 nanopb（生成 + 构建集成，同步登记 monitor_core 与 simulator CMake）；Envelope 及消息解码；UDP 18444 发现应答；HTTP 18080 配对（6位核对码双确认）；device_token/serial_key 存 NVS 并可撤销；MQTT 18883 会话、Snapshot/Heartbeat 处理、Presence 上报 | 真机与真实 Client 完成配对并持续接收快照；覆盖 F1/F2 验收项 |
 | 阶段2 Serial | USB Serial/JTAG 上的 EMON 帧收发：CRC32 + HMAC 校验、Config 分区 AES-256-GCM 解密、噪声重同步 | 真板 USB 线直连 Client 串口联调（物理互操作此前未实测）；覆盖 F3 验收项 |
 | 阶段3 模式管理与电源 | standalone/lan/serial 状态机：优先级、断线回退（LAN 断开回落 standalone）；Companion 活跃时的睡眠锁与既有 PM 自动 Light Sleep 协调 | 拔网线/断串口/关 Client 各场景切换正确；电池模式功耗不回退；覆盖 F4 验收项 |
