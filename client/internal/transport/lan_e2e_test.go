@@ -29,6 +29,125 @@ func waitFor(t *testing.T, timeout time.Duration, f func() bool) {
 	t.Fatal("condition timed out")
 }
 
+func TestDirectIPv4Discovery(t *testing.T) {
+	m, err := simesp32.New("direct monitor", "127.0.0.1:18444")
+	if err != nil {
+		t.Skipf("discovery port unavailable: %v", err)
+	}
+	m.Start()
+	defer m.Close()
+	b, err := transport.New(transport.Options{StoreDirectory: filepath.Join(t.TempDir(), "vault"), HostName: "test-host", BindIP: "127.0.0.1", MQTTAddress: "127.0.0.1:0", HTTPAddress: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	result := b.DiscoverDevicesAt(ctx, "127.0.0.1")
+	for _, device := range result.Devices {
+		if device.DeviceID == m.DeviceID && device.ConnectionType == "lan" && device.Address == "127.0.0.1" {
+			return
+		}
+	}
+	t.Fatalf("manual address did not discover monitor: %+v", result)
+}
+
+func pairSimulatedMonitor(t *testing.T, b *transport.Backend, m *simesp32.Monitor) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if e := b.Discover(ctx, ""); e != nil {
+		t.Fatal(e)
+	}
+	if e := b.BeginPairing(m.DeviceID, true); e != nil {
+		t.Fatal(e)
+	}
+	waitFor(t, 3*time.Second, func() bool { return b.PairingStatus().PairingID != "" })
+	if e := b.ConfirmPairing(b.PairingStatus().PairingID, true); e != nil {
+		t.Fatal(e)
+	}
+	waitFor(t, 10*time.Second, func() bool {
+		d, _ := b.Devices()
+		return len(d) == 1 && d[0].Paired && d[0].ConnectionState == "connected"
+	})
+}
+
+func TestLANPairingNeedsOnlyDeviceConfirmation(t *testing.T) {
+	m, err := simesp32.New("device-confirm monitor", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Start()
+	defer m.Close()
+	b, err := transport.New(transport.Options{StoreDirectory: filepath.Join(t.TempDir(), "vault"), HostName: "test-host", BindIP: "127.0.0.1", MQTTAddress: "127.0.0.1:0", HTTPAddress: "127.0.0.1:0", DiscoveryTarget: m.Address()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if e := b.Discover(ctx, ""); e != nil {
+		t.Fatal(e)
+	}
+	if e := b.BeginPairing(m.DeviceID, true); e != nil {
+		t.Fatal(e)
+	}
+	// The GUI no longer sends ConfirmPairing after the code window; the
+	// Monitor's physical confirmation must be sufficient.
+	waitFor(t, 10*time.Second, func() bool {
+		d, _ := b.Devices()
+		return len(d) == 1 && d[0].Paired && d[0].ConnectionState == "connected"
+	})
+}
+
+func TestLANKeepsHeartbeatsWithoutSnapshotRefresh(t *testing.T) {
+	m, err := simesp32.New("snapshot monitor", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Start()
+	defer m.Close()
+	b, err := transport.New(transport.Options{StoreDirectory: filepath.Join(t.TempDir(), "vault"), HostName: "test-host", BindIP: "127.0.0.1", MQTTAddress: "127.0.0.1:0", HTTPAddress: "127.0.0.1:0", DiscoveryTarget: m.Address()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	pairSimulatedMonitor(t, b, m)
+	var first wire.Snapshot
+	select {
+	case first = <-m.Snapshots:
+	case <-time.After(3 * time.Second):
+		t.Fatal("missing initial snapshot")
+	}
+	for len(m.Heartbeats) > 0 {
+		<-m.Heartbeats
+	}
+	// Semantic pushes alone carry new data; freshness between them must ride on
+	// heartbeat leases instead of a periodic full snapshot.
+	select {
+	case next := <-m.Snapshots:
+		t.Fatalf("unexpected unchanged snapshot seq=%d after seq=%d", next.Seq, first.Seq)
+	case <-time.After(13 * time.Second):
+	}
+	timer := time.NewTimer(35 * time.Second)
+	defer timer.Stop()
+	select {
+	case next := <-m.Snapshots:
+		t.Fatalf("unexpected repeated snapshot seq=%d while content was unchanged", next.Seq)
+	case h := <-m.Heartbeats:
+		if h.LastSnapshotSeq == nil || *h.LastSnapshotSeq != first.Seq {
+			t.Fatalf("heartbeat does not reference applied snapshot: %+v", h)
+		}
+	case <-timer.C:
+		t.Fatal("heartbeat did not continue without snapshot refresh")
+	}
+	select {
+	case next := <-m.Snapshots:
+		t.Fatalf("unexpected repeated snapshot seq=%d after heartbeat", next.Seq)
+	default:
+	}
+}
+
 type fixtureDoer struct{ requests atomic.Int32 }
 
 func (f *fixtureDoer) Do(r *http.Request) (*http.Response, error) {
@@ -41,6 +160,7 @@ func (f *fixtureDoer) Do(r *http.Request) (*http.Response, error) {
 	}
 	return &http.Response{StatusCode: code, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 }
+
 // A simulator on loopback is discovered with a 127.0.0.1 source address but
 // must POST its pairing begin through the bound LAN interface.
 func TestLoopbackPairingWithLANBind(t *testing.T) {
@@ -189,4 +309,128 @@ func TestLANEndToEndSimulatedESP32(t *testing.T) {
 		t.Fatal(e)
 	}
 	s.Close()
+}
+
+func TestLANRevokeSendsGoodbye(t *testing.T) {
+	m, e := simesp32.New("revoke target", "127.0.0.1:0")
+	if e != nil {
+		t.Fatal(e)
+	}
+	m.Start()
+	defer m.Close()
+	dir := filepath.Join(t.TempDir(), "vault")
+	b, e := transport.New(transport.Options{StoreDirectory: dir, HostName: "revoke-agent", BindIP: "127.0.0.1", MQTTAddress: "127.0.0.1:0", HTTPAddress: "127.0.0.1:0", DiscoveryTarget: m.Address()})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer b.Close()
+	pairSimulatedMonitor(t, b, m)
+	if e = b.Revoke(m.DeviceID); e != nil {
+		t.Fatal(e)
+	}
+	select {
+	case g := <-m.Goodbyes:
+		if g.Reason != "host_revoked" {
+			t.Fatalf("unexpected device goodbye reason %q", g.Reason)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("device did not receive host_revoked goodbye")
+	}
+	waitFor(t, time.Second, func() bool {
+		d, _ := b.Devices()
+		for _, x := range d {
+			if x.DeviceID == m.DeviceID && x.Paired {
+				return false
+			}
+		}
+		return true
+	})
+	data, e := os.ReadFile(filepath.Join(dir, "companion.json"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	var stored struct {
+		Pairs map[string]json.RawMessage `json:"pairs"`
+	}
+	if e = json.Unmarshal(data, &stored); e != nil || len(stored.Pairs) != 0 {
+		t.Fatalf("credential survived revoke: %s", data)
+	}
+}
+
+func TestLANResyncRespondsWithSnapshot(t *testing.T) {
+	m, e := simesp32.New("resync monitor", "127.0.0.1:0")
+	if e != nil {
+		t.Fatal(e)
+	}
+	m.Start()
+	defer m.Close()
+	b, e := transport.New(transport.Options{StoreDirectory: filepath.Join(t.TempDir(), "vault"), HostName: "resync-agent", BindIP: "127.0.0.1", MQTTAddress: "127.0.0.1:0", HTTPAddress: "127.0.0.1:0", DiscoveryTarget: m.Address()})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer b.Close()
+	pairSimulatedMonitor(t, b, m)
+	for len(m.Snapshots) > 0 {
+		<-m.Snapshots
+	}
+	if e = m.SendResync("missing_snapshot", 999); e != nil {
+		t.Fatal(e)
+	}
+	select {
+	case snap := <-m.Snapshots:
+		if snap.DeviceID != m.DeviceID || snap.Sections.Proxy.Data == nil {
+			t.Fatalf("invalid resync snapshot: %+v", snap)
+		}
+	case e := <-m.Errors:
+		t.Fatal(e)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no snapshot after resync")
+	}
+}
+
+func TestLANPairingRevokedByDevice(t *testing.T) {
+	m, e := simesp32.New("revoked monitor", "127.0.0.1:0")
+	if e != nil {
+		t.Fatal(e)
+	}
+	m.Start()
+	defer m.Close()
+	dir := filepath.Join(t.TempDir(), "vault")
+	b, e := transport.New(transport.Options{StoreDirectory: dir, HostName: "revoke-agent", BindIP: "127.0.0.1", MQTTAddress: "127.0.0.1:0", HTTPAddress: "127.0.0.1:0", DiscoveryTarget: m.Address()})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer b.Close()
+	pairSimulatedMonitor(t, b, m)
+	if e = m.SendGoodbye("pairing_revoked"); e != nil {
+		t.Fatal(e)
+	}
+	waitFor(t, 3*time.Second, func() bool {
+		d, _ := b.Devices()
+		for _, x := range d {
+			if x.DeviceID == m.DeviceID && x.Paired {
+				return false
+			}
+		}
+		return true
+	})
+	data, e := os.ReadFile(filepath.Join(dir, "companion.json"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	var stored struct {
+		Pairs map[string]json.RawMessage `json:"pairs"`
+	}
+	if e = json.Unmarshal(data, &stored); e != nil || len(stored.Pairs) != 0 {
+		t.Fatalf("credential survived device revoke: %s", data)
+	}
+	for len(m.Snapshots) > 0 {
+		<-m.Snapshots
+	}
+	time.Sleep(1500 * time.Millisecond)
+	select {
+	case snap := <-m.Snapshots:
+		t.Fatalf("reconnected after device revoke: %+v", snap)
+	default:
+	}
 }

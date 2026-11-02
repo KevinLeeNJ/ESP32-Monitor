@@ -37,9 +37,11 @@
 1. Client 发 `Discovery(type=monitor_discover)`，包含版本、request_id、host_id、nonce。首次未配对消息不含 MAC；只接受处于配对窗口的 Monitor 响应。
 2. Monitor 返回 `monitor_announce`，回显请求标识/nonce/host_id，增加 device_id、response_nonce、device_name、firmware_version、pairing_open。已配对响应还带 pairing_id 和 MAC。
 3. Client 只向用户选中的设备发送 `monitor_connect_offer`。首次邀请带 HTTP host_port；已配对邀请带 mqtt_port、全新 session_id 和 MAC。
-4. 首次配对必须确认可信 LAN 风险：HTTP/MQTT 无 TLS，局域网可见秘密和内容。临时 HTTP 只允许所选设备 IP，窗口 120 秒。窗口外关闭监听。
-5. ESP32 发 `PairRequest(step=begin)`，Client 返回 `201 PairResponse(state=pending)`。双方显示同一 6 位核对码并人工确认；`status` 最快每秒一次（202），设备 `confirm` 带 device_confirmed，Client 本地确认通过后才 approved。
+4. 首次 LAN 配对必须确认可信 LAN 风险：HTTP/MQTT 无 TLS，局域网可见秘密和内容。临时 HTTP 只允许所选设备 IP，窗口 120 秒。窗口外关闭监听。2026-11-02 用户要求一次配对同时授权 LAN 与串口，因此串口配对后不再有额外的「启用局域网」步骤；LAN 仍为明文，首次 LAN 配对的风险提示保留。
+5. ESP32 发 `PairRequest(step=begin)`，Client 返回 `201 PairResponse(state=pending)`。双方显示同一 6 位核对码；最终确认由用户在 Monitor 上按 KEY 完成（设备 `confirm` 带 device_confirmed），Client 不再要求第二次确认。Client 点击配对并接受 LAN 明文风险即视为 Client 侧同意。`status` 最快每秒一次（202），设备确认后即 approved。
 6. approved 响应下发独立 `device_token` 和 `serial_key`，同时保存 pairing_id；拒绝、超时、源地址不匹配均不能取得凭据。
+
+串口配对使用相同的短码窗口与确认语义：Client 显示短码，用户在 Monitor 上按 KEY 确认，Client 可取消等待；取消必须同时中止串口等待并释放端口。LAN 的取消关闭配对监听，允许立即重试。
 
 临时路由为 `GET /companion/v1/capabilities`、`POST /companion/v1/pair`。PairResponse 含 host_id、host_name、host_nonce、pairing_ticket、expires_in_ms；后续 status/confirm 必须带正确 pairing_id/ticket。begin 限每 IP 5 次/分钟、全局 10 次/分钟。
 
@@ -52,7 +54,9 @@
 - 密钥 = HKDF-SHA256(raw(serial_key), salt, info=`ESP32MON-DISCOVERY-V1`, 32字节)。
 - HMAC-SHA256 输入按顺序对下列每项 lp：域 `ESP32MON-DISCOVERY-V1`、type、protocol_version、request_id、host_id、device_id、pairing_id、nonce、response_nonce、host_port、mqtt_port、session_id、device_name、firmware_version、pairing_open；输出小写 hex。
 
-Client 将配对记录保存到专用 `companion.json` 凭据库，公开设备状态不带秘密；Unix 目录/文件 `0700/0600`，Windows 有专门 DACL 实现。ESP32 的受限 NVS 存储与撤销清理待固件实现。串口首次配对沿用同一双确认流程，但须用户确认物理连接，不能向所有串口自动发送凭据。
+**无活动会话撤销感知。** Monitor 每次撤销配对（物理 BOOT、串口/Client 请求或新配对替换旧配对）时保留一条撤销墓碑：`host_id`、`pairing_id` 与上述 HKDF 派生的 32 字节 discovery key，不保留 token/serial_key 明文；最多 4 条，按 pairing_id 去重，满时丢弃最旧。当 Client 在 LAN 上发来只针对该 `pairing_id` 的认证发现（带 MAC）时，Monitor 用墓碑 key 校验请求 MAC，校验通过后返回 `monitor_announce(pairing_open=true, 原 pairing_id, MAC)`；响应 MAC 同样用墓碑 key 签名。Client 用自己保存的 serial_key 重新派生 key 并验证响应，只有 MAC、device_id、pairing_id 全部匹配才删除本地配对凭据；伪造或未认证响应一律不删除。Monitor 处于“未配对”或“已与其他 Client 配对”不影响墓碑响应。墓碑位于未加密 NVS，丢失或回滚只会让 Client 保留旧凭据，不会泄露凭据。
+
+Client 将配对记录保存到专用 `companion.json` 凭据库，公开设备状态不带秘密；Unix 目录/文件 `0700/0600`，Windows 有专门 DACL 实现。ESP32 配对存储和墓碑位于未加密 NVS，没有硬件保护声明。串口首次配对沿用同一双确认流程，但须用户确认物理连接，不能向所有串口自动发送凭据。
 
 ## 4. LAN MQTT 会话
 
@@ -93,7 +97,7 @@ Config 带 device/session/request_id、`config_epoch` UUID、非零 `config_revi
 
 关闭的 weather/devices 组不带其可选秘密/坐标字段。新 epoch 可重新开始 revision；同 epoch 旧 revision 或同 revision 异内容为 config_conflict。先完整校验，再建立候选 worker 并替换，失败保留原配置；applied ACK 回显 epoch/revision 与 weather_configured/devices_configured。ACK 只证明配置应用，不证明上游请求已成功。
 
-天气/AQI 启动后及每 15 分钟获取；devices 每 30 秒获取（**不能为省电降低该频率**）。Devices URL 是基地址，Client 追加 `/v1/devices/summary`，只用只读 Token。IP 定位通过 ipwho.is；请求有超时、体积限制与重定向限制。生产代理校验 DNS 解析结果，私网地址需要精确授权；测试注入例外不等于 GUI 已完成授权流程。
+天气/AQI 启动后及每 15 分钟获取；devices 每 30 秒获取（**不能为省电降低该频率**）。Devices URL 是基地址，Client 追加 `/v2/devices/summary`，只用只读 Token。IP 定位通过 ipwho.is；请求有超时、体积限制与重定向限制。生产代理校验 DNS 解析结果，私网地址需要精确授权；测试注入例外不等于 GUI 已完成授权流程。
 
 时间快照来自本机 system_clock，当前 `trusted=false`，不能宣称 Client 已验证上位机时钟准确。板载电池和温湿度始终由固件本地采集，不被上位机指标覆盖。
 

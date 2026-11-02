@@ -457,6 +457,7 @@ static const char *wifi_state_symbol(monitor_wifi_state_t state)
         case MONITOR_WIFI_CONNECTED: return LV_SYMBOL_WIFI;
         case MONITOR_WIFI_OFFLINE:
         case MONITOR_WIFI_DISCONNECTED: return LV_SYMBOL_WIFI;
+        case MONITOR_WIFI_SERIAL: return LV_SYMBOL_USB;
         default: return LV_SYMBOL_WARNING;
     }
 }

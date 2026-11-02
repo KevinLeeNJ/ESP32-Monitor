@@ -41,6 +41,7 @@ struct esp_timer_create_args_t { void (*callback)(void *); void *arg; int dispat
 #define ESP_TIMER_TASK 0
 #define ESP_FAIL -1
 #define ESP_ERR_NO_MEM -2
+#define ESP_ERR_INVALID_STATE -3
 #define pdPASS 1
 #define ESP_LOGE(...) ((void)0)
 #define ESP_ERROR_CHECK(e) assert((e)==ESP_OK)
@@ -52,7 +53,7 @@ static Timer *s_config_timeout_timer = &config_timer, *s_station_timeout_timer =
 static int64_t now, response_ready_at;
 static void *s_manager_task = reinterpret_cast<void *>(1);
 static uint32_t queued;
-static bool s_provisioning, s_config_session_active;
+static bool s_provisioning, s_suspended, s_config_session_active;
 static std::atomic<int64_t> s_config_deadline{0}, s_station_deadline{0};
 static int64_t esp_timer_get_time() { return now; }
 static void vTaskDelay(unsigned ms) { now += ms * 1000; }
@@ -131,7 +132,7 @@ static void enter() {
 static void reset_boot(bool credentials=false) {
     WifiManager::GetInstance()=WifiManager{};
     SsidManager::GetInstance().saved=credentials?std::vector<int>{1}:std::vector<int>{};
-    s_started=s_provisioning=s_config_session_active=false;
+    s_started=s_provisioning=s_suspended=s_config_session_active=false;
     s_config_timeout_timer=s_station_timeout_timer=nullptr;s_manager_task=nullptr;
     config_timer=Timer{};station_timer=Timer{};queued=creates=deletes=task_creates=fail_create=0;
     init_ok=task_ok=true;now=response_ready_at=0;
@@ -231,13 +232,36 @@ int main() {
     set_event(WifiEvent::ConfigExitRequested, "");dispatch(BTN_TIMEOUT|BTN_STATION_TIMEOUT);dispatch();
     assert(m.exits==exits+1 && m.station && !m.config);
     assert(station_timer.due==now+30000000);
+    // A serial companion session suspends the radio and restores station mode.
+    reset_boot(true);assert(monitor_wifi_start()==ESP_OK);
+    auto& radio = WifiManager::GetInstance();
+    radio.connected = true; set_event(WifiEvent::Connected, "");
+    assert(s_state == MONITOR_WIFI_CONNECTED);
+    assert(monitor_wifi_suspend()==ESP_OK);
+    assert(!radio.station && !radio.connected && s_state == MONITOR_WIFI_OFFLINE);
+    assert(!station_timer.active && !config_timer.active);
+    assert(enter_config_mode()!=ESP_OK && !radio.config); // No AP while serial owns the link.
+    set_event(WifiEvent::Disconnected, ""); // Teardown callbacks stay ignored.
+    set_event(WifiEvent::Connected, "");
+    assert(s_state == MONITOR_WIFI_OFFLINE && !radio.station && !radio.config);
+    assert(monitor_wifi_suspend()==ESP_OK); // Idempotent second suspend.
+    assert(monitor_wifi_resume()==ESP_OK);
+    assert(radio.station && !radio.connected && s_state == MONITOR_WIFI_DISCONNECTED);
+    assert(station_timer.due == now + 30000000);
+    // Without credentials, resume restores the captive configuration AP.
+    reset_boot();assert(monitor_wifi_start()==ESP_OK);
+    auto& captive = WifiManager::GetInstance();
+    assert(monitor_wifi_suspend()==ESP_OK);
+    assert(!captive.config && s_state == MONITOR_WIFI_OFFLINE && !s_provisioning);
+    assert(monitor_wifi_resume()==ESP_OK);
+    assert(captive.config && s_provisioning && s_state == MONITOR_WIFI_PROVISIONING);
 }
 '''
 with tempfile.TemporaryDirectory() as directory:
     path = Path(directory)
     unit = path / 'wifi_session.cc'
     unit.write_text('\n'.join([prefix, events, states, defines, manager]) + '\n' + '\n'.join(function(name) for name in
-        ['update_wifi_state', 'start_config_timeout', 'start_station_attempt', 'set_event', 'enter_config_mode', 'config_timeout_callback', 'process_manager_events']) + production_function(source, 'monitor_wifi_start') + tests)
+        ['update_wifi_state', 'start_config_timeout', 'start_station_attempt', 'set_event', 'enter_config_mode', 'config_timeout_callback', 'process_manager_events']) + production_function(source, 'monitor_wifi_start') + production_function(source, 'monitor_wifi_suspend') + production_function(source, 'monitor_wifi_resume') + tests)
     subprocess.run(['c++', '-std=c++17', '-Wall', '-Wextra', '-Werror', str(unit), '-o', str(path / 'test')], check=True)
     subprocess.run([str(path / 'test')], check=True, timeout=5)
 print('Wi-Fi session transitions passed: idle edits, immediate save, AP/LAN exit, late connection recovery, offline without credentials')

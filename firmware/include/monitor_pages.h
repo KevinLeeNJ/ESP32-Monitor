@@ -8,10 +8,12 @@ extern "C" {
 #endif
 
 typedef struct monitor_pages monitor_pages_t;
-/* All functions are called by the LVGL display owner. The second page uses
- * unavailable placeholders until real companion snapshots are connected. */
+/* All functions are called by the LVGL display owner. The second page starts
+ * with unavailable placeholders until real companion snapshots are applied. */
 monitor_pages_t *monitor_pages_create(lv_obj_t *first, monitor_frame_variant_t variant,
                                       const monitor_activity_data_t *activity);
+/* Update page two in place; safe while a transition is running. */
+void monitor_pages_apply_activity(monitor_pages_t *pages, const monitor_activity_data_t *activity);
 bool monitor_pages_switch(monitor_pages_t *pages, bool next);
 /* Switching starts paused; resume after the panel has entered HPM. */
 void monitor_pages_resume(monitor_pages_t *pages);

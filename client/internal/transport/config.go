@@ -9,11 +9,41 @@ import (
 	"net/netip"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
 var dnsHost = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,189}[a-zA-Z0-9])?$`)
 var tokenChars = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
+
+// NormalizeLocalDevicesURL accepts only an explicitly selected private IPv4
+// base URL, without credentials or a path. Empty revokes authorization.
+func NormalizeLocalDevicesURL(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	if len(raw) > 192 || strings.TrimSpace(raw) != raw {
+		return "", errors.New("invalid_local_devices_url")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.Host == "" || u.Opaque != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawPath != "" || (u.Path != "" && u.Path != "/") {
+		return "", errors.New("invalid_local_devices_url")
+	}
+	ip, err := netip.ParseAddr(u.Hostname())
+	if err != nil || !ip.Is4() || !ip.IsPrivate() || forbidden(ip) || u.Hostname() != ip.String() {
+		return "", errors.New("invalid_local_devices_url")
+	}
+	if port := u.Port(); port != "" {
+		n, e := strconv.Atoi(port)
+		if e != nil || n < 1 || n > 65535 || strconv.Itoa(n) != port {
+			return "", errors.New("invalid_local_devices_url")
+		}
+	}
+	if strings.HasSuffix(u.Host, ":") {
+		return "", errors.New("invalid_local_devices_url")
+	}
+	return strings.TrimSuffix(raw, "/"), nil
+}
 
 func validateConfig(c wire.Config, allowHTTP func(string) bool) error {
 	bad := func() error { return errors.New("invalid_config") }
@@ -54,6 +84,11 @@ func validateConfig(c wire.Config, allowHTTP func(string) bool) error {
 			return bad()
 		}
 		if ip, e := netip.ParseAddr(u.Hostname()); e == nil && forbidden(ip) {
+			return bad()
+		}
+		// A private literal is permitted only for the exact locally approved
+		// base URL, including its scheme and port (also for HTTPS).
+		if ip, e := netip.ParseAddr(u.Hostname()); e == nil && ip.Unmap().IsPrivate() && (allowHTTP == nil || !allowHTTP(*d.URL)) {
 			return bad()
 		}
 	}

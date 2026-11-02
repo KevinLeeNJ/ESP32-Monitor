@@ -23,6 +23,9 @@ void monitor_weather_request_refresh(void);
 void monitor_weather_on_wifi_connected(void);
 void monitor_weather_on_wifi_disconnected(void);
 void monitor_weather_on_time_valid(void);
+/* While an authenticated companion session owns page one, pause the direct
+ * HTTPS producer. Resuming requests an immediate refresh. */
+void monitor_weather_set_companion_active(bool active);
 void monitor_weather_get(monitor_weather_data_t *out);
 
 #ifdef __cplusplus

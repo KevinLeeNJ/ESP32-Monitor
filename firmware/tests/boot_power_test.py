@@ -23,6 +23,10 @@ typedef unsigned TickType_t, UBaseType_t;
 static unsigned tick, priority, stage, mode_changes, idle_waits, draws, fresh_draws, scenario;
 static unsigned last_feed;
 static bool watched, low_power;
+static bool monitor_serial_active(void) { return scenario==5 && tick>=5000; }
+static bool monitor_companion_mqtt_running(void) { return false; }
+typedef struct { bool visible; } monitor_pairing_view_t;
+static void monitor_pairing_service_view(monitor_pairing_view_t *v) { v->visible=scenario==4 && tick>=5000; }
 typedef struct { unsigned remaining; } lv_obj_t;
 typedef struct { lv_obj_t root; } monitor_lvgl_t;
 typedef struct { bool hpm; } rlcd_port_t;
@@ -83,7 +87,7 @@ code += defines(source, ['BOOT_ANIMATION_TIMEOUT_MS', 'ANIMATION_TASK_PRIORITY']
 code += function(source, 'present_boot_monitor')+'\n'
 code += r'''
 int main(void) {
-    for(scenario=0;scenario<4;++scenario) {
+    for(scenario=0;scenario<6;++scenario) {
         tick=stage=mode_changes=idle_waits=draws=fresh_draws=last_feed=0;
         priority=1;watched=true;low_power=true;
         monitor_lvgl_t renderer={0};rlcd_port_t port={0};display_snapshot_t displayed={0};
@@ -91,7 +95,9 @@ int main(void) {
         assert(watched && !port.hpm && low_power && priority==1 && idle_waits>0);
         if(scenario==0)assert(result==0 && tick<31000 && fresh_draws==2 && mode_changes==6);
         if(scenario==1)assert(result==0 && tick==120000 && idle_waits==1 && mode_changes==2);
-        if(scenario>=2)assert(result==ESP_FAIL && tick<6000);
+        if(scenario==2 || scenario==3)assert(result==ESP_FAIL && tick<6000);
+        if(scenario==4)assert(result==ESP_OK && tick<6000);
+        if(scenario==5)assert(result==ESP_OK && tick<6000);
     }
     puts("Boot: long LPM idle without TWDT wake, absolute timeout, full fresh timelines after HPM settling, resume/draw errors restore LPM: PASS");
 }

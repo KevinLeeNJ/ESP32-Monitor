@@ -2,6 +2,7 @@
 #include "esp_check.h"
 #include "esp_pm.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "esp_task_wdt.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
@@ -12,6 +13,12 @@
 #include "monitor_lvgl.h"
 #include "monitor_ui.h"
 #include "monitor_pages.h"
+#include "monitor_pairing_ui.h"
+#include "monitor_pairing_service.h"
+#include "monitor_pairing_discovery.h"
+#include "monitor_companion_mqtt.h"
+#include "monitor_companion_view.h"
+#include "monitor_serial_service.h"
 #include "monitor_wifi_manager.h"
 #include "monitor_clock.h"
 #include "monitor_sensors.h"
@@ -40,6 +47,13 @@ static const rlcd_pins_t PINS = {
 };
 
 static monitor_ui_demo_data_t g_demo;
+static lv_obj_t *g_pairing_popup;
+static monitor_companion_mqtt_snapshot_t s_companion;
+static monitor_companion_view_t s_companion_view;
+static monitor_devices_snapshot_t s_companion_devices_seen;
+static uint32_t s_companion_generation, s_companion_devices_version;
+static uint64_t s_companion_log_ms;
+static bool s_companion_overlay, s_companion_connected, s_companion_page_revert;
 
 static void feed_task_watchdog(void)
 {
@@ -87,9 +101,81 @@ static void capture_display_snapshot(display_snapshot_t *snapshot)
     snapshot->humidity_percent = g_demo.humidity_percent;
     snapshot->aqi = g_demo.aqi;
     snapshot->weather_condition = g_demo.weather_condition;
-    snapshot->wifi_state = monitor_wifi_get_state();
+    snapshot->wifi_state = monitor_serial_active() ? MONITOR_WIFI_SERIAL : monitor_wifi_get_state();
     snapshot->profiling = monitor_pm_profile_active();
     g_demo.wifi_state = snapshot->wifi_state;
+    /* An authenticated LAN session owns page one's proxy values. Local
+     * battery and environment readings stay local, and RTC time remains the
+     * fallback while the upstream time source has no usable value. */
+    if (s_companion_overlay) {
+        snapshot->weather_condition = s_companion_view.weather_valid
+            ? s_companion_view.weather_condition : MONITOR_WEATHER_UNKNOWN;
+        snapshot->aqi = s_companion_view.aqi_valid ? s_companion_view.aqi : -1;
+        if (s_companion_view.time_valid) {
+            snprintf(snapshot->time_text, sizeof snapshot->time_text, "%s", s_companion_view.time_text);
+            snprintf(snapshot->date_text, sizeof snapshot->date_text, "%s", s_companion_view.date_text);
+        }
+        snapshot->devices = s_companion_view.devices;
+        snapshot->devices.version = s_companion_devices_version ? s_companion_devices_version : 1;
+    }
+}
+
+static bool apply_companion_if_changed(monitor_pages_t *pages)
+{
+    uint32_t generation = monitor_companion_mqtt_generation();
+    uint64_t now = (uint64_t)esp_timer_get_time() / 1000;
+    if (now - s_companion_log_ms >= 10000) {
+        s_companion_log_ms = now;
+        ESP_LOGI(TAG, "companion poll gen=%lu seen=%lu int_free=%u int_largest=%u psram_free=%u",
+                 (unsigned long)generation, (unsigned long)s_companion_generation,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    }
+    if (generation == s_companion_generation) return false;
+    s_companion_generation = generation;
+    bool have = monitor_companion_mqtt_get(&s_companion);
+    bool connected = have && s_companion.connected && s_companion.has_snapshot;
+    uint64_t elapsed = 0, heartbeat_elapsed = 0;
+    if (connected && s_companion.snapshot_received_ms) {
+        if (now > s_companion.snapshot_received_ms) elapsed = now - s_companion.snapshot_received_ms;
+    }
+    if (connected && s_companion.has_heartbeat && s_companion.heartbeat_received_ms &&
+        now > s_companion.heartbeat_received_ms) {
+        heartbeat_elapsed = now - s_companion.heartbeat_received_ms;
+    }
+    monitor_companion_view_build(connected ? &s_companion.snapshot : NULL,
+                                 connected && s_companion.has_heartbeat ? &s_companion.heartbeat : NULL,
+                                 elapsed, heartbeat_elapsed, &s_companion_view);
+    s_companion_overlay = connected && s_companion_view.proxy_owned;
+    if (connected != s_companion_connected) {
+        s_companion_connected = connected;
+        /* One owner per page-one source: the direct HTTP producers stop while
+         * an authenticated session proxies weather and Devices. */
+        monitor_weather_set_companion_active(connected);
+        monitor_devices_set_companion_active(connected);
+    }
+    if (!connected && pages && monitor_pages_is_second(pages)) s_companion_page_revert = true;
+    /* Card motion is expensive: only a semantic device change gets a new
+     * version. Heartbeats alone must not rebuild the first page. */
+    if (s_companion_overlay &&
+        (s_companion_view.devices.count != s_companion_devices_seen.count ||
+         s_companion_view.devices.status != s_companion_devices_seen.status ||
+         memcmp(s_companion_view.devices.devices, s_companion_devices_seen.devices,
+                sizeof s_companion_devices_seen.devices))) {
+        s_companion_devices_seen = s_companion_view.devices;
+        if (++s_companion_devices_version == 0) s_companion_devices_version = 1;
+    }
+    ESP_LOGI(TAG, "companion view overlay=%d proxy=%d devices=%u/%d weather=%d aqi=%d time=%d "
+             "github=%d usage=%d/%d task=%d music=%d/%d",
+             s_companion_overlay, s_companion_view.proxy_owned, s_companion_view.devices.count,
+             (int)s_companion_view.devices.status, s_companion_view.weather_valid,
+             s_companion_view.aqi_valid, s_companion_view.time_valid,
+             s_companion_view.activity.github_available, s_companion_view.activity.usage_5h_percent,
+             s_companion_view.activity.usage_week_percent, (int)s_companion_view.activity.agent_state,
+             s_companion_view.activity.music_available, s_companion_view.activity.music_playing);
+    if (pages) monitor_pages_apply_activity(pages, &s_companion_view.activity);
+    return true;
 }
 
 static bool display_snapshot_equal(const display_snapshot_t *a,
@@ -274,7 +360,8 @@ static void update_animation_clock(monitor_lvgl_t *renderer, display_snapshot_t 
  * hidden page lands its values without spending frames nobody can see. */
 static bool visible_page_animation(lv_obj_t *root, const monitor_pages_t *pages)
 {
-    return !monitor_pages_is_second(pages) && monitor_ui_animation_active(root);
+    return monitor_pairing_animating(g_pairing_popup) ||
+           (!monitor_pages_is_second(pages) && monitor_ui_animation_active(root));
 }
 
 /* The UI owns finite timelines, the display task owns panel mode and cadence.
@@ -287,18 +374,21 @@ static esp_err_t present_monitor(monitor_lvgl_t *renderer, rlcd_port_t *port,
     monitor_pages_t *pages = monitor_pages_from_first(root);
     bool animated = visible_page_animation(root, pages) || monitor_pages_active(pages);
     const UBaseType_t original_priority = raise_animation_priority();
-    esp_err_t result = animated ? rlcd_port_set_animation_mode(port, true) : ESP_OK;
+    esp_err_t result = (animated || monitor_serial_active()) ? rlcd_port_set_animation_mode(port, true) : ESP_OK;
     if (result != ESP_OK) {
         monitor_ui_set_animations_enabled(root, false);
         monitor_pages_settle(pages);
+        monitor_pairing_settle(g_pairing_popup);
     }
     bool page_animated = monitor_pages_active(pages);
     page_perf_t perf = {0};
     if(page_animated) monitor_pages_resume(pages);
+    monitor_pairing_resume(g_pairing_popup);
     TickType_t frame_tick = xTaskGetTickCount();
     TickType_t previous = frame_tick;
     do {
         feed_task_watchdog();
+        if (monitor_pairing_animating(g_pairing_popup)) lv_anim_refr_now();
         if (animated && result == ESP_OK) update_animation_clock(renderer, displayed);
         esp_err_t draw = page_animated ? commit_page_timed(renderer, pages, &perf)
                                        : commit_monitor_frame(renderer);
@@ -313,6 +403,7 @@ static esp_err_t present_monitor(monitor_lvgl_t *renderer, rlcd_port_t *port,
         /* Errors also leave a settled scene and attempt to restore LPM. */
         monitor_ui_set_animations_enabled(root, false);
         monitor_pages_settle(pages);
+        monitor_pairing_settle(g_pairing_popup);
         monitor_ui_set_animations_enabled(root, true);
         esp_err_t retry = commit_monitor_frame(renderer);
         if (retry != ESP_OK) ESP_LOGE(TAG, "settled frame retry failed: %s", esp_err_to_name(retry));
@@ -320,9 +411,9 @@ static esp_err_t present_monitor(monitor_lvgl_t *renderer, rlcd_port_t *port,
     if (animated) vTaskDelay(pdMS_TO_TICKS(MONITOR_UI_ANIMATION_FRAME_MS)); /* Let the final HPM scan finish. */
     /* Include the 100ms LPM transition itself in the look-ahead, otherwise
      * returning to LPM can consume the remaining HPM preparation window. */
-    const bool keep_hpm = result == ESP_OK && monitor_clock_is_valid() &&
+    const bool keep_hpm = monitor_serial_active() || (result == ESP_OK && monitor_clock_is_valid() &&
                           !monitor_pages_is_second(pages) &&
-                          milliseconds_to_minute() <= MINUTE_PREPARE_MS + 100U;
+                          milliseconds_to_minute() <= MINUTE_PREPARE_MS + 100U);
     esp_err_t low_power = keep_hpm ? ESP_OK : restore_panel_lpm(port);
     vTaskPrioritySet(NULL, original_priority);
     if(page_animated) report_page_perf(&perf);
@@ -378,6 +469,11 @@ static esp_err_t present_boot_monitor(monitor_lvgl_t *renderer, rlcd_port_t *por
              (unsigned)BOOT_ANIMATION_TIMEOUT_MS, (unsigned)uxTaskPriorityGet(NULL));
     while (result == ESP_OK) {
         feed_task_watchdog();
+        monitor_pairing_view_t pairing;
+        monitor_pairing_service_view(&pairing);
+        /* An authenticated LAN session pauses the direct producers, so waiting
+         * for their data here would delay page one until the startup timeout. */
+        if (pairing.visible || monitor_serial_active() || monitor_companion_mqtt_running()) break;
         uint32_t timer_delay = monitor_lvgl_process_timers(renderer);
         TickType_t now = xTaskGetTickCount();
         if (now - started >= timeout) break;
@@ -497,6 +593,10 @@ void app_main(void)
     ESP_ERROR_CHECK(gpio_install_isr_service(ESP_INTR_FLAG_IRAM));
     monitor_display_refresh_register();
     ESP_ERROR_CHECK(monitor_pm_profile_init());
+    esp_err_t serial_err = monitor_serial_start();
+    if (serial_err != ESP_OK) ESP_LOGW(TAG, "serial companion startup failed: %s", esp_err_to_name(serial_err));
+    esp_err_t mqtt_err = monitor_companion_mqtt_init();
+    if (mqtt_err != ESP_OK) ESP_LOGW(TAG, "LAN companion startup failed: %s", esp_err_to_name(mqtt_err));
 
     rlcd_port_t *port = NULL;
     ESP_ERROR_CHECK(rlcd_port_init(&port, &PINS));
@@ -522,6 +622,8 @@ void app_main(void)
 
     monitor_lvgl_invalidate_all(renderer);
     ESP_ERROR_CHECK(present_monitor(renderer, port, NULL));
+    esp_err_t discovery_err = monitor_pairing_discovery_start();
+    if (discovery_err != ESP_OK) ESP_LOGE(TAG, "pair discovery startup failed: %s", esp_err_to_name(discovery_err));
     ESP_ERROR_CHECK(esp_pm_lock_release(startup_lock));
     ESP_ERROR_CHECK(esp_pm_lock_delete(startup_lock));
     /* Start the hold after the complete placeholder frame has been transferred.
@@ -536,12 +638,15 @@ void app_main(void)
     display_snapshot_t displayed;
     ESP_ERROR_CHECK(present_boot_monitor(renderer, port, &displayed));
     /* Explicit hardware-preview fixture, shared with the simulator. */
-    monitor_activity_data_t activity = monitor_activity_demo();
-    monitor_pages_t *pages = monitor_pages_create(monitor_lvgl_root(renderer), MONITOR_FRAME_NORMAL, &activity);
+    monitor_pages_t *pages = monitor_pages_create(monitor_lvgl_root(renderer), MONITOR_FRAME_NORMAL, NULL);
     if(!pages) ESP_LOGE(TAG, "page controller initialization failed");
+    /* The startup loop may have consumed a pairing notification. */
+    monitor_display_refresh_request_reason(MONITOR_REFRESH_RECOVER);
+    uint32_t pairing_version = 0;
     for(;;) {
         feed_task_watchdog();
         uint32_t reasons = wait_display_refresh(port, renderer, pages);
+        if (apply_companion_if_changed(pages)) reasons |= MONITOR_REFRESH_RECOVER;
         if (!monitor_display_refresh_should_render(reasons, monitor_clock_is_valid())) continue;
         /* Finite timelines belong to the visible page alone. Disabling also lands
          * any pending roll on the hidden page immediately. */
@@ -563,13 +668,33 @@ void app_main(void)
         capture_display_snapshot(&current);
         bool changed = !display_snapshot_equal(&displayed, &current);
         if (changed) apply_display_snapshot(renderer, &current, displayed.devices.version != current.devices.version);
+        monitor_pairing_view_t pairing;
+        monitor_pairing_service_view(&pairing);
+        if (pairing.version != pairing_version) {
+            pairing_version = pairing.version;
+            if (g_pairing_popup) { monitor_pairing_close(g_pairing_popup); g_pairing_popup = NULL; changed = true; }
+            if (pairing.visible) {
+                g_pairing_popup = monitor_pairing_show(lv_obj_get_screen(monitor_lvgl_root(renderer)),
+                                                        MONITOR_FRAME_NORMAL, pairing.code, true);
+                if (g_pairing_popup) { monitor_pairing_pause(g_pairing_popup); changed = true; }
+            }
+        }
         uint32_t page_events = reasons & (MONITOR_REFRESH_PAGE_NEXT | MONITOR_REFRESH_PAGE_PREVIOUS);
         bool switched = false;
-        if (page_events == MONITOR_REFRESH_PAGE_NEXT || page_events == MONITOR_REFRESH_PAGE_PREVIOUS) {
-            int64_t prepare_start = esp_timer_get_time();
-            switched = monitor_pages_switch(pages, page_events == MONITOR_REFRESH_PAGE_NEXT);
-            ESP_LOGI(TAG, "PAGE_PERF prepare_us=%lu", (unsigned long)(esp_timer_get_time() - prepare_start));
-            if (!switched) ESP_LOGW(TAG, "page switch unavailable");
+        bool revert = s_companion_page_revert;
+        if (!g_pairing_popup && (revert || page_events == MONITOR_REFRESH_PAGE_NEXT ||
+                                 page_events == MONITOR_REFRESH_PAGE_PREVIOUS)) {
+            if (revert) s_companion_page_revert = false;
+            if (!revert && !s_companion_connected) {
+                /* Standalone keeps the Companion page hidden. */
+                ESP_LOGW(TAG, "page switch ignored: companion session inactive");
+            } else {
+                bool next = !revert && page_events == MONITOR_REFRESH_PAGE_NEXT;
+                int64_t prepare_start = esp_timer_get_time();
+                switched = monitor_pages_switch(pages, next);
+                ESP_LOGI(TAG, "PAGE_PERF prepare_us=%lu", (unsigned long)(esp_timer_get_time() - prepare_start));
+                if (!switched) ESP_LOGW(TAG, "page switch unavailable");
+            }
         }
         if (changed || switched) {
             esp_err_t draw_err = present_monitor(renderer, port, &current);
@@ -582,7 +707,12 @@ void app_main(void)
         } else {
             /* Minute preparation may have entered HPM even if a time
              * correction leaves the visible snapshot unchanged. */
-            ESP_ERROR_CHECK(restore_panel_lpm(port));
+            ESP_ERROR_CHECK(monitor_serial_active() ? rlcd_port_set_animation_mode(port, true) : restore_panel_lpm(port));
+        }
+        /* A session can end during the 600ms reveal; settle back once. */
+        if (!s_companion_connected && monitor_pages_is_second(pages)) {
+            s_companion_page_revert = true;
+            monitor_display_refresh_request_reason(MONITOR_REFRESH_RECOVER);
         }
     }
 }

@@ -18,7 +18,10 @@ type Pairing struct {
 	SerialKey      string `json:"serial_key"`
 	ConsentAt      int64  `json:"consent_at"`
 	WarningVersion int    `json:"warning_version"`
-	LANConsent     bool   `json:"lan_consent"`
+	// Retained for stored-record compatibility. A pairing authorizes both LAN
+	// and serial routes; there is no separate per-transport enable step.
+	LANConsent bool   `json:"lan_consent"`
+	SerialPort string `json:"serial_port,omitempty"`
 }
 type storeData struct {
 	HostID string             `json:"host_id"`
@@ -160,8 +163,30 @@ type DeviceStatus struct {
 	Address          string    `json:"address"`
 	ConfirmedOnline  bool      `json:"confirmed_online"`
 	ConnectionState  string    `json:"connection_state"`
+	Transport        string    `json:"transport,omitempty"`
+	PairingLost      bool      `json:"pairing_lost"`
 	SessionID        string    `json:"session_id"`
 	LastSeen         time.Time `json:"last_seen"`
+}
+
+func (s *Store) setSerialPort(id, port string) error {
+	if len(port) == 0 || len(port) > 200 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.data.Pairs[id]
+	if !ok || p.SerialPort == port {
+		return nil
+	}
+	old := p
+	p.SerialPort = port
+	s.data.Pairs[id] = p
+	if e := s.save(); e != nil {
+		s.data.Pairs[id] = old
+		return e
+	}
+	return nil
 }
 
 func (s *Store) consent(id string) error {

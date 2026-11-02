@@ -37,6 +37,20 @@ if(NOT EXISTS "${CJSON_SOURCE_DIR}/cJSON.c")
 endif()
 
 add_library(monitor_sim_core STATIC
+    "${FIRMWARE_ROOT}/third_party/nanopb/pb_common.c"
+    "${FIRMWARE_ROOT}/third_party/nanopb/pb_decode.c"
+    "${FIRMWARE_ROOT}/third_party/nanopb/pb_encode.c"
+    "${FIRMWARE_ROOT}/src/companion/companion.pb.c"
+    "${FIRMWARE_ROOT}/src/companion/monitor_discovery.c"
+    "${FIRMWARE_ROOT}/src/companion/monitor_discovery_auth.c"
+    "${FIRMWARE_ROOT}/src/companion/monitor_pairing_wire.c"
+    "${FIRMWARE_ROOT}/src/companion/monitor_pairing_code.c"
+    "${FIRMWARE_ROOT}/src/companion/monitor_pairing_session.c"
+    "${FIRMWARE_ROOT}/src/companion/monitor_lan_session.c"
+    "${FIRMWARE_ROOT}/src/companion/monitor_serial_proto.c"
+    "${FIRMWARE_ROOT}/src/companion/monitor_mqtt_wire.c"
+    "${FIRMWARE_ROOT}/src/companion/monitor_proto_strict.c"
+    "${FIRMWARE_ROOT}/src/companion/monitor_companion_view.c"
     "${FIRMWARE_ROOT}/src/display/monitor_pack.c"
     "${FIRMWARE_ROOT}/src/display/monitor_damage.c"
     "${FIRMWARE_ROOT}/src/display/monitor_devices_data.c"
@@ -44,6 +58,8 @@ add_library(monitor_sim_core STATIC
     "${FIRMWARE_ROOT}/src/display/monitor_render.c"
     "${FIRMWARE_ROOT}/app/ui/monitor_ui.c"
     "${FIRMWARE_ROOT}/app/ui/monitor_activity.c"
+    "${FIRMWARE_ROOT}/app/ui/monitor_music_font.c"
+    "${FIRMWARE_ROOT}/app/ui/monitor_pairing_ui.c"
     "${FIRMWARE_ROOT}/app/ui/monitor_pages.c"
     "${FIRMWARE_ROOT}/app/ui/activity_assets.c"
     "${FIRMWARE_ROOT}/app/ui/weather_assets.c"
@@ -62,6 +78,8 @@ add_library(monitor_sim_core STATIC
     src/sha256.c
 )
 target_include_directories(monitor_sim_core PUBLIC
+    "${FIRMWARE_ROOT}/third_party/nanopb"
+    "${FIRMWARE_ROOT}/src/companion"
     "${CJSON_SOURCE_DIR}"
     "${FIRMWARE_ROOT}/include"
     "${FIRMWARE_ROOT}/app/ui"
@@ -69,6 +87,7 @@ target_include_directories(monitor_sim_core PUBLIC
     "${CMAKE_CURRENT_LIST_DIR}/src"
 )
 target_link_libraries(monitor_sim_core PUBLIC lvgl)
+target_compile_definitions(monitor_sim_core PRIVATE MONITOR_MUSIC_FONT_PATH="${FIRMWARE_ROOT}/assets/fonts/music-cjk.bin")
 
 add_executable(monitor_simulator src/main.c)
 target_link_libraries(monitor_simulator PRIVATE monitor_sim_core)

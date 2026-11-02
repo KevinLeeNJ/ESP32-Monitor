@@ -78,11 +78,18 @@ func (b *Backend) ConnectSerial(ctx context.Context, port string, selection Seri
 	b.serialPorts[port] = true
 	b.mu.Unlock()
 	defer func() { b.mu.Lock(); delete(b.serialPorts, port); b.mu.Unlock() }()
-	stream, e := OpenSerialPort(port)
+	stream, e := b.openSerial(port)
 	if e != nil {
 		return e
 	}
 	return b.attachSerial(ctx, stream, selection, port)
+}
+
+func (b *Backend) openSerial(port string) (io.ReadWriteCloser, error) {
+	if b.opts.OpenSerial != nil {
+		return b.opts.OpenSerial(port)
+	}
+	return OpenSerialPort(port)
 }
 
 // AttachSerial also supports an owned duplex test stream; no physical-board claim.
@@ -125,20 +132,43 @@ func (b *Backend) attachSerial(ctx context.Context, stream io.ReadWriteCloser, s
 	request := Hello{ProtocolVersion: 1, Step: "request", HostID: b.HostID(), HostName: b.opts.HostName, HostNonce: hostNonce, SupportedVersions: []int{1}}
 	var f SerialFrame
 	var err error
-	for attempt := 0; attempt < 3; attempt++ {
+	var plain []byte
+	valid := false
+	for attempt := 0; attempt < 3 && !valid; attempt++ {
 		if err = write(SerialHello, request, nil); err != nil {
 			return err
 		}
-		f, err = r.next(ctx, 2*time.Second)
-		if err == nil {
+		/* Skip stale frames left over from a previous session (heartbeats,
+		 * goodbyes) and late responses to an earlier probe. */
+		for skipped := 0; skipped < 16; skipped++ {
+			f, err = r.next(ctx, 2*time.Second)
+			if err != nil {
+				break
+			}
+			plain, verifyErr := VerifySerial(f, nil, 2)
+			if verifyErr != nil || f.Type != SerialHello {
+				continue
+			}
+			if wire.Decode(plain, &hello, 2048) != nil || hello.ProtocolVersion != 1 ||
+				hello.Step != "response" || hello.HostID != b.HostID() {
+				/* A HELLO frame that is not a response is protocol garbage,
+				 * not a stale reply from an earlier session. */
+				return wire.ErrMessage
+			}
+			if hello.HostNonce != hostNonce {
+				continue
+			}
+			valid = true
 			break
 		}
 	}
-	if err != nil {
-		return err
+	if !valid {
+		if err != nil {
+			return err
+		}
+		return wire.ErrMessage
 	}
-	plain, err := VerifySerial(f, nil, 2)
-	if err != nil || f.Type != SerialHello || wire.Decode(plain, &hello, 2048) != nil || hello.ProtocolVersion != 1 || hello.Step != "response" || hello.HostID != b.HostID() || hello.HostNonce != hostNonce || !wire.UUID(hello.DeviceID) || !wire.Text(hello.DeviceName, 64) || !wire.Text(hello.FirmwareVersion, 64) || hello.MaxPayloadBytes != 16368 {
+	if !wire.UUID(hello.DeviceID) || !wire.Text(hello.DeviceName, 64) || !wire.Text(hello.FirmwareVersion, 64) || hello.MaxPayloadBytes != 16368 {
 		return wire.ErrMessage
 	}
 	if _, err = wire.RawNonce(hello.DeviceNonce); err != nil {
@@ -169,7 +199,18 @@ func (b *Backend) attachSerial(ctx context.Context, stream io.ReadWriteCloser, s
 			b.pairing.mu.Unlock()
 			return errors.New("session_conflict")
 		}
-		b.pairing.window = &pairWindow{deviceID: hello.DeviceID, consent: time.Now(), expires: time.Now().Add(120 * time.Second), sourceIP: "serial"}
+		b.pairing.window = &pairWindow{deviceID: hello.DeviceID, consent: time.Now(), expires: time.Now().Add(120 * time.Second), sourceIP: "serial", port: port, hostConfirmed: true, cancel: cancel}
+		serialPaired := false
+		defer func() {
+			if serialPaired {
+				return
+			}
+			b.pairing.mu.Lock()
+			if w := b.pairing.window; w != nil && w.deviceID == hello.DeviceID && w.sourceIP == "serial" {
+				b.pairing.window = nil
+			}
+			b.pairing.mu.Unlock()
+		}()
 		b.pairing.mu.Unlock()
 		for {
 			f, err = r.next(ctx, 120*time.Second)
@@ -229,6 +270,14 @@ func (b *Backend) attachSerial(ctx context.Context, stream io.ReadWriteCloser, s
 			}
 			if response.State == "approved" {
 				pair, _ = b.store.pair(hello.DeviceID)
+				// The window outlives pairing for status only; the session's
+				// cancel must not be reachable through a later cancel request.
+				p.mu.Lock()
+				if w.deviceID == hello.DeviceID {
+					w.cancel = nil
+				}
+				p.mu.Unlock()
+				serialPaired = true
 				break
 			}
 			if response.State == "rejected" {
@@ -237,6 +286,11 @@ func (b *Backend) attachSerial(ctx context.Context, stream io.ReadWriteCloser, s
 		}
 	} else if value(hello.PairingID) != pair.PairingID {
 		return errors.New("unauthorized")
+	}
+	if ok && port != "" && pair.SerialPort != port {
+		if e := b.store.setSerialPort(pair.DeviceID, port); e == nil {
+			pair.SerialPort = port
+		}
 	}
 	sid := wire.NewID()
 	keys, err := DeriveSerialKeys(b.HostID(), pair.DeviceID, pair.PairingID, sid, hostNonce, hello.DeviceNonce, pair.SerialKey)
@@ -300,26 +354,44 @@ func (b *Backend) attachSerial(ctx context.Context, stream io.ReadWriteCloser, s
 		return errors.New("unauthorized")
 	}
 	sessionCtx, sessionCancel := context.WithCancel(ctx)
-	s := &session{id: sid, pair: pair, transport: "serial", state: "syncing_config", expires: time.Now().Add(15 * time.Second), ctx: sessionCtx, cancel: sessionCancel, in: make(chan incoming, 4), qosDone: make(chan struct{}, 1), stream: stream, serialKeys: &keys, inputSeq: f.Seq, outputSeq: seq, rate: tokenBucket{tokens: 5, burst: 5, rate: 2, last: time.Now()}}
+	s := &session{id: sid, pair: pair, transport: "serial", state: "syncing_config", expires: time.Now().Add(15 * time.Second), ctx: sessionCtx, cancel: sessionCancel, in: make(chan incoming, 4), closeReq: make(chan closeRequest, 1), qosDone: make(chan struct{}, 1), stream: stream, serialKeys: &keys, inputSeq: f.Seq, outputSeq: seq, rate: tokenBucket{tokens: 5, burst: 5, rate: 2, last: time.Now()}}
 	b.mu.Lock()
+	if b.disabled[pair.DeviceID] {
+		b.mu.Unlock()
+		sessionCancel()
+		return errors.New("device_disabled")
+	}
 	if b.sessions[pair.DeviceID] != nil || len(b.sessions) >= 4 {
 		b.mu.Unlock()
 		sessionCancel()
 		return errors.New("session_conflict")
 	}
 	b.sessions[pair.DeviceID] = s
+	b.serialSeen[pair.DeviceID] = time.Now()
 	b.mu.Unlock()
 	done := make(chan struct{})
 	b.wg.Add(1)
 	go func() { defer b.wg.Done(); defer close(done); s.run(b) }()
 	defer func() { sessionCancel(); <-done }()
+	firstFrame := true
 	for {
-		f, err = r.next(sessionCtx, 3*time.Second)
+		wait := 3 * time.Second
+		if firstFrame {
+			/* The monitor may still be tearing down its LAN session and
+			 * sealing the encrypted config; the 15-second session expiry
+			 * bounds this startup phase instead of the running watchdog. */
+			wait = 12 * time.Second
+			firstFrame = false
+		}
+		f, err = r.next(sessionCtx, wait)
 		if err != nil {
 			return err
 		}
 		if f.Type == SerialHello || f.Type == SerialAuth || f.Type == SerialPair {
-			return errors.New("session_expired")
+			/* A late handshake or pairing frame can arrive while the Monitor
+			 * finishes the approval transition. It is unauthenticated and must
+			 * not tear down the session that just authenticated. */
+			continue
 		}
 		plain, err = VerifySerial(f, keys.Frame, 2)
 		if err != nil {
@@ -428,7 +500,7 @@ func (b *Backend) ProbeSerial(ctx context.Context, port string) (DiscoveredDevic
 	b.serialPorts[port] = true
 	b.mu.Unlock()
 	defer func() { b.mu.Lock(); delete(b.serialPorts, port); b.mu.Unlock() }()
-	stream, e := OpenSerialPort(port)
+	stream, e := b.openSerial(port)
 	if e != nil {
 		return DiscoveredDevice{}, e
 	}
@@ -445,21 +517,33 @@ func (b *Backend) ProbeSerial(ctx context.Context, port string) (DiscoveredDevic
 		if e = writeSerialFrame(probeCtx, stream, SerialHello, seq, request, nil); e != nil {
 			return DiscoveredDevice{}, e
 		}
-		f, err := r.next(probeCtx, 2*time.Second)
-		if err != nil {
-			continue
+		for skipped := 0; skipped < 16; skipped++ {
+			f, err := r.next(probeCtx, 2*time.Second)
+			if err != nil {
+				break
+			}
+			p, verifyErr := VerifySerial(f, nil, 2)
+			var hello Hello
+			if verifyErr != nil || f.Type != SerialHello {
+				continue
+			}
+			if wire.Decode(p, &hello, 2048) != nil || hello.ProtocolVersion != 1 ||
+				hello.Step != "response" || hello.HostID != b.HostID() {
+				return DiscoveredDevice{}, wire.ErrMessage
+			}
+			if hello.HostNonce != hn {
+				continue
+			}
+			if !wire.UUID(hello.DeviceID) || !wire.Text(hello.DeviceName, 64) {
+				return DiscoveredDevice{}, wire.ErrMessage
+			}
+			d := DiscoveredDevice{DeviceID: hello.DeviceID, Name: hello.DeviceName, ConnectionType: "serial", Port: port, State: "identified"}
+			_, d.Paired = b.store.pair(hello.DeviceID)
+			b.mu.Lock()
+			b.serialObserved[port] = d
+			b.mu.Unlock()
+			return d, nil
 		}
-		p, err := VerifySerial(f, nil, 2)
-		var hello Hello
-		if err != nil || f.Type != SerialHello || wire.Decode(p, &hello, 2048) != nil || hello.ProtocolVersion != 1 || hello.Step != "response" || hello.HostNonce != hn || hello.HostID != b.HostID() || !wire.UUID(hello.DeviceID) || !wire.Text(hello.DeviceName, 64) {
-			return DiscoveredDevice{}, wire.ErrMessage
-		}
-		d := DiscoveredDevice{DeviceID: hello.DeviceID, Name: hello.DeviceName, ConnectionType: "serial", Port: port, State: "identified"}
-		_, d.Paired = b.store.pair(hello.DeviceID)
-		b.mu.Lock()
-		b.serialObserved[port] = d
-		b.mu.Unlock()
-		return d, nil
 	}
 	return DiscoveredDevice{}, errTimeout
 }

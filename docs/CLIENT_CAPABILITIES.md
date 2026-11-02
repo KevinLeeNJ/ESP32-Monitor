@@ -154,11 +154,11 @@ macOS 和 Windows 公网 IPv4 先查询 `https://api.mac-stats.com/ip`，无有�
 
 | 能力 | 状态 | 边界 |
 | --- | --- | --- |
-| LAN发现、选设备、临时HTTP配对 | 已实现 | 可信LAN确认、双方核对、记录凭据；实机交互未完成 |
+| LAN发现、选设备、临时HTTP配对 | 已实现 | 可信LAN确认、双方核对、记录凭据；真机配对已完成 |
 | 内置MQTT与只读快照 | 已实现 | 主题ACL、会话认证、配置事务、快照/心跳/ACK/resync、Protobuf v2 |
-| 串口列举/探测/配对/连接 | 已实现 | EMON帧、CRC/HMAC/HKDF、Config AES-GCM；物理串口仍待验证 |
+| 串口列举/探测/配对/连接 | 已实现 | EMON帧、CRC/HMAC/HKDF、Config AES-GCM；真实 Client 与生产固件已完成串口配对、撤销、重连和发现主动探测；一次配对同时授权 LAN/串口 |
 | 配置代理 | 部分实现 | ESP32 配置天气/Devices/时间，Client 会话内存代理；不把上游秘密落入普通设置/诊断。Devices 代理仍请求 `/v1/devices/summary`，生产 Server 只提供 v2 摘要，二者尚未接通 |
-| 地址恢复/传输接管 | 部分实现 | 有重新绑定、认证邀请、串口认证优先代码/测试；休眠、DHCP、复杂断线矩阵待验收 |
+| 地址恢复/传输接管 | 部分实现 | LAN 重新绑定/认证邀请、串口 > LAN 自动接管、LAN 配对后 USB 自动切换、端口改名和重新启用自动连接已实现并有真机证据；休眠、DHCP、复杂断线矩阵待验收 |
 | 真固件双页三模式 | 待实现 | 模拟Monitor通过不能证明固件已接入或电源切换有效 |
 
 完整报文/安全/时效契约仅维护于 [ESP32与上位机协议](ESP32_COMPANION_PROTOCOL_V1.md)。Server–Client v2 与 Companion wire v2 是两套独立协议。

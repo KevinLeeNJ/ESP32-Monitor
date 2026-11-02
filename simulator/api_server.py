@@ -2,7 +2,7 @@
 """Devices API simulator using only Python's standard library.
 
 Run: python3 simulator/api_server.py --num 4 --port 18080
-ESP32 Base URL: http://<Mac LAN IP>:18080 (no /v1/devices/summary suffix).
+ESP32 Base URL: http://<Mac LAN IP>:18080 (no /v2/devices/summary suffix).
 Metrics change on every successful summary request. Restart with --num 0..4
 on the same port to check device removal/recovery without reconfiguring ESP32.
 """
@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 # Public, fixed development credential; exactly 64 hex characters like Server.
 READ_TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 DEVICE_NAMES = ("NAS", "PI", "PC", "ROUTER")
-SUMMARY_PATH = "/v1/devices/summary"
+SUMMARY_PATH = "/v2/devices/summary"
 
 
 def format_uptime(seconds):
@@ -176,7 +176,7 @@ def main(argv=None):
             print(f"ESP32 API Base URL: http://<Mac LAN IP>:{server.server_port}", flush=True)
         print(f"Fixed read Token: {READ_TOKEN}", flush=True)
         print("Use the Base URL without a path. This fixed-token HTTP service is for LAN debugging.", flush=True)
-        print("GET /healthz (public); GET /v1/devices/summary (Bearer token). Ctrl-C to stop.", flush=True)
+        print("GET /healthz (public); GET /v2/devices/summary (Bearer token). Ctrl-C to stop.", flush=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:

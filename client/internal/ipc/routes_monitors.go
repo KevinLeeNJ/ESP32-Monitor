@@ -29,7 +29,7 @@ func (s *Server) routeMonitors(w http.ResponseWriter, r *http.Request) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
-		result, err := s.app.DiscoverMonitors(ctx)
+		result, err := s.app.DiscoverMonitors(ctx, req.Address)
 		if err != nil {
 			writeAppError(w, err)
 			return
@@ -77,6 +77,12 @@ func (s *Server) routeMonitors(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, status)
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/monitors/pairing/cancel":
+		if err := s.app.CancelMonitorPairing(); err != nil {
+			writeAppError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/monitors/revoke":
 		var req deviceRequest
 		if err := decodeBody(r, &req); err != nil || req.Device == "" {
@@ -147,7 +153,9 @@ func (s *Server) routeMonitors(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		selection := transport.SerialSelection{DeviceID: req.DeviceID, TrustPhysicalConnection: req.TrustPhysicalConnection}
-		if err := s.app.ConnectMonitorSerial(r.Context(), req.Port, selection); err != nil {
+		/* The serial link outlives this HTTP call: a GUI navigation or client
+		 * timeout must not tear down an established Monitor session. */
+		if err := s.app.ConnectMonitorSerial(context.WithoutCancel(r.Context()), req.Port, selection); err != nil {
 			writeAppError(w, err)
 			return
 		}

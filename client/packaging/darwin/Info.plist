@@ -28,5 +28,7 @@
 	<string>13.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>用于在局域网中发现、配对 ESP32 Monitor 并传输监控数据。</string>
 </dict>
 </plist>

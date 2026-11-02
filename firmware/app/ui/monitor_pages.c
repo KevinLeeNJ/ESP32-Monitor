@@ -188,9 +188,14 @@ monitor_pages_t *monitor_pages_from_first(lv_obj_t *first)
     return marker ? lv_obj_get_user_data(marker) : NULL;
 }
 
-bool monitor_pages_switch(monitor_pages_t *p, bool next)
+void monitor_pages_apply_activity(monitor_pages_t *p, const monitor_activity_data_t *activity)
 {
-    if(!p || p->active) return false;
+    if(!p || !p->second || !activity) return;
+    monitor_activity_apply(p->second, activity);
+}
+
+bool monitor_pages_switch(monitor_pages_t *p, bool next)
+{    if(!p || p->active) return false;
     if(!prepare_snapshots(p)) return false;
     p->next = next;
     p->target_second = !p->second_visible;

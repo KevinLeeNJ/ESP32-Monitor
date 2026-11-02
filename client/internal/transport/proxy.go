@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"esp32-monitor/client/internal/logging"
 	"esp32-monitor/client/internal/transport/wire"
 	"fmt"
 	"io"
@@ -68,7 +69,7 @@ func (p *proxyWorker) devicesLoop(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		var d wire.DeviceSummary
-		e := p.fetch(ctx, strings.TrimRight(*p.config.Devices.URL, "/")+"/v1/devices/summary", &d, 4096, func(r *http.Request) {
+		e := p.fetch(ctx, strings.TrimRight(*p.config.Devices.URL, "/")+"/v2/devices/summary", &d, 4096, func(r *http.Request) {
 			r.Header.Set("Accept", "application/json")
 			if token := *p.config.Devices.Token; token != "" {
 				r.Header.Set("Authorization", "Bearer "+token)
@@ -108,26 +109,34 @@ func (p *proxyWorker) fetch(ctx context.Context, endpoint string, out any, limit
 	if e != nil {
 		return errors.New("upstream_unavailable")
 	}
-	r.Header.Set("Accept-Encoding", "identity")
+	/* Do not pin Accept-Encoding here: QWeather answers gzip even when asked
+	 * for identity, and Go only transparently decompresses when it owns the
+	 * header. */
+	r.Header.Set("Accept", "application/json")
 	if configure != nil {
 		configure(r)
 	}
 	resp, e := p.client.Do(r)
 	if e != nil {
+		logging.L("transport").Warn("proxy_fetch_failed", "host", r.URL.Host, "path", r.URL.Path, "error", e.Error())
 		return errors.New("upstream_unavailable")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		logging.L("transport").Warn("proxy_fetch_failed", "host", r.URL.Host, "path", r.URL.Path, "status", resp.StatusCode)
 		return errors.New("auth_required")
 	}
 	if resp.StatusCode != 200 {
+		logging.L("transport").Warn("proxy_fetch_failed", "host", r.URL.Host, "path", r.URL.Path, "status", resp.StatusCode)
 		return errors.New("upstream_error")
 	}
 	if ce := resp.Header.Get("Content-Encoding"); ce != "" && ce != "identity" {
+		logging.L("transport").Warn("proxy_fetch_failed", "host", r.URL.Host, "path", r.URL.Path, "content_encoding", ce)
 		return errors.New("invalid_upstream")
 	}
 	b, e := io.ReadAll(io.LimitReader(resp.Body, int64(limit+1)))
 	if e != nil || wire.DecodeJSON(b, out, limit) != nil {
+		logging.L("transport").Warn("proxy_fetch_failed", "host", r.URL.Host, "path", r.URL.Path, "read_error", e != nil, "bytes", len(b))
 		return errors.New("invalid_upstream")
 	}
 	return nil

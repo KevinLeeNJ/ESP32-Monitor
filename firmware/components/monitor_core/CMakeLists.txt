@@ -1,11 +1,27 @@
 idf_component_register(
     SRCS
+        "../../third_party/nanopb/pb_common.c"
+        "../../third_party/nanopb/pb_decode.c"
+        "../../third_party/nanopb/pb_encode.c"
+        "../../src/companion/companion.pb.c"
+        "../../src/companion/monitor_discovery.c"
+        "../../src/companion/monitor_discovery_auth.c"
+        "../../src/companion/monitor_pairing_wire.c"
+        "../../src/companion/monitor_pairing_code.c"
+        "../../src/companion/monitor_pairing_session.c"
+        "../../src/companion/monitor_lan_session.c"
+        "../../src/companion/monitor_serial_proto.c"
+        "../../src/companion/monitor_mqtt_wire.c"
+        "../../src/companion/monitor_proto_strict.c"
+        "../../src/companion/monitor_companion_view.c"
         "../../src/display/monitor_pack.c"
         "../../src/display/monitor_damage.c"
         "../../src/display/monitor_devices_data.c"
         "../../src/display/monitor_render.c"
         "../../app/ui/monitor_ui.c"
         "../../app/ui/monitor_activity.c"
+        "../../app/ui/monitor_music_font.c"
+        "../../app/ui/monitor_pairing_ui.c"
         "../../app/ui/monitor_pages.c"
         "../../app/ui/activity_assets.c"
         "../../app/ui/weather_assets.c"
@@ -20,7 +36,10 @@ idf_component_register(
         "../../app/ui/fonts/monitor_ndot57_20.c"
         "../../app/ui/fonts/monitor_ndot57_30.c"
     INCLUDE_DIRS
+        "../../third_party/nanopb"
+        "../../src/companion"
         "../../include"
         "../../app/ui"
     REQUIRES lvgl cjson
+    EMBED_FILES "../../assets/fonts/music-cjk.bin"
 )

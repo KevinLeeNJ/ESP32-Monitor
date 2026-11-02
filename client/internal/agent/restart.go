@@ -16,6 +16,7 @@ import (
 
 	"esp32-monitor/client/internal/ipc"
 	"esp32-monitor/client/internal/platform"
+	"esp32-monitor/client/internal/transport"
 )
 
 var restartClientPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
@@ -26,7 +27,7 @@ var restartClientPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 func validateRestartArgs(currentSocket string, args []string) error {
 	fs := flag.NewFlagSet("monitor-agent-restart", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var socket, uploadURL, tokenFile, companionIP, githubLogin, githubClientID, nativeLibrary, taskAdapter string
+	var socket, uploadURL, tokenFile, companionIP, localDevicesURL, githubLogin, githubClientID, nativeLibrary, taskAdapter string
 	var collector, companion, codex, music bool
 	fs.StringVar(&socket, "ipc-socket", "", "")
 	fs.BoolVar(&collector, "collector", false, "")
@@ -34,6 +35,7 @@ func validateRestartArgs(currentSocket string, args []string) error {
 	fs.StringVar(&tokenFile, "collector-upload-token-file", "", "")
 	fs.BoolVar(&companion, "companion", false, "")
 	fs.StringVar(&companionIP, "companion-ip", "", "")
+	fs.StringVar(&localDevicesURL, "companion-local-devices-url", "", "")
 	fs.StringVar(&githubLogin, "github-user", "", "")
 	fs.StringVar(&githubClientID, "github-client-id", "", "")
 	fs.BoolVar(&codex, "codex", false, "")
@@ -71,12 +73,13 @@ func validateRestartArgs(currentSocket string, args []string) error {
 			return errors.New("restart_token_path_invalid")
 		}
 	}
-	if !companion && companionIP != "" {
+	if !companion && (companionIP != "" || localDevicesURL != "") {
 		return errors.New("restart_companion_args_invalid")
 	}
 	if companionIP != "" && net.ParseIP(companionIP).To4() == nil {
 		return errors.New("restart_companion_ip_invalid")
 	}
+	if _, err := transport.NormalizeLocalDevicesURL(localDevicesURL); err != nil { return errors.New("restart_local_devices_url_invalid") }
 	if githubLogin != "" && !platform.ValidGitHubLogin(githubLogin) {
 		return errors.New("restart_github_login_invalid")
 	}

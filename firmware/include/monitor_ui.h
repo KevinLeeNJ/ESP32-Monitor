@@ -29,6 +29,8 @@ typedef enum {
     MONITOR_WIFI_CONNECTED,
     MONITOR_WIFI_DISCONNECTED,
     MONITOR_WIFI_OFFLINE,
+    /* Companion serial session owns the link; the radio is suspended. */
+    MONITOR_WIFI_SERIAL,
 } monitor_wifi_state_t;
 
 typedef enum {
@@ -117,7 +119,7 @@ typedef struct {
     bool github_available;
     monitor_task_state_t agent_state;
     /* Usage percentages, or -1 if unavailable. */
-    int usage_5h_percent, usage_week_percent;
+    int usage_5h_percent, usage_week_percent; /* Remaining percentage, -1 if unavailable. */
     const char *music_title, *music_artist, *music_source;
     /* Playback state is valid only when music_available is true. */
     bool music_available, music_playing;
@@ -128,6 +130,8 @@ typedef struct {
 monitor_activity_data_t monitor_activity_demo(void);
 lv_obj_t *monitor_activity_create(lv_obj_t *parent, const monitor_activity_data_t *data,
                                   monitor_frame_variant_t variant);
+/* Update the live page in place. String pointers are copied immediately. */
+void monitor_activity_apply(lv_obj_t *root, const monitor_activity_data_t *data);
 
 lv_obj_t *monitor_ui_create(lv_obj_t *parent);
 /* Live boot: empty Devices, --:-- clock, -- information; updates animate.

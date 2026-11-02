@@ -245,3 +245,5 @@ button,button:hover,button:active,button:focus,button:focus-visible{box-shadow:n
   .value-cell-value{text-align:left}
   .pixel-select-menu{max-width:70vw}
 }
+.discovery-row .row-right{flex:0 0 auto;min-width:118px;justify-content:flex-end}
+.discovery-row .row-right .btn{min-width:118px;text-align:center}

@@ -104,6 +104,11 @@ func (s *AppService) GetSettings() Settings { return s.sup.CurrentSettings() }
 // Agent is not restarted; failures roll the process state and the file back.
 func (s *AppService) SaveSettings(ctx context.Context, settings Settings) (Settings, error) {
 	current := s.sup.CurrentSettings()
+	localURL, err := transport.NormalizeLocalDevicesURL(settings.Companion.LocalDevicesURL)
+	if err != nil {
+		return current, err
+	}
+	settings.Companion.LocalDevicesURL = localURL
 	if settings.GitHub.Login != "" && !platform.ValidGitHubLogin(settings.GitHub.Login) {
 		return current, errors.New("invalid_github_login")
 	}
@@ -242,9 +247,9 @@ type MonitorService struct{ sup *Supervisor }
 func NewMonitorService(sup *Supervisor) *MonitorService { return &MonitorService{sup: sup} }
 
 // DiscoverMonitors scans LAN and serial for reachable Monitors.
-func (s *MonitorService) DiscoverMonitors(ctx context.Context, timeoutMS int) (transport.DiscoveryResult, error) {
+func (s *MonitorService) DiscoverMonitors(ctx context.Context, timeoutMS int, address string) (transport.DiscoveryResult, error) {
 	return call(ctx, s.sup, func(ctx context.Context, c *ipc.Client) (transport.DiscoveryResult, error) {
-		return c.DiscoverMonitors(ctx, timeoutMS)
+		return c.DiscoverMonitors(ctx, timeoutMS, address)
 	})
 }
 
@@ -273,6 +278,13 @@ func (s *MonitorService) BeginPairing(ctx context.Context, device string, trustL
 func (s *MonitorService) ConfirmPairing(ctx context.Context, pairingID string, approve bool) (transport.PairingStatus, error) {
 	return call(ctx, s.sup, func(ctx context.Context, c *ipc.Client) (transport.PairingStatus, error) {
 		return c.ConfirmMonitorPairing(ctx, pairingID, approve)
+	})
+}
+
+// CancelPairing cancels the current pairing window, including serial pairing.
+func (s *MonitorService) CancelPairing(ctx context.Context) error {
+	return callVoid(ctx, s.sup, func(ctx context.Context, c *ipc.Client) error {
+		return c.CancelMonitorPairing(ctx)
 	})
 }
 

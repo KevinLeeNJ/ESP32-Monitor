@@ -36,6 +36,7 @@ static int s_data_mux;
 #define eSetBits 0
 static void *s_task;
 static bool s_wifi_available,clock_ready=true,task_ok=true;
+static bool s_companion_active;
 static unsigned worker_step,task_creates,queued;
 static jmp_buf worker_done;
 static bool monitor_clock_is_valid(void){return clock_ready;}
@@ -160,6 +161,11 @@ int main(void){
     queued=0;monitor_weather_on_time_valid();assert(queued==WEATHER_EVT_UPDATE);
     reset();worker_step=0;if(!setjmp(worker_done))weather_task(NULL);
     assert(http_calls[1]==2 && http_calls[2]==2 && !http_calls[0]);
+    // A Companion-owned page must suppress the direct producer entirely.
+    reset();s_companion_active=true;worker_step=4;
+    if(!setjmp(worker_done))weather_task(NULL);
+    assert(!http_calls[1] && !http_calls[2] && !notifications);
+    s_companion_active=false;
     puts("Weather/AQI first data, unchanged/partial/error cache, no location, cached/IP location, NVS failure, strict coordinates/API code/metrics, allocation failure and recovery: PASS");
 }
 '''

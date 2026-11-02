@@ -62,7 +62,8 @@ type Status struct {
 }
 
 type monitorDiscoverRequest struct {
-	TimeoutMS int `json:"timeout_ms"`
+	TimeoutMS int    `json:"timeout_ms"`
+	Address   string `json:"address,omitempty"`
 }
 
 type pairingConfirmRequest struct {
@@ -123,6 +124,7 @@ type collectorSettingsRequest struct {
 type companionSettingsRequest struct {
 	Enabled bool   `json:"enabled"`
 	BindIP  string `json:"bind_ip"`
+	LocalDevicesURL string `json:"local_devices_url"`
 }
 
 type serverTestRequest struct {

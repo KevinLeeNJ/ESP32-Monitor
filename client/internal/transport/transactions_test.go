@@ -24,6 +24,9 @@ func testBackend(t *testing.T) *Backend {
 func TestBrokerACLAndRejectBeforeTakeover(t *testing.T) {
 	b := testBackend(t)
 	pair := Pairing{DeviceID: wire.NewID(), DeviceName: "board", PairingID: wire.NewID(), DeviceToken: wire.Nonce(), SerialKey: wire.Nonce(), ConsentAt: time.Now().Unix(), WarningVersion: 1, LANConsent: true}
+	if e := b.store.put(pair); e != nil {
+		t.Fatal(e)
+	}
 	sid, e := b.invite(pair)
 	if e != nil {
 		t.Fatal(e)
@@ -134,6 +137,48 @@ func TestRebindPreservesStableIdentity(t *testing.T) {
 	}
 	if b.MQTTAddress() != current || b.HostID() != id {
 		t.Fatal("failed listener replacement did not roll back")
+	}
+}
+
+func TestSerialDiscoveryHidesNonUSBVirtualPorts(t *testing.T) {
+	b, e := New(Options{StoreDirectory: filepath.Join(t.TempDir(), "vault"), HostName: "frontend-host", BindIP: "127.0.0.1", MQTTAddress: "127.0.0.1:0", HTTPAddress: "127.0.0.1:0", EnumerateSerial: func() ([]DiscoveredDevice, error) {
+		return []DiscoveredDevice{
+			{Name: "USB JTAG serial", ConnectionType: "serial", Port: "/dev/cu.usbmodem1101", VID: "303A", PID: "1001", State: "unverified"},
+			{Name: "/dev/cu.debug-console", ConnectionType: "serial", Port: "/dev/cu.debug-console", State: "unverified"},
+			{Name: "/dev/cu.Bluetooth-Incoming-Port", ConnectionType: "serial", Port: "/dev/cu.Bluetooth-Incoming-Port", State: "unverified"},
+		}, nil
+	}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer b.Close()
+	ports, e := b.ListSerialPorts()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(ports) != 1 || ports[0].Port != "/dev/cu.usbmodem1101" {
+		t.Fatalf("unexpected serial candidates: %+v", ports)
+	}
+}
+
+func TestPairedSerialPortKeepsIdentityFromStore(t *testing.T) {
+	b, e := New(Options{StoreDirectory: filepath.Join(t.TempDir(), "vault"), HostName: "frontend-host", BindIP: "127.0.0.1", MQTTAddress: "127.0.0.1:0", HTTPAddress: "127.0.0.1:0", EnumerateSerial: func() ([]DiscoveredDevice, error) {
+		return []DiscoveredDevice{{Name: "USB JTAG serial", ConnectionType: "serial", Port: "/dev/cu.usbmodem1101", VID: "303A", PID: "1001", State: "unverified"}}, nil
+	}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer b.Close()
+	pair := Pairing{DeviceID: wire.NewID(), DeviceName: "USB Monitor", PairingID: wire.NewID(), DeviceToken: wire.Nonce(), SerialKey: wire.Nonce(), ConsentAt: time.Now().Unix(), WarningVersion: 1, SerialPort: "/dev/cu.usbmodem1101"}
+	if e = b.store.put(pair); e != nil {
+		t.Fatal(e)
+	}
+	ports, e := b.ListSerialPorts()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(ports) != 1 || !ports[0].Paired || ports[0].DeviceID != pair.DeviceID || ports[0].Name != pair.DeviceName {
+		t.Fatalf("paired serial identity not restored: %+v", ports)
 	}
 }
 

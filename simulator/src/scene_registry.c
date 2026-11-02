@@ -1,5 +1,7 @@
 #include "scene_registry.h"
+#include "monitor_companion_view.h"
 #include "monitor_pages.h"
+#include "monitor_pairing_ui.h"
 
 #include <string.h>
 
@@ -13,6 +15,13 @@ static lv_obj_t *create_monitor_scene(lv_obj_t *parent,
                                       monitor_frame_variant_t variant)
 {
     return monitor_ui_create_variant(parent, variant);
+}
+
+static lv_obj_t *create_pairing(lv_obj_t *parent, monitor_frame_variant_t variant)
+{
+    lv_obj_t *root = create_monitor_scene(parent, variant);
+    if (root) monitor_pairing_show(root, variant, "123456", false);
+    return root;
 }
 
 #define REVIEW_FACTORY(name, devices, count) \
@@ -160,6 +169,17 @@ static lv_obj_t *create_local_offline(lv_obj_t *parent, monitor_frame_variant_t 
     return root;
 }
 
+static lv_obj_t *create_serial_status(lv_obj_t *parent, monitor_frame_variant_t variant)
+{
+    lv_obj_t *root = create_monitor_scene(parent, variant);
+    monitor_ui_snapshot_t ui = {.time_text = "20:15", .date_text = "SAT 1 NOV",
+        .wifi_state = MONITOR_WIFI_SERIAL, .battery_percent = 78,
+        .weather_condition = MONITOR_WEATHER_CLEAR,
+        .temperature_tenths_c = 245, .humidity_percent = 58, .aqi = 42};
+    monitor_ui_apply_snapshot(root, &ui);
+    return root;
+}
+
 static lv_obj_t *create_profiling(lv_obj_t *parent, monitor_frame_variant_t variant)
 {
     lv_obj_t *root = create_monitor_scene(parent, variant);
@@ -220,7 +240,124 @@ ACTIVITY_FACTORY(unknown, MONITOR_TASK_UNKNOWN)
 static lv_obj_t *create_activity_paused(lv_obj_t *parent, monitor_frame_variant_t variant)
 { return create_activity_state(parent, variant, MONITOR_TASK_RUNNING, false); }
 
+static lv_obj_t *create_activity_long_music(lv_obj_t *parent, monitor_frame_variant_t variant)
+{
+    monitor_activity_data_t data = activity_fixture(MONITOR_TASK_RUNNING, true);
+    data.music_title = "夜空中最亮的星 日本語 한국어 A Very Long Song";
+    data.music_artist = "歌手 Artist 아티스트";
+    return monitor_activity_create(parent, &data, variant);
+}
+
+static lv_obj_t *create_activity_cjk_music(lv_obj_t *parent, monitor_frame_variant_t variant)
+{
+    monitor_activity_data_t data = activity_fixture(MONITOR_TASK_RUNNING, true);
+    data.music_title = "星の歌 ABC";
+    data.music_artist = "한국어 가수";
+    return monitor_activity_create(parent, &data, variant);
+}
+
+/* Deterministic Companion snapshot: page two must come from the same
+ * conversion the firmware runs, never from a simulator-only fixture. */
+static const esp32monitor_companion_Snapshot *companion_fixture(void)
+{
+    static esp32monitor_companion_Snapshot s;
+    static bool ready;
+    if(ready) return &s;
+    memset(&s, 0, sizeof s);
+    s.protocol_version = 1;
+    strcpy(s.host_id, "11111111-1111-4111-8111-111111111111");
+    strcpy(s.device_id, "22222222-2222-4222-8222-222222222222");
+    strcpy(s.session_id, "33333333-3333-4333-8333-333333333333");
+    strcpy(s.config_epoch, "44444444-4444-4444-8444-444444444444");
+    s.config_revision = 1;
+    s.seq = 7;
+    s.sent_at = 1800000000;
+    strcpy(s.sections.github.state, "healthy");
+    s.sections.github.stale_after_ms = 86400000;
+    s.sections.github.expire_after_ms = 604800000;
+    s.sections.github.has_data = true;
+    strcpy(s.sections.github.data.login, "monitor");
+    strcpy(s.sections.github.data.start_date, "2026-03-16");
+    s.sections.github.data.days = MONITOR_ACTIVITY_WEEKS * MONITOR_ACTIVITY_DAYS;
+    for(unsigned i = 0; i < s.sections.github.data.days; ++i) {
+        unsigned n = (i * 17 + i / 7 * 11) % 13;
+        s.sections.github.data.levels[i] = n < 5 ? '0' : n < 8 ? '1' : n < 10 ? '2' : n < 12 ? '3' : '4';
+    }
+    strcpy(s.sections.codex.state, "healthy");
+    s.sections.codex.has_data = true;
+    esp32monitor_companion_QuotaSection *q = &s.sections.codex.data.quota;
+    strcpy(q->state, "healthy");
+    q->stale_after_ms = 180000; q->expire_after_ms = 300000;
+    q->has_data = true;
+    q->data.windows_count = 2;
+    strcpy(q->data.windows[0].bucket_id, "codex");
+    q->data.windows[0].has_window_minutes = q->data.windows[0].has_used_percent = true;
+    q->data.windows[0].window_minutes = 300;
+    q->data.windows[0].used_percent = 36;
+    strcpy(q->data.windows[1].bucket_id, "codex");
+    q->data.windows[1].has_window_minutes = q->data.windows[1].has_used_percent = true;
+    q->data.windows[1].window_minutes = 10080;
+    q->data.windows[1].used_percent = 24;
+    esp32monitor_companion_TasksSection *t = &s.sections.codex.data.tasks;
+    strcpy(t->state, "healthy");
+    t->stale_after_ms = 15000; t->expire_after_ms = 15000;
+    t->has_data = true;
+    strcpy(t->data.adapter, "codex");
+    strcpy(t->data.scope, "local");
+    strcpy(t->data.state, "waiting_approval");
+    strcpy(s.sections.music.state, "healthy");
+    s.sections.music.stale_after_ms = 15000;
+    s.sections.music.expire_after_ms = 15000;
+    s.sections.music.has_data = true;
+    strcpy(s.sections.music.data.adapter, "spotify");
+    strcpy(s.sections.music.data.coverage, "full");
+    s.sections.music.data.has_current = true;
+    strcpy(s.sections.music.data.current.state, "playing");
+    s.sections.music.data.current.has_title = true;
+    strcpy(s.sections.music.data.current.title, "夜空中最亮的星 A Very Long Song");
+    s.sections.music.data.current.has_artist = true;
+    strcpy(s.sections.music.data.current.artist, "歌手 Artist");
+    s.sections.music.data.current.has_source = true;
+    strcpy(s.sections.music.data.current.source, "Spotify");
+    s.sections.music.data.current.has_duration = s.sections.music.data.current.has_position = true;
+    s.sections.music.data.current.duration = 225;
+    s.sections.music.data.current.position = 88;
+    strcpy(s.sections.proxy.state, "healthy");
+    s.sections.proxy.stale_after_ms = 15000;
+    s.sections.proxy.expire_after_ms = 15000;
+    s.sections.proxy.has_data = true;
+    strcpy(s.sections.proxy.data.config_epoch, s.config_epoch);
+    s.sections.proxy.data.config_revision = 1;
+    ready = true;
+    return &s;
+}
+
+static lv_obj_t *create_companion_live(lv_obj_t *parent, monitor_frame_variant_t variant)
+{
+    monitor_companion_view_t view;
+    monitor_companion_view_build(companion_fixture(), NULL, 0, 0, &view);
+    return monitor_activity_create(parent, &view.activity, variant);
+}
+
+static lv_obj_t *create_companion_update(lv_obj_t *parent, monitor_frame_variant_t variant)
+{
+    monitor_activity_data_t empty = {.usage_5h_percent = -1, .usage_week_percent = -1,
+        .agent_state = MONITOR_TASK_UNKNOWN, .music_position_seconds = -1,
+        .music_duration_seconds = -1};
+    lv_obj_t *root = monitor_activity_create(parent, &empty, variant);
+    if(!root) return NULL;
+    monitor_companion_view_t view;
+    monitor_companion_view_build(companion_fixture(), NULL, 0, 0, &view);
+    monitor_activity_apply(root, &view.activity);
+    return root;
+}
+
 static const simulator_scene_t SCENES[] = {
+    { .name = "companion-live", .description = "Second page from a Companion snapshot", .create = create_companion_live },
+    { .name = "companion-update", .description = "Empty page updated in place from a snapshot", .create = create_companion_update },
+    { .name = "activity-long-music", .description = "Long mixed CJK music metadata", .create = create_activity_long_music },
+    { .name = "activity-cjk-music", .description = "Japanese and Korean music metadata", .create = create_activity_cjk_music },
+    { .name = "pairing", .description = "Companion pairing verification code", .create = create_pairing },
     { .name = "page-next", .description = "First to second page transition", .create = create_page_next },
     { .name = "page-previous", .description = "Second to first page transition", .create = create_page_previous },
     { .name = "activity-paused", .description = "Music is not playing", .create = create_activity_paused },
@@ -235,6 +372,7 @@ static const simulator_scene_t SCENES[] = {
     { .name = "profiling", .description = "PM profiling replaces the date for five minutes", .create = create_profiling },
     { .name = "configuring", .description = "Configuration session status", .create = create_configuring },
     { .name = "offline", .description = "Offline retains local data after configuration", .create = create_local_offline },
+    { .name = "serial-status", .description = "Serial companion session replaces the Wi-Fi icon", .create = create_serial_status },
     { .name = "monitor-waiting", .description = "Live boot placeholders before first data", .create = create_waiting },
     { .name = "animation-load-3", .description = "First snapshot with three Devices", .create = create_first_data_3 },
     { .name = "animation-load-2", .description = "First snapshot with two Devices", .create = create_first_data_2 },

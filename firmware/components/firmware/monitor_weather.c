@@ -29,6 +29,7 @@
 
 static TaskHandle_t s_task;
 static volatile bool s_wifi_available;
+static volatile bool s_companion_active;
 static portMUX_TYPE s_data_mux = portMUX_INITIALIZER_UNLOCKED;
 static monitor_weather_data_t s_data = {
     .condition = MONITOR_WEATHER_CLEAR, .aqi = -1,
@@ -369,7 +370,8 @@ static void weather_task(void *arg)
         xTaskNotifyWait(0, UINT32_MAX, &notified, portMAX_DELAY);
         ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
         feed_task_watchdog();
-        if (s_wifi_available && monitor_clock_is_valid() && (notified & WEATHER_EVT_UPDATE)) update_weather();
+        if (!s_companion_active && s_wifi_available && monitor_clock_is_valid() &&
+            (notified & WEATHER_EVT_UPDATE)) update_weather();
     }
 }
 
@@ -383,6 +385,14 @@ esp_err_t monitor_weather_start(void)
 void monitor_weather_request_refresh(void)
 {
     if (s_task != NULL) xTaskNotify(s_task, WEATHER_EVT_UPDATE, eSetBits);
+}
+
+void monitor_weather_set_companion_active(bool active)
+{
+    if (s_companion_active == active) return;
+    s_companion_active = active;
+    ESP_LOGI(TAG, "direct producer %s", active ? "paused" : "resumed");
+    if (!active) monitor_weather_request_refresh();
 }
 
 void monitor_weather_on_wifi_connected(void)

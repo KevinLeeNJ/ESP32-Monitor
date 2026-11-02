@@ -112,3 +112,23 @@ idf.py -C firmware/tests -B "$PWD/firmware/tests/build/esp32s3" build
 ```
 
 测试应用会替换当前生产应用/分区，板端执行应单独安排，随后恢复生产固件。主机用例和板端测试共享生产解析/调度/打包代码，但主机通过不等于实物电源/无线/显示验收。测试入口见 [host.cmake](../firmware/tests/host.cmake)、[test_contracts.c](../firmware/tests/test_contracts.c) 和 [test_main.c](../firmware/tests/main/test_main.c)。
+
+## 7. 下一步开发计划（2026-10-31 评审定稿）
+
+技术决策（已确认）：
+
+- Protobuf 编解码采用 nanopb，从 [companion.proto](../client/internal/transport/wire/companion.proto) 生成代码；固件侧以解码为主，仅最小编码（Ack/ConfigAck）。
+- MQTT 认证方式不预先锁定，以实现阶段 Client 内置 Broker（[mqtt.go](../client/internal/transport/mqtt.go)）的实际代码现状为准。
+- Serial 模式物理接口使用 USB Serial/JTAG，需处理日志输出与数据帧在同一 USB 口的复用冲突。
+- 分阶段交付，每阶段独立真机验证后再进入下一阶段。
+
+| 阶段 | 工作 | 验证依据 |
+| --- | --- | --- |
+| 阶段0 修复Devices链路 | 固件 [monitor_devices.c](../firmware/components/firmware/monitor_devices.c) 与 Client proxy 从 `/v1/devices/summary` 迁移到 v2（Server 已删 v1，当前设备卡片断数据） | 真机第一页设备卡片恢复在线设备显示 |
+| 阶段1 Companion LAN | 引入 nanopb（生成 + 构建集成，同步登记 monitor_core 与 simulator CMake）；Envelope 及消息解码；UDP 18444 发现应答；HTTP 18080 配对（6位核对码双确认）；device_token/serial_key 存 NVS 并可撤销；MQTT 18883 会话、Snapshot/Heartbeat 处理、Presence 上报 | 真机与真实 Client 完成配对并持续接收快照；覆盖 F1/F2 验收项 |
+| 阶段2 Serial | USB Serial/JTAG 上的 EMON 帧收发：CRC32 + HMAC 校验、Config 分区 AES-256-GCM 解密、噪声重同步 | 真板 USB 线直连 Client 串口联调（物理互操作此前未实测）；覆盖 F3 验收项 |
+| 阶段3 模式管理与电源 | standalone/lan/serial 状态机：优先级、断线回退（LAN 断开回落 standalone）；Companion 活跃时的睡眠锁与既有 PM 自动 Light Sleep 协调 | 拔网线/断串口/关 Client 各场景切换正确；电池模式功耗不回退；覆盖 F4 验收项 |
+| 阶段4 UI 真实数据 | 第二页 GitHub/Codex（额度+任务）/音乐分区替换 `monitor_activity_demo()`；修正 Serial 秒显示（`time_text[8]` 不足 HH:MM:SS 所需 9 字节） | 确定性模拟器场景 + 真机翻页视觉记录；覆盖 F5 验收项 |
+| 阶段5 稳定性 | 与真实 Client 全模式 72 小时长跑 | 覆盖重连、Resync、Goodbye、凭据失效；无持续增长/错误锁/半退出模式；对应 F6 |
+
+OTA 本轮不纳入：协议与分区/回滚策略未冻结，待阶段1–3稳定后另行评审。

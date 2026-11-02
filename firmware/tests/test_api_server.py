@@ -58,6 +58,8 @@ class ApiServerTests(unittest.TestCase):
                     self.assertEqual(metric["value"], f"{metric['percent']}%")
 
     def test_authentication_and_routes(self):
+        self.assertEqual(api.SUMMARY_PATH, "/v2/devices/summary")
+        self.assertEqual(self.request("/v1/devices/summary", api.READ_TOKEN)[0], 404)
         self.assertEqual(self.request(api.SUMMARY_PATH)[0], 401)
         self.assertEqual(self.request(api.SUMMARY_PATH, "f" * 64)[0], 401)
         self.assertEqual(self.request("/healthz")[:2], (200, {"status": "ok"}))

@@ -8,6 +8,9 @@ esp_err_t monitor_devices_start(void);
 void monitor_devices_request_refresh(void);
 void monitor_devices_config_changed(void);
 void monitor_devices_set_wifi_available(bool available);
+/* While an authenticated companion session owns page one, pause the direct
+ * HTTP producer. Resuming requests an immediate refresh. */
+void monitor_devices_set_companion_active(bool active);
 void monitor_devices_get(monitor_devices_snapshot_t *out);
 #ifdef __cplusplus
 }

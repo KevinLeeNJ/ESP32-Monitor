@@ -27,9 +27,10 @@ type Options struct {
 	HTTPAddress        string
 	DiscoveryTarget    string // Optional explicit UDP target, also useful for isolated tests.
 	Providers          *companion.Service
-	EnumerateSerial    func() ([]DiscoveredDevice, error) // Optional platform adapter injection.
-	HTTPClient         HTTPDoer                           // Optional trusted embedding/testing override.
-	AllowPrivateServer func(host string) bool             // Explicit local GUI authorization.
+	EnumerateSerial    func() ([]DiscoveredDevice, error)       // Optional platform adapter injection.
+	OpenSerial         func(string) (io.ReadWriteCloser, error) // Optional test/embedding override.
+	HTTPClient         HTTPDoer                                 // Optional trusted embedding/testing override.
+	AllowPrivateServer func(host string) bool                   // Explicit local GUI authorization.
 	AllowHTTPServer    func(baseURL string) bool
 }
 type Backend struct {
@@ -57,8 +58,20 @@ type Backend struct {
 	disabled          map[string]bool
 	serialPorts       map[string]bool
 	serialObserved    map[string]DiscoveredDevice
+	serialPending     map[string]bool
+	serialProbing     map[string]bool
+	serialProbe       map[string]*recoveryState
+	serialSeen        map[string]time.Time
+	pairingLost       map[string]pairingLostState
 	globalRate        tokenBucket
 }
+type pairingLostState struct {
+	last  time.Time
+	count int
+}
+
+const pairingLostWindow = 15 * time.Second
+
 type recoveryState struct {
 	next    time.Time
 	attempt int
@@ -92,7 +105,7 @@ func New(opts Options) (*Backend, error) {
 		return nil, e
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	b := &Backend{opts: opts, store: store, ctx: ctx, cancel: cancel, candidates: map[string]candidate{}, sessions: map[string]*session{}, recovery: map[string]*recoveryState{}, disabled: map[string]bool{}, serialPorts: map[string]bool{}, serialObserved: map[string]DiscoveredDevice{}}
+	b := &Backend{opts: opts, store: store, ctx: ctx, cancel: cancel, candidates: map[string]candidate{}, sessions: map[string]*session{}, recovery: map[string]*recoveryState{}, disabled: map[string]bool{}, serialPorts: map[string]bool{}, serialObserved: map[string]DiscoveredDevice{}, serialPending: map[string]bool{}, serialProbing: map[string]bool{}, serialProbe: map[string]*recoveryState{}, serialSeen: map[string]time.Time{}, pairingLost: map[string]pairingLostState{}}
 	b.networkIP.Store(opts.BindIP)
 	b.interfaceName = interfaceForIP(opts.BindIP)
 	b.globalRate = tokenBucket{tokens: 20, burst: 20, rate: 10, last: time.Now()}
@@ -128,6 +141,8 @@ func New(opts Options) (*Backend, error) {
 	b.wg.Add(1)
 	go b.maintain()
 	b.wg.Add(1)
+	go b.watchSerialPorts()
+	b.wg.Add(1)
 	go b.watchInterface()
 	logging.L("transport").Info("companion_listen", "bind_ip", opts.BindIP, "mqtt", b.MQTTAddress())
 	return b, nil
@@ -141,11 +156,11 @@ func (b *Backend) mqttPort() int {
 }
 func (b *Backend) Close() error {
 	b.closeOnce.Do(func() {
-		b.cancel()
 		b.networkChangeMu.Lock()
-
 		b.pairing.close()
 		b.mu.Lock()
+		/* Cancel under mu so track/attach cannot add to wg after Wait starts. */
+		b.cancel()
 		for _, s := range b.sessions {
 			s.cancel()
 			if s.client != nil {
@@ -165,18 +180,41 @@ func (b *Backend) Revoke(device string) error {
 	if !wire.UUID(device) {
 		return wire.ErrMessage
 	}
+	logging.L("transport").Info("device_pairing_revoke", "device", logging.Ref(device))
 	b.mu.Lock()
-	if s := b.sessions[device]; s != nil {
+	s := b.sessions[device]
+	delete(b.candidates, device)
+	delete(b.recovery, device)
+	delete(b.serialSeen, device)
+	b.mu.Unlock()
+	if e := b.store.remove(device); e != nil {
+		return e
+	}
+	for attempt := 0; s != nil && attempt < 2; attempt++ {
+		done := make(chan struct{})
+		select {
+		case s.closeReq <- closeRequest{reason: "host_revoked", done: done}:
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+			case <-s.ctx.Done():
+			}
+		case <-time.After(500 * time.Millisecond):
+		case <-s.ctx.Done():
+		}
 		s.cancel()
 		if s.client != nil {
 			s.client.Stop(errors.New("pairing_revoked"))
 		}
-		delete(b.sessions, device)
+		b.mu.Lock()
+		next := b.sessions[device]
+		b.mu.Unlock()
+		if next == s {
+			break
+		}
+		s = next
 	}
-	delete(b.candidates, device)
-	delete(b.recovery, device)
-	b.mu.Unlock()
-	return b.store.remove(device)
+	return nil
 }
 func (b *Backend) SetDeviceEnabled(device string, enabled bool) error {
 	if _, ok := b.store.pair(device); !ok {
@@ -194,22 +232,45 @@ func (b *Backend) SetDeviceEnabled(device string, enabled bool) error {
 		}
 	}
 	b.mu.Unlock()
+	if enabled {
+		// Re-enabling must not fall back to LAN while the same Monitor is still
+		// attached by USB; serial has priority.
+		b.startKnownSerial(device)
+	}
 	return nil
+}
+
+// InvalidateProxySessions stops workers that may hold an obsolete local-source
+// authorization. Pairings survive and the normal reconnect loop resynchronizes.
+func (b *Backend) InvalidateProxySessions() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for id, s := range b.sessions {
+		s.cancel()
+		if s.client != nil {
+			s.client.Stop(errors.New("proxy_authorization_changed"))
+		}
+		delete(b.sessions, id)
+		delete(b.recovery, id)
+	}
 }
 func (b *Backend) invite(p Pairing) (string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.ctx.Err() != nil || !p.LANConsent || b.disabled[p.DeviceID] {
+	if b.ctx.Err() != nil || b.disabled[p.DeviceID] {
 		return "", errors.New("unauthorized")
 	}
-	if _, ok := b.sessions[p.DeviceID]; ok {
+	if stored, ok := b.store.pair(p.DeviceID); !ok || stored.PairingID != p.PairingID {
+		return "", errors.New("unauthorized")
+	}
+	if _, ok := b.sessions[p.DeviceID]; ok || b.serialPending[p.DeviceID] {
 		return "", errors.New("session_conflict")
 	}
 	if len(b.sessions) >= 4 {
 		return "", errors.New("capacity_exceeded")
 	}
 	ctx, cancel := context.WithCancel(b.ctx)
-	s := &session{id: wire.NewID(), pair: p, transport: "lan", state: "authenticating", expires: time.Now().Add(30 * time.Second), ctx: ctx, cancel: cancel, in: make(chan incoming, 4), qosDone: make(chan struct{}, 1), rate: tokenBucket{tokens: 5, burst: 5, rate: 2, last: time.Now()}}
+	s := &session{id: wire.NewID(), pair: p, transport: "lan", state: "authenticating", expires: time.Now().Add(30 * time.Second), ctx: ctx, cancel: cancel, in: make(chan incoming, 4), closeReq: make(chan closeRequest, 1), qosDone: make(chan struct{}, 1), rate: tokenBucket{tokens: 5, burst: 5, rate: 2, last: time.Now()}}
 	b.sessions[p.DeviceID] = s
 	return s.id, nil
 }
@@ -234,7 +295,9 @@ func (b *Backend) maintain() {
 		}
 		var jobs []Pairing
 		for _, p := range b.store.pairs() {
-			if !p.LANConsent || b.disabled[p.DeviceID] || b.sessions[p.DeviceID] != nil {
+			/* A serial route is being established or is active. Serial takes
+			 * priority, so do not invite the same device over LAN meanwhile. */
+			if b.disabled[p.DeviceID] || b.sessions[p.DeviceID] != nil || b.serialPending[p.DeviceID] {
 				continue
 			}
 			r := b.recovery[p.DeviceID]
@@ -267,6 +330,9 @@ func (b *Backend) release(s *session) {
 		delete(b.sessions, s.pair.DeviceID)
 		b.recovery[s.pair.DeviceID] = &recoveryState{next: time.Now().Add(10 * time.Second)}
 	}
+	if s.transport == "serial" {
+		b.serialSeen[s.pair.DeviceID] = time.Now()
+	}
 	b.mu.Unlock()
 	if s.proxy != nil {
 		s.proxy.stop()
@@ -275,7 +341,15 @@ func (b *Backend) release(s *session) {
 	s.config = nil
 	s.transactions = nil
 	s.lastMusic = nil
-	s.serialKeys = nil
+	if s.serialKeys != nil {
+		b.mu.Lock()
+		if state := b.serialProbe[s.pair.SerialPort]; state != nil {
+			state.attempt = 0
+			state.next = time.Now().Add(2 * time.Second)
+		}
+		b.mu.Unlock()
+		s.serialKeys = nil
+	}
 	if s.client != nil {
 		s.client.Stop(errors.New("session_expired"))
 	}
@@ -303,5 +377,12 @@ func (b *Backend) ConfirmLANConsent(device string, trusted bool) error {
 	if !trusted {
 		return errors.New("lan_consent_required")
 	}
-	return b.store.consent(device)
+	if e := b.store.consent(device); e != nil {
+		return e
+	}
+	// A newly consented device should not wait behind an old recovery backoff.
+	b.mu.Lock()
+	delete(b.recovery, device)
+	b.mu.Unlock()
+	return nil
 }

@@ -26,6 +26,10 @@ type transaction struct {
 	topic    string
 	response any
 }
+type closeRequest struct {
+	reason string
+	done   chan struct{}
+}
 type session struct {
 	pendingMQTT        uint16
 	snapshotAccepted   bool
@@ -34,32 +38,41 @@ type session struct {
 	lastMusic map[string]any
 	leased    map[string]int64
 
-	id                                                string
-	pair                                              Pairing
-	transport, state                                  string
-	expires                                           time.Time
-	ctx                                               context.Context
-	cancel                                            context.CancelFunc
-	client                                            *mqtt.Client
-	stream                                            io.ReadWriteCloser
-	in                                                chan incoming
-	qosDone                                           chan struct{}
-	subscriptions                                     map[string]bool
-	proxy                                             *proxyWorker
-	config                                            *wire.Config
-	inputSeq, outputSeq, lastSnapshot                 uint32
-	lastReceipt, lastSent, lastSnapshotAt, lastResync time.Time
-	firstSnapshot                                     time.Time
-	sentProof                                         map[uint32]bool
-	semantic                                          string
-	ages                                              map[string]ageObservation
-	transactions                                      map[string]transaction
-	rate                                              tokenBucket
-	serialKeys                                        *SerialKeys
-	serialInputSeq                                    uint32
+	id                                                     string
+	pair                                                   Pairing
+	transport, state                                       string
+	expires                                                time.Time
+	ctx                                                    context.Context
+	cancel                                                 context.CancelFunc
+	client                                                 *mqtt.Client
+	stream                                                 io.ReadWriteCloser
+	in                                                     chan incoming
+	closeReq                                               chan closeRequest
+	qosDone                                                chan struct{}
+	subscriptions                                          map[string]bool
+	proxy                                                  *proxyWorker
+	config                                                 *wire.Config
+	inputSeq, outputSeq, lastSnapshot                      uint32
+	lastReceipt, lastHeartbeat, lastSnapshotAt, lastResync time.Time
+	firstSnapshot                                          time.Time
+	sentProof                                              map[uint32]bool
+	semantic                                               string
+	ages                                                   map[string]ageObservation
+	transactions                                           map[string]transaction
+	rate                                                   tokenBucket
+	serialKeys                                             *SerialKeys
+	serialInputSeq                                         uint32
 }
 
-func (s *session) setState(b *Backend, state string) { b.mu.Lock(); s.state = state; b.mu.Unlock() }
+func (s *session) setState(b *Backend, state string) {
+	b.mu.Lock()
+	changed := s.state != state
+	s.state = state
+	b.mu.Unlock()
+	if changed {
+		logging.L("transport").Info("device_session_state", "device", logging.Ref(s.pair.DeviceID), "state", state)
+	}
+}
 func (s *session) next() uint32 {
 	if s.outputSeq == math.MaxUint32 {
 		s.cancel()
@@ -115,11 +128,25 @@ func (s *session) run(b *Backend) {
 		select {
 		case <-s.ctx.Done():
 			return
+		case req := <-s.closeReq:
+			if s.config != nil {
+				_ = s.control(b, "goodbye", wire.Goodbye{ProtocolVersion: 1, SessionID: s.id, Reason: req.reason}, nil)
+				if s.transport == "serial" {
+					/* USB CDC queues the final write; closing the port at once
+					 * can drop the goodbye before the monitor revokes. */
+					time.Sleep(500 * time.Millisecond)
+				}
+			}
+			if req.done != nil {
+				close(req.done)
+			}
+			return
 		case m := <-s.in:
 			if e := s.handle(b, m); e != nil {
 				if errors.Is(e, errTimeout) {
 					return
 				}
+				logging.L("transport").Warn("device_message_rejected", "device", device, "topic", m.topic, "error", e.Error())
 				if e = s.control(b, "error", wire.Failure(e.Error(), nil), nil); e != nil {
 					return
 				}
@@ -128,8 +155,14 @@ func (s *session) run(b *Backend) {
 			timeout := 90 * time.Second
 			if s.transport == "serial" {
 				timeout = 3 * time.Second
+				/* Before the first config the monitor may still be stopping
+				 * its radio and LAN session; the 15-second session expiry
+				 * below bounds that startup phase instead. */
+				if s.config == nil {
+					timeout = 0
+				}
 			}
-			if time.Since(s.lastReceipt) >= timeout {
+			if timeout > 0 && time.Since(s.lastReceipt) >= timeout {
 				return
 			}
 			if s.state != "connected" && time.Now().After(s.expires) {
@@ -143,6 +176,30 @@ func (s *session) run(b *Backend) {
 			}
 			sections := s.project(b)
 			sig := semantic(sections)
+			interval := 30 * time.Second
+			if s.transport == "serial" {
+				interval = time.Second
+			} else if sections.Music.State == "healthy" || liveTasks(sections) {
+				interval = 10 * time.Second
+			}
+			if s.state != "connected" && s.lastSnapshot != 0 {
+				interval = time.Second
+			}
+			// Snapshots do not prove that the monitor has received a heartbeat.
+			// Keep a separate clock so frequent updates cannot starve heartbeats.
+			firstHeartbeatDelay := 2 * time.Second
+			if s.transport == "serial" {
+				firstHeartbeatDelay = 1500 * time.Millisecond
+			}
+			if s.lastSnapshot != 0 && time.Since(s.firstSnapshot) >= firstHeartbeatDelay &&
+				(s.lastHeartbeat.IsZero() || time.Since(s.lastHeartbeat) >= interval) {
+				if e := s.heartbeat(b, sections); e != nil {
+					return
+				}
+				continue
+			}
+			// Semantics still travel as complete snapshots; freshness between
+			// them rides on heartbeat source leases instead of periodic resends.
 			if (s.lastSnapshot == 0 || sig != s.semantic) && time.Since(s.lastSnapshotAt) >= 2*time.Second {
 				if e := s.snapshot(b, sections, sig); e != nil {
 					if errors.Is(e, errLarge) {
@@ -150,26 +207,10 @@ func (s *session) run(b *Backend) {
 						s.lastSnapshotAt = time.Now()
 						continue
 					}
+					logging.L("transport").Warn("device_snapshot_failed", "device", device, "error", e.Error())
 					return
 				}
 				continue
-			}
-			interval := 30 * time.Second
-			if s.transport == "serial" {
-				interval = time.Second
-			} else if sections.Music.State == "healthy" || liveTasks(sections) {
-				interval = 10 * time.Second
-			}
-			if s.lastSnapshot != 0 && s.firstSnapshot.IsZero() {
-				s.firstSnapshot = s.lastSnapshotAt
-			}
-			if s.state != "connected" && s.lastSnapshot != 0 {
-				interval = time.Second
-			}
-			if time.Since(s.lastSent) >= interval {
-				if e := s.heartbeat(b, sections); e != nil {
-					return
-				}
 			}
 		}
 	}
@@ -247,6 +288,11 @@ func (s *session) handle(b *Backend, m incoming) error {
 		return nil
 	} // replays never renew a watchdog
 	s.inputSeq = seq
+	if s.transport == "serial" {
+		/* Every valid serial frame proves the board is alive; heartbeats are
+		 * not the only traffic before the first snapshot is acknowledged. */
+		s.lastReceipt = time.Now()
+	}
 	if req != nil {
 		if !wire.UUID(*req) {
 			return wire.ErrMessage
@@ -389,6 +435,15 @@ func (s *session) handle(b *Backend, m incoming) error {
 		if wire.Decode(body, &g, 1024) != nil || g.ProtocolVersion != 1 || g.SessionID != s.id {
 			return wire.ErrMessage
 		}
+		if g.Reason == "pairing_revoked" {
+			logging.L("transport").Info("device_pairing_revoked", "device", logging.Ref(s.pair.DeviceID))
+			if e := b.store.remove(s.pair.DeviceID); e != nil {
+				logging.L("transport").Warn("device_pairing_revoke_failed", "device", logging.Ref(s.pair.DeviceID), "error", e.Error())
+			}
+			b.mu.Lock()
+			delete(b.recovery, s.pair.DeviceID)
+			b.mu.Unlock()
+		}
 		return errTimeout
 	case "error":
 		return nil
@@ -415,7 +470,6 @@ func (s *session) snapshot(b *Backend, sections wire.Sections, sig string) error
 	}
 	s.lastSnapshot = seq
 	s.lastSnapshotAt = time.Now()
-	s.lastSent = s.lastSnapshotAt
 	if s.firstSnapshot.IsZero() {
 		s.firstSnapshot = s.lastSnapshotAt
 	}
@@ -452,13 +506,12 @@ func (s *session) heartbeat(b *Backend, sections wire.Sections) error {
 	}
 	h.SourceUpdates = updates
 	if s.transport == "serial" {
-		h.SourceUpdates = nil
 		s.outputSeq--
 	}
 	if e := s.send(b, "heartbeat", h, 0); e != nil {
 		return e
 	}
-	s.lastSent = time.Now()
+	s.lastHeartbeat = time.Now()
 	s.recordProof(seq)
 	return nil
 }

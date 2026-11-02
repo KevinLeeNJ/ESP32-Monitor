@@ -27,11 +27,11 @@ export const companionService = {
 };
 
 export const monitorService = {
-  discover: (timeoutMS: number) => call<DiscoveryResult>("MonitorService.DiscoverMonitors", timeoutMS),
+  discover: (timeoutMS: number, address = "") => call<DiscoveryResult>("MonitorService.DiscoverMonitors", timeoutMS, address),
   devices: () => call<DeviceStatus[]>("MonitorService.GetMonitorDevices"),
   pairingStatus: () => call<PairingStatus>("MonitorService.GetPairingStatus"),
   beginPairing: (device: string, trustLAN: boolean) => call<PairingStatus>("MonitorService.BeginPairing", device, trustLAN),
-  confirmPairing: (pairingID: string, approve: boolean) => call<PairingStatus>("MonitorService.ConfirmPairing", pairingID, approve),
+  cancelPairing: () => call<void>("MonitorService.CancelPairing"),
   revoke: (device: string) => call<void>("MonitorService.RevokeDevice", device),
   setEnabled: (device: string, enabled: boolean) => call<void>("MonitorService.SetDeviceEnabled", device, enabled),
   confirmLANConsent: (device: string, trusted: boolean) => call<void>("MonitorService.ConfirmLANConsent", device, trusted),

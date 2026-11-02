@@ -72,11 +72,17 @@ static int gpio_sleep_sel_dis(int pin) {
     assert(pin >= 0 && pin < 64); retained_pins |= 1ULL << pin; return ESP_OK;
 }
 typedef struct { unsigned remaining; } lv_obj_t;
+static lv_obj_t *g_pairing_popup;
+static bool monitor_pairing_animating(lv_obj_t *popup) { return popup && popup->remaining; }
+static void monitor_pairing_resume(lv_obj_t *popup) { (void)popup; }
+static void monitor_pairing_settle(lv_obj_t *popup) { if (popup) popup->remaining=0; }
+static void lv_anim_refr_now(void) { if (g_pairing_popup && g_pairing_popup->remaining) --g_pairing_popup->remaining; }
 typedef struct { lv_obj_t root; } monitor_lvgl_t;
 typedef struct { char time_text[8], date_text[16]; } display_snapshot_t;
 static uint32_t tick, priority=1, first_clock_roll, first_draw;
 static unsigned command_count, fail_command, failed_draw, draws, notifications, idle_notifications;
-static bool clock_valid=true, storm;
+static bool clock_valid=true, storm, serial_active;
+static bool monitor_serial_active(void) { return serial_active; }
 static uint32_t timer_due = UINT32_MAX;
 static bool timer_dirty;
 static uint32_t monitor_lvgl_process_timers(monitor_lvgl_t *r) {
@@ -279,6 +285,15 @@ int main(void) {
     assert(present_monitor(&static_frame,&p,NULL)==ESP_OK);
     assert(draws==1 && command_count==0 && !pm_acquires && !p.animation_mode && tick==1007);
     puts("Static update commits directly in known LPM without HPM switching, settling or final-scan waits: PASS");
+    reset();tick=1000;serial_active=true;p=(rlcd_port_t){.mode_known=true};
+    monitor_lvgl_t serial_frame={0};
+    assert(present_monitor(&serial_frame,&p,NULL)==ESP_OK && p.animation_mode);
+    assert(command_count==1 && commands[0]==0x38);
+    assert(present_monitor(&serial_frame,&p,NULL)==ESP_OK && p.animation_mode && command_count==1);
+    serial_active=false;
+    assert(present_monitor(&serial_frame,&p,NULL)==ESP_OK && !p.animation_mode);
+    assert(command_count==2 && commands[1]==0x39);
+    puts("Serial static updates enter and retain HPM, then restore LPM after disconnect: PASS");
     reset();tick=1000;te_signal=true;
     p=(rlcd_port_t){.mode_known=true,.frame_ready=1};
     monitor_lvgl_t synced={.root.remaining=12};

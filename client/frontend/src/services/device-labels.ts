@@ -1,5 +1,6 @@
 const connectionStates: Record<string, string> = {
   connected: "已连接", disconnected: "未连接", connecting: "连接中", pending: "等待确认",
+  pairing_lost: "配对已失效，请重新配对",
 };
 
 const connectionTypes: Record<string, string> = { lan: "局域网", serial: "串口" };

@@ -30,6 +30,7 @@ typedef struct { char url[193]; char token[129]; } devices_config_t;
 static devices_config_t s_config;
 static uint32_t s_generation;
 static bool s_wifi, s_have_snapshot;
+static volatile bool s_companion_active;
 static int64_t s_last_success;
 static monitor_devices_snapshot_t s_snapshot;
 
@@ -58,6 +59,13 @@ void monitor_devices_get(monitor_devices_snapshot_t *out)
 void monitor_devices_request_refresh(void)
 {
     if (s_task) xTaskNotifyGive(s_task);
+}
+void monitor_devices_set_companion_active(bool active)
+{
+    if (s_companion_active == active) return;
+    s_companion_active = active;
+    ESP_LOGI(TAG, "direct producer %s", active ? "paused" : "resumed");
+    if (!active) monitor_devices_request_refresh();
 }
 void monitor_devices_config_changed(void)
 {
@@ -237,8 +245,8 @@ static bool fetch_attempt(devices_transport_t *transport, const devices_config_t
     *status = 0;
     *retryable = false;
     if (!transport->client) {
-        char url[MONITOR_DEVICES_URL_MAX + sizeof("/v1/devices/summary")];
-        snprintf(url, sizeof(url), "%s/v1/devices/summary", settings->url);
+        char url[MONITOR_DEVICES_URL_MAX + sizeof("/v2/devices/summary")];
+        snprintf(url, sizeof(url), "%s/v2/devices/summary", settings->url);
         esp_http_client_config_t config = {
             .url = url, .timeout_ms = 4000, .disable_auto_redirect = true,
             .crt_bundle_attach = esp_crt_bundle_attach,
@@ -386,7 +394,7 @@ static void devices_task(void *arg)
             initial_retry_used = false;
         }
         bool clock_ready = strncmp(config.url, "https://", 8) != 0 || monitor_clock_is_valid();
-        if (configured && wifi && clock_ready && now >= next_poll) {
+        if (configured && wifi && clock_ready && now >= next_poll && !s_companion_active) {
             monitor_devices_snapshot_t candidate = {0};
             int status = 0;
             /* The clock task owns :00/:30 polling while wall time is valid.

@@ -25,7 +25,9 @@ type pairWindow struct {
 	deviceConfirmed bool
 	rejected        bool
 	sourceIP        string
+	port            string
 	lastStatus      time.Time
+	cancel          func()
 }
 type PairingStatus struct {
 	DeviceID    string `json:"device_id"`
@@ -82,7 +84,10 @@ func (p *pairingServer) open(device, ip string) error {
 		go p.server.Serve(l)
 	}
 	now := time.Now()
-	p.window = &pairWindow{deviceID: device, sourceIP: ip, consent: now, expires: now.Add(120 * time.Second)}
+	// BeginPairing already requires an explicit per-device selection and LAN
+	// risk consent. The final confirmation is the short-code check on the
+	// Monitor, so the host does not require a second GUI confirmation.
+	p.window = &pairWindow{deviceID: device, sourceIP: ip, consent: now, expires: now.Add(120 * time.Second), hostConfirmed: true}
 	logging.L("transport").Info("pairing_opened", "device", logging.Ref(device), "source", ip)
 	return nil
 }
@@ -127,6 +132,9 @@ func (b *Backend) PairingStatus() PairingStatus {
 		s.Code = pairCode(w.request.DeviceNonce, w.response.HostNonce, w.deviceID, b.store.HostID(), s.PairingID)
 		s.State = w.response.State
 	}
+	if w.rejected {
+		s.State = "rejected"
+	}
 	return s
 }
 func (b *Backend) ConfirmPairing(id string, approve bool) error {
@@ -140,11 +148,44 @@ func (b *Backend) ConfirmPairing(id string, approve bool) error {
 	if !approve {
 		w.rejected = true
 		w.response.State = "rejected"
+		if w.cancel != nil {
+			w.cancel()
+		}
 		logging.L("transport").Info("pairing_rejected", "device", logging.Ref(w.deviceID))
 		return nil
 	}
 	w.hostConfirmed = true
 	return p.approve(w)
+}
+
+// CancelPairing rejects the current window and, for a serial pairing, aborts
+// the blocked connect so the port is released immediately.
+func (b *Backend) CancelPairing() error {
+	p := b.pairing
+	p.mu.Lock()
+	w := p.window
+	if w == nil {
+		p.mu.Unlock()
+		return nil
+	}
+	w.rejected = true
+	if w.response != nil {
+		w.response.State = "rejected"
+	}
+	cancel := w.cancel
+	source := w.sourceIP
+	p.window = nil
+	server := p.server
+	p.server, p.listener = nil, nil
+	p.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if server != nil {
+		_ = server.Close()
+	}
+	logging.L("transport").Info("pairing_cancelled", "source", source)
+	return nil
 }
 func (p *pairingServer) approve(w *pairWindow) error {
 	if !w.hostConfirmed || !w.deviceConfirmed || w.rejected || w.response.State == "approved" {
@@ -152,13 +193,14 @@ func (p *pairingServer) approve(w *pairWindow) error {
 	}
 	r := w.response
 	token, key := wire.Nonce(), wire.Nonce()
-	pair := Pairing{DeviceID: w.deviceID, DeviceName: w.request.DeviceName, PairingID: r.PairingID, DeviceToken: token, SerialKey: key, ConsentAt: w.consent.Unix(), WarningVersion: 1, LANConsent: w.sourceIP != "serial"}
+	pair := Pairing{DeviceID: w.deviceID, DeviceName: w.request.DeviceName, PairingID: r.PairingID, DeviceToken: token, SerialKey: key, ConsentAt: w.consent.Unix(), WarningVersion: 1, LANConsent: true, SerialPort: w.port}
 	if e := p.service.store.put(pair); e != nil {
 		return e
 	}
 	r.State = "approved"
 	r.DeviceToken = &token
 	r.SerialKey = &key
+	p.service.resumeSerialProbe(w.deviceID)
 	logging.L("transport").Info("pairing_approved", "device", logging.Ref(w.deviceID))
 	return nil
 }

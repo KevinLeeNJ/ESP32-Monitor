@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"esp32-monitor/client/internal/transport/wire"
+	"fmt"
 	"google.golang.org/protobuf/encoding/protowire"
 	"hash/crc32"
 	"io"
@@ -173,6 +174,9 @@ func (f doerFunc) Do(r *http.Request) (*http.Response, error) { return f(r) }
 func TestProxyMemoryOnlyIsolationAndFailureAge(t *testing.T) {
 	calls := make(chan string, 10)
 	client := doerFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/v2/devices/summary" {
+			return nil, fmt.Errorf("unexpected Devices path: %s", r.URL.Path)
+		}
 		calls <- r.Header.Get("Authorization")
 		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"device_count":0,"devices":[]}`))}, nil
 	})

@@ -99,3 +99,46 @@ target_link_libraries(monitor_damage_tests PRIVATE monitor_sim_core)
 target_compile_options(monitor_damage_tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
 add_test(NAME monitor_damage_tests COMMAND monitor_damage_tests)
 set_tests_properties(monitor_damage_tests PROPERTIES TIMEOUT 30 LABELS "behavior;display")
+
+add_executable(monitor_companion_discovery_tests "${CMAKE_CURRENT_LIST_DIR}/test_companion_discovery.c")
+target_link_libraries(monitor_companion_discovery_tests PRIVATE monitor_sim_core)
+target_compile_options(monitor_companion_discovery_tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+add_test(NAME monitor_companion_discovery_tests COMMAND monitor_companion_discovery_tests)
+
+add_executable(monitor_lan_session_tests "${CMAKE_CURRENT_LIST_DIR}/test_lan_session.c")
+target_link_libraries(monitor_lan_session_tests PRIVATE monitor_sim_core)
+target_compile_options(monitor_lan_session_tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+add_test(NAME monitor_lan_session_tests COMMAND monitor_lan_session_tests)
+set_tests_properties(monitor_lan_session_tests PROPERTIES TIMEOUT 30 LABELS "unit;companion")
+
+add_executable(monitor_mqtt_wire_tests "${CMAKE_CURRENT_LIST_DIR}/test_mqtt_wire.c")
+target_link_libraries(monitor_mqtt_wire_tests PRIVATE monitor_sim_core)
+target_compile_options(monitor_mqtt_wire_tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+add_test(NAME monitor_mqtt_wire_tests COMMAND monitor_mqtt_wire_tests)
+set_tests_properties(monitor_mqtt_wire_tests PROPERTIES TIMEOUT 30 LABELS "unit;companion")
+
+add_executable(monitor_serial_session_tests "${CMAKE_CURRENT_LIST_DIR}/test_serial_session.c")
+target_link_libraries(monitor_serial_session_tests PRIVATE monitor_sim_core)
+target_compile_options(monitor_serial_session_tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+add_test(NAME monitor_serial_session_tests COMMAND monitor_serial_session_tests)
+set_tests_properties(monitor_serial_session_tests PROPERTIES TIMEOUT 30 LABELS "unit;companion;serial")
+add_executable(monitor_companion_view_tests "${CMAKE_CURRENT_LIST_DIR}/test_companion_view.c")
+target_link_libraries(monitor_companion_view_tests PRIVATE monitor_sim_core)
+target_compile_options(monitor_companion_view_tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+add_test(NAME monitor_companion_view_tests COMMAND monitor_companion_view_tests)
+set_tests_properties(monitor_companion_view_tests PROPERTIES TIMEOUT 30 LABELS "unit;companion")
+add_test(NAME monitor_serial_wire_tests
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/serial_wire_test.py" "${CMAKE_C_COMPILER}")
+set_tests_properties(monitor_serial_wire_tests PROPERTIES TIMEOUT 30 LABELS "unit;companion;serial")
+add_test(NAME monitor_serial_proto_tests
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/serial_proto_test.py" "${CMAKE_C_COMPILER}")
+set_tests_properties(monitor_serial_proto_tests PROPERTIES TIMEOUT 30 LABELS "unit;companion;serial")
+add_test(NAME monitor_pairing_store_tests
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/pairing_store_test.py" "${CMAKE_C_COMPILER}")
+set_tests_properties(monitor_pairing_store_tests PROPERTIES TIMEOUT 30 LABELS "unit;storage")
+add_test(NAME monitor_pairing_http_tests
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/pairing_http_test.py" "${CMAKE_C_COMPILER}")
+set_tests_properties(monitor_pairing_http_tests PROPERTIES TIMEOUT 30 LABELS "unit;network")
+add_test(NAME monitor_pairing_offer_tests
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/pairing_discovery_test.py" "${CMAKE_C_COMPILER}")
+set_tests_properties(monitor_pairing_offer_tests PROPERTIES TIMEOUT 30 LABELS "unit;network")

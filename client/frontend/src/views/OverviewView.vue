@@ -127,8 +127,8 @@ async function reloadAll() {
         <div v-for="device in store.devices.slice(0, 3)" :key="device.device_id" class="device">
           <div class="device-icon" aria-hidden="true"><i class="pixelart-icons-font-cpu"></i></div>
           <div class="device-info">
-            <h3>{{ device.device_name }}　<span class="pill" :class="device.confirmed_online ? '' : 'gray'">{{ device.confirmed_online ? "在线" : "离线" }}</span></h3>
-            <p>{{ device.address || "—" }} · {{ connectionLabel(device.connection_state) }}<br>最近更新 {{ fmtClockTime(device.last_seen) }}</p>
+            <h3>{{ device.device_name }}　<span class="pill" :class="device.confirmed_online && !device.pairing_lost ? '' : 'gray'">{{ device.pairing_lost ? "待重新配对" : (device.confirmed_online ? "在线" : "离线") }}</span></h3>
+            <p>{{ device.address || "—" }}{{ device.transport === "serial" ? " · 串口" : device.transport === "lan" ? " · 局域网" : "" }} · {{ connectionLabel(device.connection_state) }}<br>最近更新 {{ fmtClockTime(device.last_seen) }}</p>
           </div>
         </div>
       </section>

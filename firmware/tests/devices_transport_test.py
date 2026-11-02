@@ -85,7 +85,7 @@ static void event(esp_http_client_handle_t c,int id,char *key,char *value) {
 static esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *config) {
     assert(config->keep_alive_enable && config->disable_auto_redirect);
     if(fail_client)return NULL;
-    assert(strstr(config->url,"/v1/devices/summary"));
+    assert(!strcmp(config->url,"https://example.test/v2/devices/summary"));
     esp_http_client_handle_t c=calloc(1,sizeof(*c));c->config=*config;created++;return c;
 }
 static int esp_http_client_get_socket(esp_http_client_handle_t c) {return c->connected?42:-1;}

@@ -4,6 +4,8 @@
 
 #include "monitor_render.h"
 #include "monitor_ui.h"
+#include "monitor_pairing_ui.h"
+#include "monitor_fonts.h"
 #include "scene_registry.h"
 
 static unsigned failures;
@@ -516,8 +518,44 @@ static void test_configuring_to_offline(void)
     monitor_renderer_deinit(&r);
 }
 
+static void test_pairing_popup(void)
+{
+    monitor_renderer_t r;
+    CHECK(monitor_renderer_init(&r, clock_factory), "create pairing parent");
+    CHECK(!monitor_pairing_show(r.root, MONITOR_FRAME_NORMAL, "12345x", true), "reject invalid code");
+    lv_obj_t *popup = monitor_pairing_show(r.root, MONITOR_FRAME_NORMAL, "123456", true);
+    CHECK(popup != NULL, "show pairing popup");
+    lv_obj_update_layout(r.root);
+    CHECK(lv_obj_get_y(popup) == 60, "popup starts above final position");
+    lv_tick_inc(300);
+    lv_anim_refr_now();
+    lv_obj_update_layout(r.root);
+    CHECK(lv_obj_get_y(popup) == 87, "popup animation reaches final position");
+    monitor_pairing_close(popup);
+    CHECK(lv_obj_get_child_by_name(r.root, "pairing_popup") == NULL, "closing removes popup");
+    monitor_renderer_deinit(&r);
+}
+
+static void test_music_font(void)
+{
+    monitor_renderer_t r;
+    CHECK(monitor_renderer_init(&r, clock_factory), "initialize music font renderer");
+    const lv_font_t *font = monitor_music_font();
+    CHECK(font != NULL, "load binary music font");
+    if (font) {
+        lv_font_glyph_dsc_t glyph;
+        CHECK(lv_font_get_glyph_dsc(font, &glyph, 'A', 0), "music font contains English");
+        CHECK(lv_font_get_glyph_dsc(font, &glyph, 0x661f, 0), "music font contains Chinese");
+        CHECK(lv_font_get_glyph_dsc(font, &glyph, 0x3042, 0), "music font contains Japanese kana");
+        CHECK(lv_font_get_glyph_dsc(font, &glyph, 0xd55c, 0), "music font contains Korean Hangul");
+    }
+    monitor_renderer_deinit(&r);
+}
+
 int main(void)
 {
+    test_pairing_popup();
+    test_music_font();
     test_clock(MONITOR_FRAME_NORMAL);
     test_clock(MONITOR_FRAME_INVERTED);
     test_devices();

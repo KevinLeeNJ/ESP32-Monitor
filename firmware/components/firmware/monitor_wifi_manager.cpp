@@ -5,6 +5,10 @@
 #include "monitor_display_refresh.h"
 #include "monitor_pm_profile.h"
 #include "monitor_page_buttons.h"
+#include "monitor_pairing_service.h"
+#include "monitor_pairing_store.h"
+#include "monitor_companion_mqtt.h"
+#include "monitor_serial_service.h"
 
 #include <string>
 #include <atomic>
@@ -13,6 +17,7 @@
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "esp_sleep.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "ssid_manager.h"
@@ -22,6 +27,7 @@
 #define BOOT_BUTTON_GPIO GPIO_NUM_0
 #define KEY_BUTTON_GPIO GPIO_NUM_18
 #define CONFIG_HOLD_MS 3000
+#define PAIR_REVOKE_HOLD_MS 5000
 #define BTN_BOOT BIT0
 #define BTN_KEY BIT1
 #define BTN_TIMEOUT BIT2
@@ -32,6 +38,7 @@
 
 static volatile monitor_wifi_state_t s_state = MONITOR_WIFI_DISCONNECTED;
 static volatile bool s_provisioning = false;
+static volatile bool s_suspended = false;
 static bool s_started = false;
 static bool s_config_session_active = false;
 static std::atomic<int64_t> s_config_deadline{0};
@@ -85,6 +92,9 @@ static void start_station_attempt(void)
 static void set_event(WifiEvent event, const std::string &data)
 {
     (void)data;
+    /* The radio is stopped on purpose; late callbacks from that teardown must
+     * not restart station attempts or reopen the configuration AP. */
+    if (s_suspended) return;
     switch(event) {
         case WifiEvent::ConfigActivity:
             s_config_deadline = esp_timer_get_time() + CONFIG_SESSION_TIMEOUT_US;
@@ -166,6 +176,7 @@ static void set_event(WifiEvent event, const std::string &data)
 
 static esp_err_t enter_config_mode(void)
 {
+    if (s_suspended) return ESP_ERR_INVALID_STATE;
     if (s_provisioning) return ESP_OK;
     s_provisioning = true;
     update_wifi_state(MONITOR_WIFI_PROVISIONING);
@@ -206,6 +217,7 @@ static void configure_wake_levels(bool boot_pressed, bool key_pressed)
 
 static void process_manager_events(uint32_t pending)
 {
+    if (s_suspended) return;
     if (pending & BTN_ACTIVITY) {
         if (s_config_session_active) {
             esp_timer_stop(s_config_timeout_timer);
@@ -272,6 +284,9 @@ static void button_task(void *arg)
     bool stable[2] = {gpio_get_level(BOOT_BUTTON_GPIO) == 0, gpio_get_level(KEY_BUTTON_GPIO) == 0};
     bool both_timing = stable[0] && stable[1], triggered = false;
     TickType_t both_since = xTaskGetTickCount();
+    /* A key held during boot or a chord must never revoke a pairing. */
+    bool boot_timing = false, boot_triggered = stable[0];
+    TickType_t boot_since = both_since;
 #if CONFIG_MONITOR_PM_PROFILE
     bool key_timing = stable[1] && !stable[0], key_triggered = both_timing;
     TickType_t key_since = both_since;
@@ -286,6 +301,12 @@ static void button_task(void *arg)
             TickType_t elapsed = xTaskGetTickCount() - both_since;
             TickType_t hold = pdMS_TO_TICKS(CONFIG_HOLD_MS);
             wait = elapsed >= hold ? 0 : hold - elapsed;
+        }
+        if (boot_timing && !boot_triggered) {
+            TickType_t elapsed = xTaskGetTickCount() - boot_since;
+            TickType_t hold = pdMS_TO_TICKS(PAIR_REVOKE_HOLD_MS);
+            TickType_t remaining = elapsed >= hold ? 0 : hold - elapsed;
+            if (remaining < wait) wait = remaining;
         }
 #if CONFIG_MONITOR_PM_PROFILE
         if (key_timing && !key_triggered) {
@@ -307,13 +328,18 @@ static void button_task(void *arg)
             uint8_t page = monitor_page_buttons_update(&page_buttons,
                 (stable[0] ? BTN_BOOT : 0) | (stable[1] ? BTN_KEY : 0),
                 xTaskGetTickCount(), pdMS_TO_TICKS(1000));
-            if(page == BTN_BOOT) monitor_display_refresh_request_reason(MONITOR_REFRESH_PAGE_NEXT);
-            else if(page == BTN_KEY) monitor_display_refresh_request_reason(MONITOR_REFRESH_PAGE_PREVIOUS);
+            if(page == BTN_BOOT && !monitor_pairing_service_action(false))
+                monitor_display_refresh_request_reason(MONITOR_REFRESH_PAGE_NEXT);
+            else if(page == BTN_KEY && !monitor_pairing_service_action(true))
+                monitor_display_refresh_request_reason(MONITOR_REFRESH_PAGE_PREVIOUS);
             pending = 0;
             configure_wake_levels(stable[0], stable[1]);
             const bool both = stable[0] && stable[1];
             if (!both) { both_timing = false; triggered = false; }
             else if (!both_timing) { both_timing = true; both_since = xTaskGetTickCount(); }
+            if (both) { boot_timing = false; boot_triggered = true; }
+            else if (!stable[0]) { boot_timing = false; boot_triggered = false; }
+            else if (!boot_timing && !boot_triggered) { boot_timing = true; boot_since = xTaskGetTickCount(); }
 #if CONFIG_MONITOR_PM_PROFILE
             if (both) { key_timing = false; key_triggered = true; }
             else if (!stable[1]) { key_timing = false; key_triggered = false; }
@@ -322,7 +348,21 @@ static void button_task(void *arg)
         }
         if (both_timing && !triggered &&
             xTaskGetTickCount() - both_since >= pdMS_TO_TICKS(CONFIG_HOLD_MS)) {
-            if (enter_config_mode() == ESP_OK) triggered = true;
+            /* Latch even while serial owns the link, otherwise the expired
+             * hold would re-enter this branch without ever waiting again. */
+            triggered = true;
+            if (!s_suspended) (void)enter_config_mode();
+        }
+        if (boot_timing && !boot_triggered &&
+            xTaskGetTickCount() - boot_since >= pdMS_TO_TICKS(PAIR_REVOKE_HOLD_MS)) {
+            boot_triggered = true;
+            if (!monitor_pairing_service_action(false)) {
+                monitor_companion_mqtt_revoke();
+                monitor_serial_revoke();
+                esp_err_t error = monitor_pairing_store_revoke();
+                if (error == ESP_OK) ESP_LOGI(TAG, "Companion pairing removed; device can pair again");
+                else ESP_LOGE(TAG, "Companion pairing removal failed: %s", esp_err_to_name(error));
+            }
         }
 #if CONFIG_MONITOR_PM_PROFILE
         if (key_timing && !key_triggered &&
@@ -379,6 +419,12 @@ extern "C" esp_err_t monitor_wifi_start(void)
         return ESP_ERR_NO_MEM;
     }
     s_started = true;
+    if (s_suspended) {
+        /* A serial host can authenticate before network startup completes. */
+        update_wifi_state(MONITOR_WIFI_OFFLINE);
+        ESP_LOGI(TAG, "Wi-Fi start deferred: serial companion session active");
+        return ESP_OK;
+    }
     if(SsidManager::GetInstance().GetSsidList().empty()) {
         ESP_LOGI(TAG, "no saved Wi-Fi credentials; entering esp-wifi-connect config mode");
         enter_config_mode();
@@ -391,3 +437,52 @@ extern "C" esp_err_t monitor_wifi_start(void)
 
 extern "C" monitor_wifi_state_t monitor_wifi_get_state(void) { return s_state; }
 extern "C" bool monitor_wifi_is_provisioning(void) { return s_provisioning; }
+
+extern "C" esp_err_t monitor_wifi_suspend(void)
+{
+    if (s_suspended) return ESP_OK;
+    ESP_LOGI(TAG, "heap suspend begin: internal free=%u largest=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
+    s_suspended = true;
+    const bool config_open = s_provisioning;
+    s_provisioning = false;
+    s_config_session_active = false;
+    if (s_config_timeout_timer) esp_timer_stop(s_config_timeout_timer);
+    if (s_station_timeout_timer) esp_timer_stop(s_station_timeout_timer);
+    if (s_started) {
+        /* Config AP first: a station-backed config session only stops its web
+         * server there, then StopStation takes down the radio and netif. */
+        ESP_LOGI(TAG, "suspend: closing configuration interface");
+        if (config_open) WifiManager::GetInstance().StopConfigAp();
+        ESP_LOGI(TAG, "suspend: stopping station");
+        WifiManager::GetInstance().StopStation();
+        ESP_LOGI(TAG, "suspend: radio stopped");
+    }
+    monitor_devices_set_wifi_available(false);
+    monitor_clock_on_wifi_disconnected();
+    monitor_weather_on_wifi_disconnected();
+    update_wifi_state(MONITOR_WIFI_OFFLINE);
+    ESP_LOGI(TAG, "Wi-Fi suspended: serial companion owns the session");
+    ESP_LOGI(TAG, "heap suspend end: internal free=%u largest=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
+    return ESP_OK;
+}
+
+extern "C" esp_err_t monitor_wifi_resume(void)
+{
+    if (!s_suspended) return ESP_OK;
+    ESP_LOGI(TAG, "heap resume begin: internal free=%u largest=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
+    s_suspended = false;
+    if (!s_started) return ESP_ERR_INVALID_STATE;
+    if (SsidManager::GetInstance().GetSsidList().empty()) {
+        ESP_LOGI(TAG, "Wi-Fi resume: no saved credentials; restoring configuration AP");
+        return enter_config_mode();
+    }
+    ESP_LOGI(TAG, "Wi-Fi resume: restoring station");
+    start_station_attempt();
+    return ESP_OK;
+}

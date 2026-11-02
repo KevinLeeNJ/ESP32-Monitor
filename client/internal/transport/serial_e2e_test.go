@@ -104,6 +104,9 @@ func TestSerialEndToEndSimulatedMonitor(t *testing.T) {
 	if f.Type != SerialAck {
 		t.Fatal("configuration frame not ACKed")
 	}
+	/* A late handshake frame from the pairing transition must not tear down
+	 * the authenticated session. */
+	send(SerialHello, hello, nil)
 	f, p = recv(keys.Frame)
 	if f.Type != SerialSnapshot {
 		t.Fatalf("expected snapshot, type=%x", f.Type)
@@ -137,6 +140,122 @@ func TestSerialEndToEndSimulatedMonitor(t *testing.T) {
 	b.mu.Unlock()
 	if left != nil {
 		t.Fatal("old serial session retained")
+	}
+}
+
+func TestSerialPhysicalPairing(t *testing.T) {
+	b, e := New(Options{StoreDirectory: filepath.Join(t.TempDir(), "vault"), HostName: "serial-host", BindIP: "127.0.0.1", MQTTAddress: "127.0.0.1:0", HTTPAddress: "127.0.0.1:0"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer b.Close()
+	deviceID := wire.NewID()
+	host, device := net.Pipe()
+	defer device.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	hostDone := make(chan error, 1)
+	go func() {
+		hostDone <- b.AttachSerial(ctx, host, SerialSelection{DeviceID: deviceID, TrustPhysicalConnection: true})
+	}()
+	reader := readSerial(ctx, device)
+	defer func() { device.Close(); <-reader.done }()
+	var seq uint32
+	send := func(typ byte, data any, key []byte) {
+		t.Helper()
+		seq++
+		p, _ := wire.Marshal(data)
+		frame, e := EncodeSerial(typ, seq, p, key, 2)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if _, e = device.Write(frame); e != nil {
+			t.Fatal(e)
+		}
+	}
+	recv := func(key []byte) (SerialFrame, []byte) {
+		t.Helper()
+		f, e := reader.next(ctx, 4*time.Second)
+		if e != nil {
+			t.Fatal(e)
+		}
+		p, e := VerifySerial(f, key, 1)
+		if e != nil {
+			t.Fatal(e)
+		}
+		return f, p
+	}
+	f, p := recv(nil)
+	if f.Type != SerialHello {
+		t.Fatal("missing hello")
+	}
+	var hello Hello
+	wire.Decode(p, &hello, 2048)
+	deviceNonce := wire.Nonce()
+	hello.Step = "response"
+	hello.DeviceID = deviceID
+	hello.DeviceName = "USB Monitor"
+	hello.FirmwareVersion = "sim-serial"
+	hello.DeviceNonce = deviceNonce
+	hello.MaxPayloadBytes = 16368
+	send(SerialHello, hello, nil)
+	send(SerialPair, wire.PairRequest{ProtocolVersion: 1, Step: "begin", RequestID: wire.NewID(), DeviceID: deviceID, DeviceName: hello.DeviceName, DeviceNonce: deviceNonce}, nil)
+	f, p = recv(nil)
+	if f.Type != SerialPair {
+		t.Fatalf("expected pending pair response, got %x", f.Type)
+	}
+	var pending wire.PairResponse
+	if e = wire.Decode(p, &pending, 2048); e != nil || pending.State != "pending" || pending.PairingID == "" || pending.PairingTicket == "" {
+		t.Fatal("pending pairing response invalid", e)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for b.PairingStatus().Code == "" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	status := b.PairingStatus()
+	if status.Code != pairCode(deviceNonce, pending.HostNonce, deviceID, b.HostID(), pending.PairingID) {
+		t.Fatal("pairing code mismatch")
+	}
+	send(SerialPair, wire.PairRequest{ProtocolVersion: 1, Step: "confirm", RequestID: wire.NewID(), PairingID: pending.PairingID, PairingTicket: pending.PairingTicket, DeviceConfirmed: true}, nil)
+	f, p = recv(nil)
+	if f.Type != SerialPair {
+		t.Fatalf("expected approved pair response, got %x", f.Type)
+	}
+	var approved wire.PairResponse
+	if e = wire.Decode(p, &approved, 2048); e != nil || approved.State != "approved" || approved.DeviceToken == nil || approved.SerialKey == nil {
+		t.Fatal("pairing not approved", e)
+	}
+	f, p = recv(nil)
+	if f.Type != SerialAuth {
+		t.Fatal("missing challenge after pairing")
+	}
+	var auth Auth
+	wire.Decode(p, &auth, 2048)
+	if auth.PairingID != pending.PairingID {
+		t.Fatal("challenge used wrong pairing")
+	}
+	keys, e := DeriveSerialKeys(b.HostID(), deviceID, pending.PairingID, auth.SessionID, hello.HostNonce, deviceNonce, *approved.SerialKey)
+	if e != nil {
+		t.Fatal(e)
+	}
+	auth.Step = "response"
+	auth.Proof = &keys.DeviceProof
+	send(SerialAuth, auth, nil)
+	f, p = recv(nil)
+	var result Auth
+	wire.Decode(p, &result, 2048)
+	if value(result.Proof) != keys.HostProof || result.Accepted == nil || !*result.Accepted {
+		t.Fatal("host proof rejected after pairing")
+	}
+	pair, ok := b.store.pair(deviceID)
+	if !ok || pair.PairingID != pending.PairingID || pair.SerialKey != *approved.SerialKey || pair.DeviceToken != *approved.DeviceToken || !pair.LANConsent {
+		t.Fatal("approved pairing not stored")
+	}
+	device.Close()
+	select {
+	case <-hostDone:
+	case <-time.After(time.Second):
+		t.Fatal("paired serial session did not stop")
 	}
 }
 

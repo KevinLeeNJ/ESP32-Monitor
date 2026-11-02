@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"esp32-monitor/client/internal/logging"
 	"esp32-monitor/client/internal/transport/wire"
 	"net"
 	"strconv"
@@ -82,6 +83,47 @@ func (b *Backend) discoveryTarget() string {
 	}
 	return ""
 }
+
+// Keep automatic fallback bounded even on a large corporate subnet. A larger
+// network probes only the local /24; manual IPv4 remains available outside it.
+func subnetCandidates(ip net.IP, mask net.IPMask) []net.IP {
+	v4 := ip.To4()
+	ones, bits := mask.Size()
+	if v4 == nil || bits != 32 || ones > 30 || v4.IsLoopback() {
+		return nil
+	}
+	if ones < 24 {
+		ones = 24
+	}
+	networkMask := net.CIDRMask(ones, 32)
+	self := binary.BigEndian.Uint32(v4)
+	base := self & binary.BigEndian.Uint32(networkMask)
+	broadcast := base | ^binary.BigEndian.Uint32(networkMask)
+	out := make([]net.IP, 0, broadcast-base-1)
+	for host := base + 1; host < broadcast; host++ {
+		if host == self {
+			continue
+		}
+		address := make(net.IP, 4)
+		binary.BigEndian.PutUint32(address, host)
+		out = append(out, address)
+	}
+	return out
+}
+
+func (b *Backend) fallbackCandidates() []net.IP {
+	ip := net.ParseIP(b.bindIP()).To4()
+	interfaces, _ := net.Interfaces()
+	for _, iface := range interfaces {
+		addresses, _ := iface.Addrs()
+		for _, address := range addresses {
+			if network, ok := address.(*net.IPNet); ok && network.IP.Equal(ip) {
+				return subnetCandidates(ip, network.Mask)
+			}
+		}
+	}
+	return nil
+}
 func (b *Backend) query(ctx context.Context, target string, pair *Pairing, duration time.Duration, offer bool) ([]candidate, error) {
 	b.discoveryMu.Lock()
 	defer b.discoveryMu.Unlock()
@@ -105,7 +147,14 @@ func (b *Backend) query(ctx context.Context, target string, pair *Pairing, durat
 		return nil, encodeErr
 	}
 	if _, e = conn.WriteToUDP(data, a); e != nil {
+		logging.L("transport").Warn("discovery_send_failed", "error", e.Error())
 		return nil, errors.New("network_unreachable")
+	}
+	// Some Wi-Fi networks discard subnet-directed broadcasts but deliver the
+	// IPv4 local broadcast. Use the same bound interface, request ID and nonce
+	// for both; replies are still validated against this discovery round.
+	if b.opts.DiscoveryTarget == "" && !a.IP.IsLoopback() && target == b.discoveryTarget() {
+		_, _ = conn.WriteToUDP(data, &net.UDPAddr{IP: net.IPv4bcast, Port: a.Port})
 	}
 	// A monitor simulator running on this host cannot receive the subnet
 	// broadcast reliably (Windows firewall may drop it); probe loopback too.
@@ -116,7 +165,14 @@ func (b *Backend) query(ctx context.Context, target string, pair *Pairing, durat
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
-	_ = conn.SetReadDeadline(deadline)
+	fallback := b.opts.DiscoveryTarget == "" && !a.IP.IsLoopback() && target == b.discoveryTarget()
+	firstDeadline := deadline
+	if fallback && time.Now().Add(time.Second).Before(deadline) {
+		firstDeadline = time.Now().Add(time.Second)
+	} else {
+		fallback = false
+	}
+	_ = conn.SetReadDeadline(firstDeadline)
 	cancelDone := make(chan struct{})
 	defer close(cancelDone)
 	go func() {
@@ -127,10 +183,39 @@ func (b *Backend) query(ctx context.Context, target string, pair *Pairing, durat
 		}
 	}()
 	out := []candidate{}
+	seen := make(map[string]bool)
+	pairingLostObserved := false
 	buf := make([]byte, 1025)
 	for {
 		n, addr, e := conn.ReadFromUDP(buf)
 		if e != nil {
+			if netErr, ok := e.(net.Error); ok && netErr.Timeout() && fallback && ctx.Err() == nil {
+				fallback = false
+				if len(out) == 0 {
+					// Read replies while probing: on busy networks a burst can
+					// otherwise overflow the socket before the receive loop runs.
+					go func(addresses []net.IP) {
+						for _, ip := range addresses {
+							if time.Now().After(deadline) {
+								return
+							}
+							_, _ = conn.WriteToUDP(data, &net.UDPAddr{IP: ip, Port: a.Port})
+							timer := time.NewTimer(2 * time.Millisecond)
+							select {
+							case <-timer.C:
+							case <-ctx.Done():
+								timer.Stop()
+								return
+							case <-cancelDone:
+								timer.Stop()
+								return
+							}
+						}
+					}(b.fallbackCandidates())
+				}
+				_ = conn.SetReadDeadline(deadline)
+				continue
+			}
 			if len(out) > 0 {
 				return out, nil
 			}
@@ -146,10 +231,24 @@ func (b *Backend) query(ctx context.Context, target string, pair *Pairing, durat
 		if _, e = wire.RawNonce(*r.ResponseNonce); e != nil {
 			continue
 		}
+		if pair != nil && b.discoveryRevokes(r, pair) {
+			return out, nil
+		}
+		if pair != nil && *r.DeviceID == pair.DeviceID && *r.PairingOpen && r.PairingID == nil && r.MAC == nil {
+			/* A previously paired device answered with a fresh unpaired
+			 * announcement. It cannot be authenticated, so this only surfaces a
+			 * re-pair hint; stored credentials are never deleted from discovery. */
+			if !pairingLostObserved {
+				b.notePairingLost(*r.DeviceID)
+				pairingLostObserved = true
+			}
+			continue
+		}
 		if pair != nil {
 			if *r.DeviceID != pair.DeviceID || value(r.PairingID) != pair.PairingID || *r.PairingOpen || r.MAC == nil || !hmac.Equal([]byte(*r.MAC), []byte(DiscoveryMAC(r, pair.SerialKey))) {
 				continue
 			}
+			b.clearPairingLost(*r.DeviceID)
 		} else if !*r.PairingOpen || r.PairingID != nil || r.MAC != nil {
 			continue
 		}
@@ -169,7 +268,10 @@ func (b *Backend) query(ctx context.Context, target string, pair *Pairing, durat
 			b.discoveryOverflow = true
 		}
 		b.mu.Unlock()
-		out = append(out, c)
+		if !seen[*r.DeviceID] && len(out) < 32 {
+			seen[*r.DeviceID] = true
+			out = append(out, c)
+		}
 		if offer {
 			o := r
 			o.Type = "monitor_connect_offer"
@@ -282,19 +384,88 @@ func (b *Backend) recoverDevice(ctx context.Context, p Pairing) {
 	c, ok := b.candidates[p.DeviceID]
 	b.mu.Unlock()
 	if ok {
-		out, e := b.query(ctx, c.Addr.String(), &p, time.Second, true)
+		out, e := b.query(ctx, c.Addr.String(), &p, 3*time.Second, true)
 		if e == nil && len(out) > 0 {
 			return
 		}
 	}
 	target := b.discoveryTarget()
 	if target != "" {
-		_, _ = b.query(ctx, target, &p, time.Second, true)
+		_, _ = b.query(ctx, target, &p, 3*time.Second, true)
 	}
 }
+
+/* A revoked monitor answers a paired probe with pairing_open=true, the old
+ * pairing ID and a MAC made with the old discovery key. This is the only
+ * discovery response allowed to delete credentials: an unauthenticated
+ * pairing-open announcement remains a hint. */
+func (b *Backend) discoveryRevokes(r wire.Discovery, pair *Pairing) bool {
+	if pair == nil || r.DeviceID == nil || r.PairingOpen == nil || !*r.PairingOpen ||
+		r.PairingID == nil || *r.PairingID != pair.PairingID || *r.DeviceID != pair.DeviceID ||
+		r.MAC == nil || !hmac.Equal([]byte(*r.MAC), []byte(DiscoveryMAC(r, pair.SerialKey))) {
+		return false
+	}
+	b.revokeFromDiscovery(*r.DeviceID)
+	return true
+}
+
+func (b *Backend) revokeFromDiscovery(device string) {
+	logging.L("transport").Info("device_pairing_revoked_offline", "device", logging.Ref(device))
+	b.mu.Lock()
+	s := b.sessions[device]
+	delete(b.sessions, device)
+	delete(b.candidates, device)
+	delete(b.recovery, device)
+	delete(b.pairingLost, device)
+	delete(b.serialSeen, device)
+	b.mu.Unlock()
+	if e := b.store.remove(device); e != nil {
+		logging.L("transport").Warn("device_pairing_revoke_failed", "device", logging.Ref(device), "error", e.Error())
+	}
+	if s != nil {
+		s.cancel()
+		if s.client != nil {
+			s.client.Stop(errors.New("pairing_revoked"))
+		}
+	}
+}
+
+func (b *Backend) notePairingLost(deviceID string) {
+	now := time.Now()
+	b.mu.Lock()
+	s := b.pairingLost[deviceID]
+	if now.Sub(s.last) > 30*time.Second {
+		s = pairingLostState{}
+	}
+	s.last = now
+	s.count++
+	b.pairingLost[deviceID] = s
+	b.mu.Unlock()
+	logging.L("transport").Warn("device_pairing_lost", "device", logging.Ref(deviceID))
+}
+
+func (b *Backend) clearPairingLost(deviceID string) {
+	b.mu.Lock()
+	delete(b.pairingLost, deviceID)
+	b.mu.Unlock()
+}
+
+func pairingLostActive(s pairingLostState, now time.Time) bool {
+	return s.count >= 2 && !s.last.IsZero() && now.Sub(s.last) <= pairingLostWindow
+}
+
+// SerialConnected reports whether the serial session for this device is up.
+func (b *Backend) SerialConnected(device string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s := b.sessions[device]
+	return s != nil && s.transport == "serial" && s.state == "connected"
+}
+
 func (b *Backend) Devices() ([]DeviceStatus, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	now := time.Now()
 	out := []DeviceStatus{}
 	seen := map[string]bool{}
 	for _, p := range b.store.pairs() {
@@ -304,14 +475,28 @@ func (b *Backend) Devices() ([]DeviceStatus, bool) {
 			s.Address = c.Addr.IP.String()
 		}
 		s.IdentityVerified = c.Authenticated
-		s.ConfirmedOnline = !c.Seen.IsZero() && time.Since(c.Seen) <= 10*time.Second
+		s.ConfirmedOnline = !c.Seen.IsZero() && now.Sub(c.Seen) <= 10*time.Second
+		if last := b.serialSeen[p.DeviceID]; last.After(s.LastSeen) {
+			s.LastSeen = last
+		}
 		if x := b.sessions[p.DeviceID]; x != nil {
 			s.SessionID = x.id
 			s.ConnectionState = x.state
+			s.Transport = x.transport
+			s.IdentityVerified = true
+			s.LastSeen = now
 			// maintain() stops probing once a session exists, so candidate.Seen
 			// goes stale; a live session (self-expiring on lost receipts) is the
 			// authoritative presence signal.
 			s.ConfirmedOnline = true
+		} else if lost, ok := b.pairingLost[p.DeviceID]; ok && pairingLostActive(lost, now) {
+			/* The device answered but no longer recognises this pairing. Keep
+			 * the credential; surface a re-pair hint only. */
+			s.ConnectionState = "pairing_lost"
+			s.PairingLost = true
+			s.IdentityVerified = false
+			s.ConfirmedOnline = true
+			s.LastSeen = lost.last
 		}
 		out = append(out, s)
 		seen[p.DeviceID] = true

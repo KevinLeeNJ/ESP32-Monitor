@@ -23,9 +23,13 @@ type Monitor struct {
 	Pair          *transport.Pairing
 	Config        wire.Config
 	Snapshots     chan wire.Snapshot
+	Heartbeats    chan wire.Heartbeat
+	Goodbyes      chan wire.Goodbye
 	Errors        chan error
 	UDP           *net.UDPConn
 	mqtt          *MQTT
+	goodbye       func(string) error
+	resync        func(string, uint32) error
 	ctx           context.Context
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
@@ -41,7 +45,7 @@ func New(name, address string) (*Monitor, error) {
 		return nil, e
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Monitor{DeviceID: wire.NewID(), Name: name, PairingWindow: true, Snapshots: make(chan wire.Snapshot, 16), Errors: make(chan error, 16), UDP: conn, ctx: ctx, cancel: cancel}
+	m := &Monitor{DeviceID: wire.NewID(), Name: name, PairingWindow: true, Snapshots: make(chan wire.Snapshot, 16), Heartbeats: make(chan wire.Heartbeat, 16), Goodbyes: make(chan wire.Goodbye, 16), Errors: make(chan error, 16), UDP: conn, ctx: ctx, cancel: cancel}
 	m.Config = wire.Config{ProtocolVersion: 1, Epoch: wire.NewID(), Revision: 1, Weather: wire.WeatherConfig{LocationMode: "ip"}, Time: wire.TimeConfig{Enabled: true, Offset: 480}}
 	return m, nil
 }
@@ -142,6 +146,28 @@ func (m *Monitor) discover() {
 		}
 	}
 }
+
+// SendResync publishes up/resync on the active simulated LAN session.
+func (m *Monitor) SendResync(reason string, last uint32) error {
+	m.mu.Lock()
+	f := m.resync
+	m.mu.Unlock()
+	if f == nil {
+		return errors.New("no_active_session")
+	}
+	return f(reason, last)
+}
+
+// SendGoodbye publishes up/goodbye on the active simulated LAN session.
+func (m *Monitor) SendGoodbye(reason string) error {
+	m.mu.Lock()
+	f := m.goodbye
+	m.mu.Unlock()
+	if f == nil {
+		return errors.New("no_active_session")
+	}
+	return f(reason)
+}
 func val(p *string) string {
 	if p == nil {
 		return ""
@@ -207,6 +233,14 @@ func (m *Monitor) pairHTTP(d wire.Discovery, ip string) error {
 func (m *Monitor) lan(d wire.Discovery, ip string, pair transport.Pairing) error {
 	sid := *d.SessionID
 	pre := "emon/v1/" + d.HostID + "/" + m.DeviceID + "/" + sid
+	var seq, lastSeq uint32
+	var seqMu sync.Mutex
+	nextSeq := func() uint32 {
+		seqMu.Lock()
+		defer seqMu.Unlock()
+		seq++
+		return seq
+	}
 	client, e := DialMQTT(net.JoinHostPort(ip, strconv.Itoa(*d.MQTTPort)), m.DeviceID, sid, pair.DeviceToken, pre)
 	if e != nil {
 		return e
@@ -214,25 +248,49 @@ func (m *Monitor) lan(d wire.Discovery, ip string, pair transport.Pairing) error
 	defer client.Close()
 	m.mu.Lock()
 	m.mqtt = client
+	m.goodbye = func(reason string) error {
+		body, err := wire.Marshal(wire.Goodbye{ProtocolVersion: 1, SessionID: sid, Reason: reason})
+		if err != nil {
+			return err
+		}
+		control := wire.Control{ProtocolVersion: 1, HostID: d.HostID, DeviceID: m.DeviceID, SessionID: sid, Seq: nextSeq(), SentAt: time.Now().Unix(), Data: body}
+		payload, err := wire.Marshal(control)
+		if err != nil {
+			return err
+		}
+		return client.Publish(pre+"/up/goodbye", payload, 1, false)
+	}
+	m.resync = func(reason string, last uint32) error {
+		body, err := wire.Marshal(wire.Resync{LastSnapshotSeq: &last, Reason: reason})
+		if err != nil {
+			return err
+		}
+		control := wire.Control{ProtocolVersion: 1, HostID: d.HostID, DeviceID: m.DeviceID, SessionID: sid, Seq: nextSeq(), SentAt: time.Now().Unix(), Data: body}
+		payload, err := wire.Marshal(control)
+		if err != nil {
+			return err
+		}
+		return client.Publish(pre+"/up/resync", payload, 1, false)
+	}
 	m.mu.Unlock()
 	defer func() {
 		m.mu.Lock()
 		if m.mqtt == client {
 			m.mqtt = nil
+			m.goodbye = nil
+			m.resync = nil
 		}
 		m.mu.Unlock()
 	}()
 	if e = client.Subscribe(pre + "/down/#"); e != nil {
 		return e
 	}
-	var seq, lastSeq uint32
 	send := func(topic string, data any, req *string, qos byte) error {
-		seq++
 		body, err := wire.Marshal(data)
 		if err != nil {
 			return err
 		}
-		control := wire.Control{ProtocolVersion: 1, HostID: d.HostID, DeviceID: m.DeviceID, SessionID: sid, Seq: seq, SentAt: time.Now().Unix(), RequestID: req, Data: body}
+		control := wire.Control{ProtocolVersion: 1, HostID: d.HostID, DeviceID: m.DeviceID, SessionID: sid, Seq: nextSeq(), SentAt: time.Now().Unix(), RequestID: req, Data: body}
 		payload, err := wire.Marshal(control)
 		if err != nil {
 			return err
@@ -282,12 +340,28 @@ func (m *Monitor) lan(d wire.Discovery, ip string, pair transport.Pairing) error
 				return wire.ErrMessage
 			}
 			lastSeq = heartbeat.Seq
+			select {
+			case m.Heartbeats <- heartbeat:
+			default:
+			}
 			if e = send("ack", wire.Ack{ProtocolVersion: 1, SessionID: sid, AckSeq: heartbeat.Seq, Status: "accepted"}, nil, 0); e != nil {
 				return e
 			}
 		case "error":
 			return errors.New("companion_business_error")
 		case "goodbye":
+			var c wire.Control
+			if wire.Decode(p.Payload, &c, 16384) != nil || c.DeviceID != m.DeviceID || c.SessionID != sid {
+				return wire.ErrMessage
+			}
+			var g wire.Goodbye
+			if wire.Decode(c.Data, &g, 1024) != nil || g.ProtocolVersion != 1 || g.SessionID != sid {
+				return wire.ErrMessage
+			}
+			select {
+			case m.Goodbyes <- g:
+			default:
+			}
 			return nil
 		}
 	}

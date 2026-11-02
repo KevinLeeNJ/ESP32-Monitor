@@ -10,6 +10,8 @@ LV_FONT_DECLARE(monitor_misans_12);
 LV_FONT_DECLARE(monitor_misans_14);
 LV_FONT_DECLARE(monitor_misans_20);
 LV_FONT_DECLARE(monitor_misans_30);
+/* Runtime-loaded Fusion Pixel font for music metadata. */
+const lv_font_t *monitor_music_font(void);
 
 /* NDot57 Latin/digits with MiSans weather and Font Awesome glyphs merged. */
 LV_FONT_DECLARE(monitor_ndot57_8);

@@ -59,6 +59,13 @@ task_prefix = r'''
 #define MONITOR_REFRESH_PAGE_NEXT 128U
 #define MONITOR_REFRESH_PAGE_PREVIOUS 256U
 static unsigned page_next, page_previous;
+static bool pair_active;
+static unsigned pair_confirm, pair_cancel;
+static bool monitor_pairing_service_action(bool confirm) {
+    if (!pair_active) return false;
+    if (confirm) ++pair_confirm; else ++pair_cancel;
+    return true;
+}
 static void monitor_display_refresh_request_reason(unsigned reason) {
     if (reason == MONITOR_REFRESH_PAGE_NEXT) ++page_next;
     if (reason == MONITOR_REFRESH_PAGE_PREVIOUS) ++page_previous;
@@ -70,10 +77,20 @@ static void monitor_display_refresh_request_reason(unsigned reason) {
 #define GPIO_PULLDOWN_DISABLE 0
 #define GPIO_INTR_ANYEDGE 3
 #define CONFIG_HOLD_MS 3000
+#define PAIR_REVOKE_HOLD_MS 5000
+#define TAG "test"
+#define ESP_LOGI(...) ((void)0)
+#define ESP_LOGE(...) ((void)0)
 #define CONFIG_MONITOR_PM_PROFILE 1
 #define portMAX_DELAY UINT32_MAX
 #define pdMS_TO_TICKS(ms) (ms)
 using TickType_t = uint32_t;
+using esp_err_t = int;
+static unsigned revoke_actions, revoke_sessions, revoke_serial;
+static bool s_suspended;
+static int monitor_pairing_store_revoke() { ++revoke_actions; return ESP_OK; }
+static void monitor_companion_mqtt_revoke() { ++revoke_sessions; }
+static void monitor_serial_revoke() { ++revoke_serial; }
 struct gpio_config_t { uint64_t pin_bit_mask; int mode,pull_up_en,pull_down_en,intr_type; };
 static unsigned config_actions, profile_actions;
 static uint64_t elapsed_ms;
@@ -155,8 +172,9 @@ int main() {
 '''
 task_tests = r'''
 static void scenario(std::vector<Event> events, unsigned profiles, unsigned configs,
-                     uint64_t start = 0, bool boot = false, bool key = false) {
+                     uint64_t start = 0, bool boot = false, bool key = false, bool suspended = false) {
     config_actions = profile_actions = page_next = page_previous = 0; elapsed_ms = start; position = 0;
+    s_suspended = suspended;
     timeline = events; pins[0].level = !boot; pins[18].level = !key;
     if (!setjmp(finished)) button_task(nullptr);
     assert(profile_actions == profiles * CONFIG_MONITOR_PM_PROFILE && config_actions == configs);
@@ -167,6 +185,14 @@ int main() {
     assert(page_previous == 1 && page_next == 0);
     scenario({{100,true,false},{500,false,false}}, 0, 0); // BOOT next
     assert(page_next == 1 && page_previous == 0);
+    pair_active = true; pair_confirm = pair_cancel = 0;
+    scenario({{100,false,true},{500,false,false}}, 0, 0);
+    assert(pair_confirm == 1 && pair_cancel == 0 && page_previous == 0);
+    scenario({{100,true,false},{500,false,false}}, 0, 0);
+    assert(pair_confirm == 1 && pair_cancel == 1 && page_next == 0);
+    scenario({{100,true,true},{5000,false,false}}, 0, 1);
+    assert(pair_confirm == 1 && pair_cancel == 1);
+    pair_active = false;
     scenario({{100,false,true},{1000,false,false}}, 0, 0);
     assert(page_previous == 1);
     scenario({{100,false,true},{10000,false,false}}, 1, 0); // Long hold fires once.
@@ -176,8 +202,18 @@ int main() {
     assert(page_next == 0 && page_previous == 0);
     scenario({{100,true,false},{1000,true,true},{6000,false,true},{11000,false,false}}, 0, 1);
     scenario({{100,true,false},{5000,false,false}}, 0, 0);
+    assert(revoke_actions == 0 && revoke_sessions == 0 && revoke_serial == 0);
+    scenario({{100,true,false},{7000,false,false}}, 0, 0);
+    assert(revoke_actions == 1 && revoke_sessions == 1 && revoke_serial == 1 && page_next == 0);
+    scenario({{100,true,true},{7000,true,false},{14000,false,false}}, 0, 1);
+    assert(revoke_actions == 1); // Releasing one key after a chord cannot revoke.
     scenario({{5000,false,false}}, 1, 0, 0, false, true); // Already held at task startup.
     scenario({{5000,false,false}}, 0, 1, 0, true, true);
+    // A serial companion session owns the link: no configuration AP from the chord...
+    scenario({{100,true,true},{5000,false,false}}, 0, 0, 0, false, false, true);
+    // ...while the physical BOOT revoke still reaches the serial session.
+    scenario({{100,true,false},{7000,false,false}}, 0, 0, 0, false, false, true);
+    assert(revoke_serial == 2);
     uint64_t wrap = UINT32_MAX - 1000ULL;
     scenario({{wrap+100,false,true},{wrap+5000,false,false}}, 1, 0, wrap);
 }

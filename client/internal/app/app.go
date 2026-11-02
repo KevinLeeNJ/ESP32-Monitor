@@ -15,9 +15,11 @@ import (
 	"esp32-monitor/client/internal/providers/github"
 	"esp32-monitor/client/internal/transport"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // Options controls Agent-only services that the GUI can enable later.
@@ -56,6 +58,11 @@ func New(c config.Config, cacheDir string) (*Application, error) {
 }
 
 func NewWithOptions(c config.Config, cacheDir string, opts Options) (*Application, error) {
+	localURL, err := transport.NormalizeLocalDevicesURL(c.Companion.LocalDevicesURL)
+	if err != nil {
+		return nil, err
+	}
+	c.Companion.LocalDevicesURL = localURL
 	cachePath := ""
 	if cacheDir != "" && c.GitHub.Enabled {
 		cachePath = filepath.Join(cacheDir, "github-"+c.GitHub.Login+".json")
@@ -166,11 +173,15 @@ func (a *Application) SetCollectorSettings(enabled bool, uploadURL, tokenFile st
 }
 
 // SetCompanionSettings starts, stops or rebinds the Companion backend in place.
-func (a *Application) SetCompanionSettings(enabled bool, bindIP string) error {
+func (a *Application) SetCompanionSettings(enabled bool, bindIP, localURL string) error {
+	localURL, err := transport.NormalizeLocalDevicesURL(localURL)
+	if err != nil {
+		return err
+	}
 	a.ops.Lock()
 	defer a.ops.Unlock()
 	a.mu.RLock()
-	backend, closed := a.monitor, a.closed
+	backend, closed, previousURL := a.monitor, a.closed, a.cfg.Companion.LocalDevicesURL
 	a.mu.RUnlock()
 	if closed {
 		return errors.New("application_closed")
@@ -182,6 +193,7 @@ func (a *Application) SetCompanionSettings(enabled bool, bindIP string) error {
 		a.mu.Lock()
 		a.monitor = nil
 		a.cfg.Companion.Enabled = false
+		a.cfg.Companion.LocalDevicesURL = localURL
 		a.mu.Unlock()
 		return nil
 	}
@@ -194,11 +206,21 @@ func (a *Application) SetCompanionSettings(enabled bool, bindIP string) error {
 		a.mu.Lock()
 		a.cfg.Companion.Enabled = true
 		a.cfg.Companion.BindIP = bindIP
+		a.cfg.Companion.LocalDevicesURL = localURL
 		a.mu.Unlock()
+		if previousURL != localURL {
+			backend.InvalidateProxySessions()
+		}
 		return nil
 	}
+	a.mu.Lock()
+	a.cfg.Companion.LocalDevicesURL = localURL
+	a.mu.Unlock()
 	started, err := a.startCompanion(bindIP)
 	if err != nil {
+		a.mu.Lock()
+		a.cfg.Companion.LocalDevicesURL = previousURL
+		a.mu.Unlock()
 		return err
 	}
 	a.mu.Lock()
@@ -224,7 +246,24 @@ func (a *Application) startCompanion(bindIP string) (*transport.Backend, error) 
 		}
 	}
 	name, _ := os.Hostname()
-	return transport.New(transport.Options{StoreDirectory: cfg.StateDirectory, HostName: name, BindIP: bindIP, MQTTAddress: mqttAddress, HTTPAddress: httpAddress, Providers: a.Companion})
+	return transport.New(transport.Options{StoreDirectory: cfg.StateDirectory, HostName: name, BindIP: bindIP, MQTTAddress: mqttAddress, HTTPAddress: httpAddress, Providers: a.Companion,
+		AllowHTTPServer: func(raw string) bool {
+			a.mu.RLock()
+			allowed := a.cfg.Companion.LocalDevicesURL
+			a.mu.RUnlock()
+			return allowed != "" && raw == allowed
+		},
+		AllowPrivateServer: func(host string) bool {
+			a.mu.RLock()
+			allowed := a.cfg.Companion.LocalDevicesURL
+			a.mu.RUnlock()
+			if allowed == "" {
+				return false
+			}
+			u, err := url.Parse(allowed)
+			return err == nil && host == u.Hostname()
+		},
+	})
 }
 
 func defaultRouteIPv4() string {
@@ -261,12 +300,12 @@ func (a *Application) GetNowPlayingSnapshot() nowplaying.Snapshot {
 }
 
 // These are local application binding APIs; never exposed as LAN management routes.
-func (a *Application) DiscoverMonitors(ctx context.Context) (transport.DiscoveryResult, error) {
+func (a *Application) DiscoverMonitors(ctx context.Context, address string) (transport.DiscoveryResult, error) {
 	backend := a.Monitor()
 	if backend == nil {
 		return transport.DiscoveryResult{}, errors.New("companion_disabled")
 	}
-	return backend.DiscoverDevices(ctx), nil
+	return backend.DiscoverDevicesAt(ctx, address), nil
 }
 func (a *Application) GetMonitorDevices() ([]transport.DeviceStatus, error) {
 	backend := a.Monitor()
@@ -297,6 +336,13 @@ func (a *Application) ConfirmMonitorPairing(pairing string, approve bool) error 
 	}
 	return backend.ConfirmPairing(pairing, approve)
 }
+func (a *Application) CancelMonitorPairing() error {
+	backend := a.Monitor()
+	if backend == nil {
+		return errors.New("companion_disabled")
+	}
+	return backend.CancelPairing()
+}
 func (a *Application) RevokeMonitor(device string) error {
 	backend := a.Monitor()
 	if backend == nil {
@@ -309,7 +355,25 @@ func (a *Application) ConnectMonitorSerial(ctx context.Context, port string, sel
 	if backend == nil {
 		return errors.New("companion_disabled")
 	}
-	return backend.ConnectSerial(ctx, port, selection)
+	done := make(chan error, 1)
+	go func() { done <- backend.ConnectSerial(context.WithoutCancel(ctx), port, selection) }()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-done:
+			return err
+		case <-ticker.C:
+			if backend.SerialConnected(selection.DeviceID) {
+				// The serial session owns the port for its whole lifetime.
+				// Return once it is established; later disconnects surface
+				// through device status instead of the connect call.
+				return nil
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 func (a *Application) ListMonitorSerialPorts() ([]transport.DiscoveredDevice, error) {
 	backend := a.Monitor()

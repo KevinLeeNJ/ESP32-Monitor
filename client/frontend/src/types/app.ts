@@ -29,7 +29,7 @@ export interface ServerRegistration {
 export interface GuiSettings {
   schema_version: number;
   collector: { enabled: boolean; upload_url?: string; upload_token_file?: string; device_id?: string; device_name?: string };
-  companion: { enabled: boolean; bind_ip?: string };
+  companion: { enabled: boolean; bind_ip?: string; local_devices_url?: string };
   github: { login?: string; client_id?: string };
   codex: { enabled: boolean };
   music: { enabled: boolean };

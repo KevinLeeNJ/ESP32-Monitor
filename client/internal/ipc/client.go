@@ -192,8 +192,8 @@ func (c *Client) SetCollectorSettings(ctx context.Context, enabled bool, uploadU
 
 // SetCompanionSettings starts, stops or rebinds the Companion backend without
 // restarting the Agent.
-func (c *Client) SetCompanionSettings(ctx context.Context, enabled bool, bindIP string) error {
-	return c.post(ctx, "/v1/companion/settings", companionSettingsRequest{Enabled: enabled, BindIP: bindIP}, nil)
+func (c *Client) SetCompanionSettings(ctx context.Context, enabled bool, bindIP, localURL string) error {
+	return c.post(ctx, "/v1/companion/settings", companionSettingsRequest{Enabled: enabled, BindIP: bindIP, LocalDevicesURL: localURL}, nil)
 }
 
 // GitHubSession returns the current login session state.
@@ -265,9 +265,9 @@ func (c *Client) MonitorDevices(ctx context.Context) ([]transport.DeviceStatus, 
 }
 
 // DiscoverMonitors scans LAN and serial for reachable Monitors.
-func (c *Client) DiscoverMonitors(ctx context.Context, timeoutMS int) (transport.DiscoveryResult, error) {
+func (c *Client) DiscoverMonitors(ctx context.Context, timeoutMS int, address string) (transport.DiscoveryResult, error) {
 	var result transport.DiscoveryResult
-	err := c.post(ctx, "/v1/monitors/discover", monitorDiscoverRequest{TimeoutMS: timeoutMS}, &result)
+	err := c.post(ctx, "/v1/monitors/discover", monitorDiscoverRequest{TimeoutMS: timeoutMS, Address: address}, &result)
 	return result, err
 }
 
@@ -290,6 +290,11 @@ func (c *Client) ConfirmMonitorPairing(ctx context.Context, pairingID string, ap
 	var status transport.PairingStatus
 	err := c.post(ctx, "/v1/monitors/pairing/confirm", pairingConfirmRequest{PairingID: pairingID, Approve: approve}, &status)
 	return status, err
+}
+
+// CancelMonitorPairing cancels the current pairing window without an ID.
+func (c *Client) CancelMonitorPairing(ctx context.Context) error {
+	return c.post(ctx, "/v1/monitors/pairing/cancel", struct{}{}, nil)
 }
 
 // RevokeMonitor removes the pairing record for a device.

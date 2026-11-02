@@ -9,6 +9,8 @@ export interface DeviceStatus {
   address: string;
   confirmed_online: boolean;
   connection_state: string;
+  transport?: "serial" | "lan";
+  pairing_lost?: boolean;
   session_id: string;
   last_seen: string;
 }
@@ -24,6 +26,7 @@ export interface DiscoveredDevice {
   usb_serial: string;
   identity_verified: boolean;
   paired: boolean;
+  pairing_lost?: boolean;
   online: boolean;
   state: string;
 }
