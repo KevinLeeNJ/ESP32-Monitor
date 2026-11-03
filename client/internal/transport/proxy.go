@@ -46,6 +46,8 @@ func newProxy(ctx context.Context, c wire.Config, client HTTPDoer) *proxyWorker 
 	if c.Devices.Enabled {
 		p.data.Devices.State = "starting"
 	}
+	logging.L("transport").Info("proxy_worker_start", "weather_enabled", c.Weather.Enabled,
+		"weather_location", c.Weather.LocationMode, "devices_enabled", c.Devices.Enabled)
 	go p.run(ctx)
 	return p
 }
@@ -260,6 +262,17 @@ func (p *proxyWorker) weather(ctx context.Context, lat, lon float64) {
 	p.mu.Lock()
 	p.update(&p.data.Weather, map[string]any{"condition": condition, "latitude": lat, "longitude": lon, "location_source": p.config.Weather.LocationMode}, e)
 	p.mu.Unlock()
+	errorText := ""
+	if e != nil {
+		errorText = e.Error()
+	}
+	if e != nil || condition < 0 {
+		logging.L("transport").Warn("proxy_weather_result", "code", weather.Code,
+			"icon", weather.Now.Icon, "condition", condition, "error", errorText)
+	} else {
+		logging.L("transport").Info("proxy_weather_result", "code", weather.Code,
+			"icon", weather.Now.Icon, "condition", condition)
+	}
 	var air struct {
 		Indexes []struct {
 			Display *json.RawMessage `json:"aqiDisplay,omitempty"`
