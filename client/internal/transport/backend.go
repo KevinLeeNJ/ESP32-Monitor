@@ -71,6 +71,13 @@ type pairingLostState struct {
 
 const pairingLostWindow = 15 * time.Second
 
+// Paired LAN recovery starts quickly after a reboot, then backs off. The
+// board may be in MAX_MODEM with a 10-beacon listen interval, so give each
+// probe enough time to cover several DTIM cycles.
+var lanRecoveryDelay = [...]int{5, 10, 20, 30, 60}
+
+const lanRecoveryProbeTimeout = 5 * time.Second
+
 type recoveryState struct {
 	next    time.Time
 	attempt int
@@ -293,7 +300,7 @@ func (b *Backend) maintain() {
 			if now.Before(r.next) {
 				continue
 			}
-			seconds := min(60, 1<<min(r.attempt, 6))
+			seconds := lanRecoveryDelay[min(r.attempt, len(lanRecoveryDelay)-1)]
 			r.attempt++ // cryptographic jitter, no high-frequency probing
 			jitter := float64(time.Now().UnixNano()%4001)/10000 + 0.8
 			r.next = now.Add(time.Duration(float64(seconds) * jitter * float64(time.Second)))
@@ -313,7 +320,7 @@ func (b *Backend) release(s *session) {
 	b.mu.Lock()
 	if b.sessions[s.pair.DeviceID] == s {
 		delete(b.sessions, s.pair.DeviceID)
-		b.recovery[s.pair.DeviceID] = &recoveryState{next: time.Now().Add(10 * time.Second)}
+		b.recovery[s.pair.DeviceID] = &recoveryState{next: time.Now().Add(5 * time.Second)}
 	}
 	if s.transport == "serial" {
 		b.serialSeen[s.pair.DeviceID] = time.Now()

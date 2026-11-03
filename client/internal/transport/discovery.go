@@ -302,19 +302,29 @@ func (b *Backend) offerSelected(ctx context.Context, c candidate, device string)
 	return nil
 }
 func (b *Backend) recoverDevice(ctx context.Context, p Pairing) {
+	start := time.Now()
 	b.mu.Lock()
 	c, ok := b.candidates[p.DeviceID]
 	b.mu.Unlock()
 	if ok {
-		out, e := b.query(ctx, c.Addr.String(), &p, 3*time.Second, true)
+		out, e := b.query(ctx, c.Addr.String(), &p, lanRecoveryProbeTimeout, true)
 		if e == nil && len(out) > 0 {
+			logging.L("transport").Info("lan_recovery_connected", "device", logging.Ref(p.DeviceID),
+				"path", "candidate", "elapsed_ms", time.Since(start).Milliseconds())
 			return
 		}
 	}
 	target := b.discoveryTarget()
 	if target != "" {
-		_, _ = b.query(ctx, target, &p, 3*time.Second, true)
+		out, e := b.query(ctx, target, &p, lanRecoveryProbeTimeout, true)
+		if e == nil && len(out) > 0 {
+			logging.L("transport").Info("lan_recovery_connected", "device", logging.Ref(p.DeviceID),
+				"path", "broadcast", "elapsed_ms", time.Since(start).Milliseconds())
+			return
+		}
 	}
+	logging.L("transport").Debug("lan_recovery_miss", "device", logging.Ref(p.DeviceID),
+		"elapsed_ms", time.Since(start).Milliseconds())
 }
 
 /* A revoked monitor answers a paired probe with pairing_open=true, the old

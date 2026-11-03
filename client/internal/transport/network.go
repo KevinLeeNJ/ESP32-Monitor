@@ -61,7 +61,7 @@ func (b *Backend) rebind(ip string, selected bool) error {
 				s.client.Stop(errors.New("network_changed"))
 			}
 			delete(b.sessions, id)
-			b.recovery[id] = &recoveryState{next: time.Now().Add(10 * time.Second)}
+			b.recovery[id] = &recoveryState{next: time.Now().Add(5 * time.Second)}
 		}
 	}
 	b.listener = listener
