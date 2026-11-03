@@ -265,9 +265,9 @@ func (c *Client) MonitorDevices(ctx context.Context) ([]transport.DeviceStatus, 
 }
 
 // DiscoverMonitors scans LAN and serial for reachable Monitors.
-func (c *Client) DiscoverMonitors(ctx context.Context, timeoutMS int, address string) (transport.DiscoveryResult, error) {
+func (c *Client) DiscoverMonitors(ctx context.Context, timeoutMS int) (transport.DiscoveryResult, error) {
 	var result transport.DiscoveryResult
-	err := c.post(ctx, "/v1/monitors/discover", monitorDiscoverRequest{TimeoutMS: timeoutMS, Address: address}, &result)
+	err := c.post(ctx, "/v1/monitors/discover", monitorDiscoverRequest{TimeoutMS: timeoutMS}, &result)
 	return result, err
 }
 

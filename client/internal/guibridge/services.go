@@ -247,9 +247,9 @@ type MonitorService struct{ sup *Supervisor }
 func NewMonitorService(sup *Supervisor) *MonitorService { return &MonitorService{sup: sup} }
 
 // DiscoverMonitors scans LAN and serial for reachable Monitors.
-func (s *MonitorService) DiscoverMonitors(ctx context.Context, timeoutMS int, address string) (transport.DiscoveryResult, error) {
+func (s *MonitorService) DiscoverMonitors(ctx context.Context, timeoutMS int) (transport.DiscoveryResult, error) {
 	return call(ctx, s.sup, func(ctx context.Context, c *ipc.Client) (transport.DiscoveryResult, error) {
-		return c.DiscoverMonitors(ctx, timeoutMS, address)
+		return c.DiscoverMonitors(ctx, timeoutMS)
 	})
 }
 

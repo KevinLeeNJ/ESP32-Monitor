@@ -74,17 +74,13 @@ func SerialPorts() ([]DiscoveredDevice, error) {
 // candidates. No commands are sent to unknown ports. Frontends may immediately
 // render serial results through ListSerialPorts while the LAN round completes.
 func (b *Backend) DiscoverDevices(ctx context.Context) DiscoveryResult {
-	return b.DiscoverDevicesAt(ctx, "")
-}
-
-func (b *Backend) DiscoverDevicesAt(ctx context.Context, address string) DiscoveryResult {
 	var result DiscoveryResult
 	var wg sync.WaitGroup
 	var lanErr error
 	var ports []DiscoveredDevice
 	var serialErr error
 	wg.Add(2)
-	go func() { defer wg.Done(); lanErr = b.Discover(ctx, address) }()
+	go func() { defer wg.Done(); lanErr = b.Discover(ctx) }()
 	go func() {
 		defer wg.Done()
 		var e error

@@ -7,7 +7,6 @@ import { connectionLabel, connectionTypeLabel } from "../services/device-labels.
 import { fmtClockTime } from "../services/format.js";
 
 const discovering = ref(false);
-const discoveryAddress = ref("");
 const discovery = ref<DiscoveryResult | null>(null);
 const localPairing = ref<PairingStatus | null>(null);
 // Serial pairing starts before the Agent has a pairing window, so its poll must
@@ -88,7 +87,7 @@ function stopPairingPoll() {
 async function discover() {
   discovering.value = true;
   try {
-    discovery.value = await monitorService.discover(10000, discoveryAddress.value.trim());
+    discovery.value = await monitorService.discover(10000);
     if (discovery.value.devices.length) toast(`发现 ${discovery.value.devices.length} 个连接`);
     else toast("未发现新设备");
   } catch (error) {
@@ -263,10 +262,6 @@ onUnmounted(stopPairingPoll);
         <p>发现、配对并管理 ESP32 Monitor 设备。</p>
       </div>
       <button class="btn primary" :disabled="discovering" @click="discover">{{ discovering ? "搜索中…" : "发现设备" }}</button>
-    </div>
-    <div class="section-note">
-      <label for="discovery-address">设备 IPv4（可选，广播不可用时填写）</label>
-      <input id="discovery-address" v-model="discoveryAddress" placeholder="例如 192.168.1.20" :disabled="discovering" />
     </div>
     <div v-if="!companionOn" class="banner">
       <div><b>上位机服务未启用</b>　ESP32 需要该服务才能连接并显示数据。</div>

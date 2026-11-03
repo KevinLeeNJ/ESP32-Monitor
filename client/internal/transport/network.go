@@ -93,14 +93,17 @@ func (b *Backend) watchInterface() {
 		name := b.interfaceName
 		b.mu.Unlock()
 		if name == "" {
+			b.recoverLANInterface()
 			continue
 		}
 		iface, e := net.InterfaceByName(name)
 		if e != nil {
+			b.recoverLANInterface()
 			continue
 		}
 		as, e := iface.Addrs()
 		if e != nil {
+			b.recoverLANInterface()
 			continue
 		}
 		currentPresent := false
@@ -115,7 +118,11 @@ func (b *Backend) watchInterface() {
 				}
 			}
 		}
-		if currentPresent || next == "" {
+		if currentPresent && iface.Flags&net.FlagUp != 0 {
+			continue
+		}
+		if next == "" || iface.Flags&net.FlagUp == 0 {
+			b.recoverLANInterface()
 			continue
 		}
 		b.networkChangeMu.Lock()
@@ -123,5 +130,17 @@ func (b *Backend) watchInterface() {
 			_ = b.rebind(next, false)
 		}
 		b.networkChangeMu.Unlock()
+	}
+}
+
+func (b *Backend) recoverLANInterface() {
+	ip := PreferredLANIPv4("")
+	if ip == "" || ip == b.bindIP() {
+		return
+	}
+	b.networkChangeMu.Lock()
+	defer b.networkChangeMu.Unlock()
+	if b.ctx.Err() == nil && ip != b.bindIP() {
+		_ = b.rebind(ip, true)
 	}
 }

@@ -27,7 +27,7 @@ export const companionService = {
 };
 
 export const monitorService = {
-  discover: (timeoutMS: number, address = "") => call<DiscoveryResult>("MonitorService.DiscoverMonitors", timeoutMS, address),
+  discover: (timeoutMS: number) => call<DiscoveryResult>("MonitorService.DiscoverMonitors", timeoutMS),
   devices: () => call<DeviceStatus[]>("MonitorService.GetMonitorDevices"),
   pairingStatus: () => call<PairingStatus>("MonitorService.GetPairingStatus"),
   beginPairing: (device: string, trustLAN: boolean) => call<PairingStatus>("MonitorService.BeginPairing", device, trustLAN),

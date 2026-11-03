@@ -29,7 +29,7 @@ func (s *Server) routeMonitors(w http.ResponseWriter, r *http.Request) {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
-		result, err := s.app.DiscoverMonitors(ctx, req.Address)
+		result, err := s.app.DiscoverMonitors(ctx)
 		if err != nil {
 			writeAppError(w, err)
 			return

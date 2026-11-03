@@ -84,46 +84,6 @@ func (b *Backend) discoveryTarget() string {
 	return ""
 }
 
-// Keep automatic fallback bounded even on a large corporate subnet. A larger
-// network probes only the local /24; manual IPv4 remains available outside it.
-func subnetCandidates(ip net.IP, mask net.IPMask) []net.IP {
-	v4 := ip.To4()
-	ones, bits := mask.Size()
-	if v4 == nil || bits != 32 || ones > 30 || v4.IsLoopback() {
-		return nil
-	}
-	if ones < 24 {
-		ones = 24
-	}
-	networkMask := net.CIDRMask(ones, 32)
-	self := binary.BigEndian.Uint32(v4)
-	base := self & binary.BigEndian.Uint32(networkMask)
-	broadcast := base | ^binary.BigEndian.Uint32(networkMask)
-	out := make([]net.IP, 0, broadcast-base-1)
-	for host := base + 1; host < broadcast; host++ {
-		if host == self {
-			continue
-		}
-		address := make(net.IP, 4)
-		binary.BigEndian.PutUint32(address, host)
-		out = append(out, address)
-	}
-	return out
-}
-
-func (b *Backend) fallbackCandidates() []net.IP {
-	ip := net.ParseIP(b.bindIP()).To4()
-	interfaces, _ := net.Interfaces()
-	for _, iface := range interfaces {
-		addresses, _ := iface.Addrs()
-		for _, address := range addresses {
-			if network, ok := address.(*net.IPNet); ok && network.IP.Equal(ip) {
-				return subnetCandidates(ip, network.Mask)
-			}
-		}
-	}
-	return nil
-}
 func (b *Backend) query(ctx context.Context, target string, pair *Pairing, duration time.Duration, offer bool) ([]candidate, error) {
 	b.discoveryMu.Lock()
 	defer b.discoveryMu.Unlock()
@@ -133,7 +93,7 @@ func (b *Backend) query(ctx context.Context, target string, pair *Pairing, durat
 	}
 	listenIP := net.ParseIP(b.bindIP())
 	// Windows rejects a LAN-bound socket sending to loopback; an explicit
-	// loopback target (local simulator or manual IP) must use a loopback
+	// loopback target (local simulator) must use a loopback
 	// socket. Pairing still opens its listener on the bound LAN interface.
 	if a.IP.IsLoopback() {
 		listenIP = net.IPv4(127, 0, 0, 1)
@@ -163,23 +123,11 @@ func (b *Backend) query(ctx context.Context, target string, pair *Pairing, durat
 	if b.opts.DiscoveryTarget == "" && !a.IP.IsLoopback() && target == b.discoveryTarget() {
 		_, _ = conn.WriteToUDP(data, &net.UDPAddr{IP: net.IPv4bcast, Port: a.Port})
 	}
-	// A monitor simulator running on this host cannot receive the subnet
-	// broadcast reliably (Windows firewall may drop it); probe loopback too.
-	if a.Port == 18444 && !a.IP.IsLoopback() {
-		_, _ = conn.WriteToUDP(data, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 18444})
-	}
 	deadline := time.Now().Add(duration)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
-	fallback := b.opts.DiscoveryTarget == "" && !a.IP.IsLoopback() && target == b.discoveryTarget()
-	firstDeadline := deadline
-	if fallback && time.Now().Add(time.Second).Before(deadline) {
-		firstDeadline = time.Now().Add(time.Second)
-	} else {
-		fallback = false
-	}
-	_ = conn.SetReadDeadline(firstDeadline)
+	_ = conn.SetReadDeadline(deadline)
 	cancelDone := make(chan struct{})
 	defer close(cancelDone)
 	go func() {
@@ -196,33 +144,6 @@ func (b *Backend) query(ctx context.Context, target string, pair *Pairing, durat
 	for {
 		n, addr, e := conn.ReadFromUDP(buf)
 		if e != nil {
-			if netErr, ok := e.(net.Error); ok && netErr.Timeout() && fallback && ctx.Err() == nil {
-				fallback = false
-				if len(out) == 0 {
-					// Read replies while probing: on busy networks a burst can
-					// otherwise overflow the socket before the receive loop runs.
-					go func(addresses []net.IP) {
-						for _, ip := range addresses {
-							if time.Now().After(deadline) {
-								return
-							}
-							_, _ = conn.WriteToUDP(data, &net.UDPAddr{IP: ip, Port: a.Port})
-							timer := time.NewTimer(2 * time.Millisecond)
-							select {
-							case <-timer.C:
-							case <-ctx.Done():
-								timer.Stop()
-								return
-							case <-cancelDone:
-								timer.Stop()
-								return
-							}
-						}
-					}(b.fallbackCandidates())
-				}
-				_ = conn.SetReadDeadline(deadline)
-				continue
-			}
 			if len(out) > 0 {
 				return out, nil
 			}
@@ -310,7 +231,7 @@ func (b *Backend) query(ctx context.Context, target string, pair *Pairing, durat
 }
 
 // Discover performs one five-second round on the selected IPv4 interface.
-func (b *Backend) Discover(ctx context.Context, manualIP string) error {
+func (b *Backend) Discover(ctx context.Context) error {
 	b.mu.Lock()
 	if time.Since(b.lastDiscovery) < 5*time.Second {
 		b.mu.Unlock()
@@ -325,12 +246,6 @@ func (b *Backend) Discover(ctx context.Context, manualIP string) error {
 	b.discoveryOverflow = false
 	b.mu.Unlock()
 	target := b.discoveryTarget()
-	if manualIP != "" {
-		if net.ParseIP(manualIP).To4() == nil {
-			return wire.ErrMessage
-		}
-		target = net.JoinHostPort(manualIP, "18444")
-	}
 	if target == "" {
 		return errors.New("network_unreachable")
 	}

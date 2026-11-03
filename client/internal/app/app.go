@@ -240,7 +240,7 @@ func (a *Application) startCompanion(bindIP string) (*transport.Backend, error) 
 		// The GUI has no interface picker; without an IP transport.New would
 		// reject the whole agent. Pick the default-route IPv4 locally — a UDP
 		// "connect" consults the routing table and sends no packets.
-		bindIP = defaultRouteIPv4()
+		bindIP = transport.PreferredLANIPv4(defaultRouteIPv4())
 		if bindIP == "" {
 			return nil, errors.New("select_lan_interface")
 		}
@@ -300,12 +300,12 @@ func (a *Application) GetNowPlayingSnapshot() nowplaying.Snapshot {
 }
 
 // These are local application binding APIs; never exposed as LAN management routes.
-func (a *Application) DiscoverMonitors(ctx context.Context, address string) (transport.DiscoveryResult, error) {
+func (a *Application) DiscoverMonitors(ctx context.Context) (transport.DiscoveryResult, error) {
 	backend := a.Monitor()
 	if backend == nil {
 		return transport.DiscoveryResult{}, errors.New("companion_disabled")
 	}
-	return backend.DiscoverDevicesAt(ctx, address), nil
+	return backend.DiscoverDevices(ctx), nil
 }
 func (a *Application) GetMonitorDevices() ([]transport.DeviceStatus, error) {
 	backend := a.Monitor()

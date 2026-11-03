@@ -29,34 +29,34 @@ func waitFor(t *testing.T, timeout time.Duration, f func() bool) {
 	t.Fatal("condition timed out")
 }
 
-func TestDirectIPv4Discovery(t *testing.T) {
-	m, err := simesp32.New("direct monitor", "127.0.0.1:18444")
+func TestDiscoverDevicesWithSimulator(t *testing.T) {
+	m, err := simesp32.New("test monitor", "127.0.0.1:0")
 	if err != nil {
 		t.Skipf("discovery port unavailable: %v", err)
 	}
 	m.Start()
 	defer m.Close()
-	b, err := transport.New(transport.Options{StoreDirectory: filepath.Join(t.TempDir(), "vault"), HostName: "test-host", BindIP: "127.0.0.1", MQTTAddress: "127.0.0.1:0", HTTPAddress: "127.0.0.1:0"})
+	b, err := transport.New(transport.Options{StoreDirectory: filepath.Join(t.TempDir(), "vault"), HostName: "test-host", BindIP: "127.0.0.1", MQTTAddress: "127.0.0.1:0", HTTPAddress: "127.0.0.1:0", DiscoveryTarget: m.Address()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer b.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	result := b.DiscoverDevicesAt(ctx, "127.0.0.1")
+	result := b.DiscoverDevices(ctx)
 	for _, device := range result.Devices {
 		if device.DeviceID == m.DeviceID && device.ConnectionType == "lan" && device.Address == "127.0.0.1" {
 			return
 		}
 	}
-	t.Fatalf("manual address did not discover monitor: %+v", result)
+	t.Fatalf("simulated monitor not discovered: %+v", result)
 }
 
 func pairSimulatedMonitor(t *testing.T, b *transport.Backend, m *simesp32.Monitor) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if e := b.Discover(ctx, ""); e != nil {
+	if e := b.Discover(ctx); e != nil {
 		t.Fatal(e)
 	}
 	if e := b.BeginPairing(m.DeviceID, true); e != nil {
@@ -86,7 +86,7 @@ func TestLANPairingNeedsOnlyDeviceConfirmation(t *testing.T) {
 	defer b.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if e := b.Discover(ctx, ""); e != nil {
+	if e := b.Discover(ctx); e != nil {
 		t.Fatal(e)
 	}
 	if e := b.BeginPairing(m.DeviceID, true); e != nil {
@@ -216,7 +216,7 @@ func TestLANPairingWithLANBind(t *testing.T) {
 	defer b.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if e := b.Discover(ctx, ""); e != nil {
+	if e := b.Discover(ctx); e != nil {
 		t.Fatal(e)
 	}
 	if e := b.BeginPairing(m.DeviceID, true); e != nil {
@@ -246,7 +246,7 @@ func TestLANEndToEndSimulatedESP32(t *testing.T) {
 	if e = b.BeginPairing(m.DeviceID, false); e == nil || e.Error() != "lan_consent_required" {
 		t.Fatal("missing consent allowed")
 	}
-	if e = b.Discover(ctx, ""); e != nil {
+	if e = b.Discover(ctx); e != nil {
 		t.Fatal(e)
 	}
 	devices, _ := b.Devices()
