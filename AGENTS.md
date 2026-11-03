@@ -43,6 +43,8 @@ idf.py -C firmware/tests -B "$PWD/firmware/tests/build/esp32s3" build
 
 Select the actual port before flashing or monitoring. The separate device test application replaces the production application when flashed; restore production firmware after running it. Host and simulator tests do not establish hardware behavior.
 
+On Windows, a running Client Agent rescans serial ports every 2 seconds and auto-connects a paired board over USB, which switches an active LAN session to serial. To read the firmware console without interrupting a LAN session, open the board's COM port as soon as it enumerates and hold it with DTR/RTS deasserted so the board is not reset; the Agent's serial autoconnect then fails and the LAN session stays active. Release the port before asking the Client to use USB.
+
 ### Client
 
 The Client is a multi-platform project. When fixing an issue on one platform, do not affect behavior on other platforms.
@@ -51,6 +53,7 @@ The Client is a multi-platform project. When fixing an issue on one platform, do
 cd client
 make build                            # Agent
 make test                             # go test -race ./...
+make test-fast                        # go test -short ./... (skips LAN/serial integration)
 make check                            # go vet ./...
 make test-collector-e2e
 go run ./cmd/sim-server -listen 127.0.0.1:18081
