@@ -93,6 +93,20 @@ The ESP32's internal RAM is a scarce resource even when PSRAM is mostly free. UI
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
+## Commit messages
+
+Use Conventional Commits for every commit:
+
+```
+<type>(<scope>): <subject>
+```
+
+- Common types: `feat`, `fix`, `test`, `docs`, `refactor`, `perf`, `build`, `ci`, `chore`.
+- Use a short lowercase scope when it clarifies the area (`ui`, `companion`, `config`, `server`, `tests`); omit it for repository-wide changes.
+- Write the subject in the imperative mood, lowercase after the colon, without a trailing period, and keep it under about 72 characters.
+- Explain the motivation and any notable tradeoff in the body, referencing the affected platform, protocol or verification where useful.
+- Keep one logical change per commit; do not mix unrelated fixes, documentation or generated artifacts.
+
 ## 1. Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**
