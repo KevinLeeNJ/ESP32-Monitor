@@ -168,6 +168,14 @@ func (s *session) run(b *Backend) {
 					return
 				}
 				logging.L("transport").Warn("device_message_rejected", "device", device, "topic", m.topic, "error", e.Error())
+				if m.topic == "proxy-config" {
+					b.mu.Lock()
+					if b.configErrors == nil {
+						b.configErrors = make(map[string]string)
+					}
+					b.configErrors[s.pair.DeviceID] = "invalid_config"
+					b.mu.Unlock()
+				}
 				if e = s.control(b, "error", wire.Failure(e.Error(), nil), nil); e != nil {
 					return
 				}
@@ -362,9 +370,12 @@ func (s *session) handle(b *Backend, m incoming) error {
 		if cfg.DeviceID != s.pair.DeviceID || cfg.SessionID != s.id || s.transport == "lan" && value(req) != cfg.RequestID {
 			return wire.ErrMessage
 		}
-		if e := validateConfig(cfg, b.opts.AllowHTTPServer); e != nil {
+		if e := validateConfig(cfg); e != nil {
 			return e
 		}
+		b.mu.Lock()
+		delete(b.configErrors, s.pair.DeviceID)
+		b.mu.Unlock()
 		normalized := cfg
 		normalized.RequestID = ""
 		normalized.SessionID = ""
@@ -384,7 +395,7 @@ func (s *session) handle(b *Backend, m incoming) error {
 		}
 		client := b.opts.HTTPClient
 		if client == nil {
-			client = guardedClient(b.opts.AllowPrivateServer)
+			client = guardedClient()
 		}
 		proxy := newProxy(s.ctx, cfg, client)
 		old := s.proxy

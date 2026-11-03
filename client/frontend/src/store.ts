@@ -99,6 +99,13 @@ export async function refreshDevices() {
     const devices = await monitorService.devices();
     if (request < devicesApplied) return;
     devicesApplied = request;
+    for (const device of devices) {
+      if (device.config_error && notifiedConfigErrors.get(device.device_id) !== device.config_error) {
+        toast(`设备 ${device.device_name || device.device_id} 的配置被拒绝，请检查天气和 Devices 地址等配置。`);
+      }
+      if (device.config_error) notifiedConfigErrors.set(device.device_id, device.config_error);
+      else notifiedConfigErrors.delete(device.device_id);
+    }
     store.devices = devices;
     store.devicesError = "";
   } catch (error) {
@@ -110,6 +117,7 @@ export async function refreshDevices() {
 
 let devicesRequest = 0;
 let devicesApplied = 0;
+const notifiedConfigErrors = new Map<string, string>();
 
 export async function quitApp() {
   try {

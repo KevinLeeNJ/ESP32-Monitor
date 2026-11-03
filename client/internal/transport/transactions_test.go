@@ -69,6 +69,45 @@ type discardStream struct{}
 func (discardStream) Read([]byte) (int, error)    { return 0, io.EOF }
 func (discardStream) Write(b []byte) (int, error) { return len(b), nil }
 func (discardStream) Close() error                { return nil }
+
+func TestRejectedConfigAppearsInDeviceStatus(t *testing.T) {
+	b := testBackend(t)
+	cfg := disabledConfig()
+	pair := Pairing{DeviceID: cfg.DeviceID, DeviceName: "board", PairingID: wire.NewID(), DeviceToken: wire.Nonce(), SerialKey: wire.Nonce(), ConsentAt: time.Now().Unix(), WarningVersion: 1, LANConsent: true}
+	if err := b.store.put(pair); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &session{id: cfg.SessionID, pair: pair, ctx: ctx, cancel: cancel, transport: "serial", state: "syncing_config", stream: discardStream{}, serialKeys: &SerialKeys{Frame: make([]byte, 32)}, in: make(chan incoming, 1), rate: tokenBucket{tokens: 100, rate: 100, burst: 100, last: time.Now()}, expires: time.Now().Add(time.Minute)}
+	done := make(chan struct{})
+	go func() { s.run(b); close(done) }()
+	invalid := cfg
+	invalid.Revision = 0
+	raw, err := wire.Marshal(invalid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.in <- incoming{topic: "proxy-config", data: raw, seq: 1}
+	deadline := time.Now().Add(time.Second)
+	for {
+		b.mu.Lock()
+		got := b.configErrors[pair.DeviceID]
+		b.mu.Unlock()
+		if got == "invalid_config" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("missing config rejection")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	statuses, _ := b.Devices()
+	if len(statuses) != 1 || statuses[0].ConfigError != "invalid_config" {
+		t.Fatalf("statuses: %+v", statuses)
+	}
+	cancel()
+	<-done
+}
 func TestConfigTransactionsNeverPartiallyApply(t *testing.T) {
 	b := testBackend(t)
 	ctx, cancel := context.WithCancel(context.Background())

@@ -98,7 +98,7 @@ public:
 
     // ==================== Config AP Mode ====================
     
-    void StartConfigAp();  // Non-blocking, auto-stops station if active
+    bool StartConfigAp();  // Non-blocking, auto-stops station if active
     void StopConfigAp();   // Non-blocking
     
     bool IsConfigMode() const;

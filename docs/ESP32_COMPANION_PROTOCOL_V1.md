@@ -91,13 +91,13 @@ Config 带 device/session/request_id、`config_epoch` UUID、非零 `config_revi
 
 | 组 | 字段与约束 |
 | --- | --- |
-| weather | enabled、location_mode（coordinates/ip）；启用时 qweather_host 为合法 DNS、qweather_key 非空且最多127字节；坐标模式含 latitude/longitude，IP 模式不带坐标 |
+| weather | enabled、location_mode（coordinates/ip）；启用时 qweather_host 为 HTTP(S) 基地址、qweather_key 非空且最多127字节；兼容旧设备发送的 DNS 主机名；坐标模式含 latitude/longitude，IP 模式不带坐标 |
 | devices | enabled；启用时 devices_api_url、devices_token；URL 最多192字节，禁止 userinfo/query/fragment，Token 最多128字节且字符受限 |
 | time | enabled 必须 true，utc_offset_minutes 在 −720～840 |
 
 关闭的 weather/devices 组不带其可选秘密/坐标字段。新 epoch 可重新开始 revision；同 epoch 旧 revision 或同 revision 异内容为 config_conflict。先完整校验，再建立候选 worker 并替换，失败保留原配置；applied ACK 回显 epoch/revision 与 weather_configured/devices_configured。ACK 只证明配置应用，不证明上游请求已成功。
 
-天气/AQI 启动后及每 15 分钟获取；devices 每 30 秒获取（**不能为省电降低该频率**）。Devices URL 是基地址，Client 追加 `/v2/devices/summary`，只用只读 Token。设备使用 IP 定位时，由设备通过 ipwho.is 定位并向 Client 提供坐标；定位成功前不启用代理天气，避免使用 Client 的代理出口位置。请求有超时、体积限制与重定向限制。生产代理校验 DNS 解析结果，私网地址需要精确授权；测试注入例外不等于 GUI 已完成授权流程。
+天气/AQI 启动后及每 15 分钟获取；devices 每 30 秒获取（**不能为省电降低该频率**）。Devices URL 是基地址，Client 追加 `/v2/devices/summary`，只用只读 Token。设备使用 IP 定位时，由设备通过 ipwho.is 定位并向 Client 提供坐标；定位成功前不启用代理天气，避免使用 Client 的代理出口位置。请求有超时、体积限制与重定向限制。Client 使用设备配置的 HTTP/HTTPS 地址，支持局域网 IP 和域名，无需额外授权。
 
 时间快照来自本机 system_clock，当前 `trusted=false`，不能宣称 Client 已验证上位机时钟准确。板载电池和温湿度始终由固件本地采集，不被上位机指标覆盖。
 

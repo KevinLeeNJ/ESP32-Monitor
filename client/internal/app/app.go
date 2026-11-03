@@ -15,7 +15,6 @@ import (
 	"esp32-monitor/client/internal/providers/github"
 	"esp32-monitor/client/internal/transport"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -58,11 +57,6 @@ func New(c config.Config, cacheDir string) (*Application, error) {
 }
 
 func NewWithOptions(c config.Config, cacheDir string, opts Options) (*Application, error) {
-	localURL, err := transport.NormalizeLocalDevicesURL(c.Companion.LocalDevicesURL)
-	if err != nil {
-		return nil, err
-	}
-	c.Companion.LocalDevicesURL = localURL
 	cachePath := ""
 	if cacheDir != "" && c.GitHub.Enabled {
 		cachePath = filepath.Join(cacheDir, "github-"+c.GitHub.Login+".json")
@@ -173,15 +167,11 @@ func (a *Application) SetCollectorSettings(enabled bool, uploadURL, tokenFile st
 }
 
 // SetCompanionSettings starts, stops or rebinds the Companion backend in place.
-func (a *Application) SetCompanionSettings(enabled bool, bindIP, localURL string) error {
-	localURL, err := transport.NormalizeLocalDevicesURL(localURL)
-	if err != nil {
-		return err
-	}
+func (a *Application) SetCompanionSettings(enabled bool, bindIP string) error {
 	a.ops.Lock()
 	defer a.ops.Unlock()
 	a.mu.RLock()
-	backend, closed, previousURL := a.monitor, a.closed, a.cfg.Companion.LocalDevicesURL
+	backend, closed := a.monitor, a.closed
 	a.mu.RUnlock()
 	if closed {
 		return errors.New("application_closed")
@@ -193,7 +183,6 @@ func (a *Application) SetCompanionSettings(enabled bool, bindIP, localURL string
 		a.mu.Lock()
 		a.monitor = nil
 		a.cfg.Companion.Enabled = false
-		a.cfg.Companion.LocalDevicesURL = localURL
 		a.mu.Unlock()
 		return nil
 	}
@@ -206,21 +195,11 @@ func (a *Application) SetCompanionSettings(enabled bool, bindIP, localURL string
 		a.mu.Lock()
 		a.cfg.Companion.Enabled = true
 		a.cfg.Companion.BindIP = bindIP
-		a.cfg.Companion.LocalDevicesURL = localURL
 		a.mu.Unlock()
-		if previousURL != localURL {
-			backend.InvalidateProxySessions()
-		}
 		return nil
 	}
-	a.mu.Lock()
-	a.cfg.Companion.LocalDevicesURL = localURL
-	a.mu.Unlock()
 	started, err := a.startCompanion(bindIP)
 	if err != nil {
-		a.mu.Lock()
-		a.cfg.Companion.LocalDevicesURL = previousURL
-		a.mu.Unlock()
 		return err
 	}
 	a.mu.Lock()
@@ -246,24 +225,7 @@ func (a *Application) startCompanion(bindIP string) (*transport.Backend, error) 
 		}
 	}
 	name, _ := os.Hostname()
-	return transport.New(transport.Options{StoreDirectory: cfg.StateDirectory, HostName: name, BindIP: bindIP, MQTTAddress: mqttAddress, HTTPAddress: httpAddress, Providers: a.Companion,
-		AllowHTTPServer: func(raw string) bool {
-			a.mu.RLock()
-			allowed := a.cfg.Companion.LocalDevicesURL
-			a.mu.RUnlock()
-			return allowed != "" && raw == allowed
-		},
-		AllowPrivateServer: func(host string) bool {
-			a.mu.RLock()
-			allowed := a.cfg.Companion.LocalDevicesURL
-			a.mu.RUnlock()
-			if allowed == "" {
-				return false
-			}
-			u, err := url.Parse(allowed)
-			return err == nil && host == u.Hostname()
-		},
-	})
+	return transport.New(transport.Options{StoreDirectory: cfg.StateDirectory, HostName: name, BindIP: bindIP, MQTTAddress: mqttAddress, HTTPAddress: httpAddress, Providers: a.Companion})
 }
 
 func defaultRouteIPv4() string {

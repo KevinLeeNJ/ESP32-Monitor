@@ -20,18 +20,16 @@ import (
 )
 
 type Options struct {
-	StoreDirectory     string
-	HostName           string
-	BindIP             string // An explicitly selected interface IPv4; never 0.0.0.0.
-	MQTTAddress        string
-	HTTPAddress        string
-	DiscoveryTarget    string // Optional explicit UDP target, also useful for isolated tests.
-	Providers          *companion.Service
-	EnumerateSerial    func() ([]DiscoveredDevice, error)       // Optional platform adapter injection.
-	OpenSerial         func(string) (io.ReadWriteCloser, error) // Optional test/embedding override.
-	HTTPClient         HTTPDoer                                 // Optional trusted embedding/testing override.
-	AllowPrivateServer func(host string) bool                   // Explicit local GUI authorization.
-	AllowHTTPServer    func(baseURL string) bool
+	StoreDirectory  string
+	HostName        string
+	BindIP          string // An explicitly selected interface IPv4; never 0.0.0.0.
+	MQTTAddress     string
+	HTTPAddress     string
+	DiscoveryTarget string // Optional explicit UDP target, also useful for isolated tests.
+	Providers       *companion.Service
+	EnumerateSerial func() ([]DiscoveredDevice, error)       // Optional platform adapter injection.
+	OpenSerial      func(string) (io.ReadWriteCloser, error) // Optional test/embedding override.
+	HTTPClient      HTTPDoer                                 // Optional trusted embedding/testing override.
 }
 type Backend struct {
 	networkIP       atomic.Value
@@ -63,6 +61,7 @@ type Backend struct {
 	serialProbe       map[string]*recoveryState
 	serialSeen        map[string]time.Time
 	pairingLost       map[string]pairingLostState
+	configErrors      map[string]string
 	globalRate        tokenBucket
 }
 type pairingLostState struct {
@@ -105,7 +104,7 @@ func New(opts Options) (*Backend, error) {
 		return nil, e
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	b := &Backend{opts: opts, store: store, ctx: ctx, cancel: cancel, candidates: map[string]candidate{}, sessions: map[string]*session{}, recovery: map[string]*recoveryState{}, disabled: map[string]bool{}, serialPorts: map[string]bool{}, serialObserved: map[string]DiscoveredDevice{}, serialPending: map[string]bool{}, serialProbing: map[string]bool{}, serialProbe: map[string]*recoveryState{}, serialSeen: map[string]time.Time{}, pairingLost: map[string]pairingLostState{}}
+	b := &Backend{opts: opts, store: store, ctx: ctx, cancel: cancel, candidates: map[string]candidate{}, sessions: map[string]*session{}, recovery: map[string]*recoveryState{}, disabled: map[string]bool{}, serialPorts: map[string]bool{}, serialObserved: map[string]DiscoveredDevice{}, serialPending: map[string]bool{}, serialProbing: map[string]bool{}, serialProbe: map[string]*recoveryState{}, serialSeen: map[string]time.Time{}, pairingLost: map[string]pairingLostState{}, configErrors: map[string]string{}}
 	b.networkIP.Store(opts.BindIP)
 	b.interfaceName = interfaceForIP(opts.BindIP)
 	b.globalRate = tokenBucket{tokens: 20, burst: 20, rate: 10, last: time.Now()}
@@ -240,20 +239,6 @@ func (b *Backend) SetDeviceEnabled(device string, enabled bool) error {
 	return nil
 }
 
-// InvalidateProxySessions stops workers that may hold an obsolete local-source
-// authorization. Pairings survive and the normal reconnect loop resynchronizes.
-func (b *Backend) InvalidateProxySessions() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for id, s := range b.sessions {
-		s.cancel()
-		if s.client != nil {
-			s.client.Stop(errors.New("proxy_authorization_changed"))
-		}
-		delete(b.sessions, id)
-		delete(b.recovery, id)
-	}
-}
 func (b *Backend) invite(p Pairing) (string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

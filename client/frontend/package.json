@@ -6,7 +6,8 @@
   "scripts": {
     "build": "vue-tsc -p tsconfig.vue.json && tsc -p tsconfig.json && vite build",
     "typecheck": "vue-tsc -p tsconfig.vue.json && tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test tests/*.test.mjs"
+    "test": "npm run build && node --test tests/*.test.mjs && npm run test:gui",
+    "test:gui": "vitest run"
   },
   "dependencies": {
     "@wailsio/runtime": "^3.0.0",
@@ -14,9 +15,11 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.0",
+    "@vue/test-utils": "^2.5.1",
     "jsdom": "26.1.0",
     "typescript": "5.9.3",
     "vite": "^7.0.0",
+    "vitest": "^3.2.7",
     "vue-tsc": "^3.0.0"
   }
 }

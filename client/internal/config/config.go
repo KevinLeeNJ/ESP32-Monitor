@@ -42,5 +42,4 @@ type Companion struct {
 	Enabled        bool   `json:"enabled"`
 	BindIP         string `json:"bind_ip"`
 	StateDirectory string `json:"state_directory"`
-	LocalDevicesURL string `json:"local_devices_url,omitempty"`
 }

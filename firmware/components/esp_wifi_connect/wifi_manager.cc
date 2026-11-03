@@ -244,16 +244,16 @@ void WifiManager::StopStationWebServer() {
 
 // ==================== Config AP Mode ====================
 
-void WifiManager::StartConfigAp() {
+bool WifiManager::StartConfigAp() {
     std::unique_lock<std::mutex> lock(mutex_);
 
     if (!initialized_) {
         ESP_LOGE(TAG, "Not initialized");
-        return;
+        return false;
     }
     if (config_mode_active_) {
         ESP_LOGW(TAG, "Config AP already active");
-        return;
+        return true;
     }
 
     // If station WiFi is already connected, expose the configuration page on
@@ -280,19 +280,20 @@ void WifiManager::StartConfigAp() {
     });
 
     if (station_config_mode_) {
-        config_ap_->StartStationWebServer();
+        if (!config_ap_->StartStationWebServer()) return false;
     } else {
         if (station_active_) {
             station_->Stop();
             station_active_ = false;
         }
-        config_ap_->Start();
+        if (!config_ap_->Start()) return false;
     }
     config_mode_active_ = true;
 
     lock.unlock();
     NotifyEvent(WifiEvent::ConfigModeEnter);
     lock.lock();
+    return true;
 }
 
 void WifiManager::StopConfigAp() {

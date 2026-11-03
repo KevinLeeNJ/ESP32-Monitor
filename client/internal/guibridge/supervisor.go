@@ -252,9 +252,6 @@ func (s *Supervisor) agentArgsFor(settings Settings) []string {
 		if settings.Companion.BindIP != "" {
 			args = append(args, "--companion-ip", settings.Companion.BindIP)
 		}
-		if settings.Companion.LocalDevicesURL != "" {
-			args = append(args, "--companion-local-devices-url", settings.Companion.LocalDevicesURL)
-		}
 	}
 	if settings.GitHub.Login != "" {
 		args = append(args, "--github-user", settings.GitHub.Login)
@@ -497,8 +494,8 @@ func applySettingsDiff(ctx context.Context, client *ipc.Client, from, to Setting
 			return err
 		}
 	}
-	if from.Companion.Enabled != to.Companion.Enabled || from.Companion.BindIP != to.Companion.BindIP || from.Companion.LocalDevicesURL != to.Companion.LocalDevicesURL {
-		if err := client.SetCompanionSettings(ctx, to.Companion.Enabled, to.Companion.BindIP, to.Companion.LocalDevicesURL); err != nil {
+	if from.Companion.Enabled != to.Companion.Enabled || from.Companion.BindIP != to.Companion.BindIP {
+		if err := client.SetCompanionSettings(ctx, to.Companion.Enabled, to.Companion.BindIP); err != nil {
 			return err
 		}
 	}

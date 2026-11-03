@@ -104,11 +104,6 @@ func (s *AppService) GetSettings() Settings { return s.sup.CurrentSettings() }
 // Agent is not restarted; failures roll the process state and the file back.
 func (s *AppService) SaveSettings(ctx context.Context, settings Settings) (Settings, error) {
 	current := s.sup.CurrentSettings()
-	localURL, err := transport.NormalizeLocalDevicesURL(settings.Companion.LocalDevicesURL)
-	if err != nil {
-		return current, err
-	}
-	settings.Companion.LocalDevicesURL = localURL
 	if settings.GitHub.Login != "" && !platform.ValidGitHubLogin(settings.GitHub.Login) {
 		return current, errors.New("invalid_github_login")
 	}

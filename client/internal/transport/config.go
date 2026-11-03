@@ -1,51 +1,19 @@
 package transport
 
 import (
-	"context"
 	"errors"
 	"esp32-monitor/client/internal/transport/wire"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
 )
 
 var dnsHost = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,189}[a-zA-Z0-9])?$`)
 var tokenChars = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
 
-// NormalizeLocalDevicesURL accepts only an explicitly selected private IPv4
-// base URL, without credentials or a path. Empty revokes authorization.
-func NormalizeLocalDevicesURL(raw string) (string, error) {
-	if raw == "" {
-		return "", nil
-	}
-	if len(raw) > 192 || strings.TrimSpace(raw) != raw {
-		return "", errors.New("invalid_local_devices_url")
-	}
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.Host == "" || u.Opaque != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawPath != "" || (u.Path != "" && u.Path != "/") {
-		return "", errors.New("invalid_local_devices_url")
-	}
-	ip, err := netip.ParseAddr(u.Hostname())
-	if err != nil || !ip.Is4() || !ip.IsPrivate() || forbidden(ip) || u.Hostname() != ip.String() {
-		return "", errors.New("invalid_local_devices_url")
-	}
-	if port := u.Port(); port != "" {
-		n, e := strconv.Atoi(port)
-		if e != nil || n < 1 || n > 65535 || strconv.Itoa(n) != port {
-			return "", errors.New("invalid_local_devices_url")
-		}
-	}
-	if strings.HasSuffix(u.Host, ":") {
-		return "", errors.New("invalid_local_devices_url")
-	}
-	return strings.TrimSuffix(raw, "/"), nil
-}
-
-func validateConfig(c wire.Config, allowHTTP func(string) bool) error {
+func validateConfig(c wire.Config) error {
 	bad := func() error { return errors.New("invalid_config") }
 	if c.ProtocolVersion != 1 || !wire.UUID(c.RequestID) || !wire.UUID(c.DeviceID) || !wire.UUID(c.SessionID) || !wire.UUID(c.Epoch) || c.Revision == 0 || !c.Time.Enabled || c.Time.Offset < -720 || c.Time.Offset > 840 {
 		return bad()
@@ -59,7 +27,7 @@ func validateConfig(c wire.Config, allowHTTP func(string) bool) error {
 			return bad()
 		}
 	} else {
-		if w.Host == nil || !validDNS(*w.Host) || w.Key == nil || *w.Key == "" || !wire.Text(*w.Key, 127) {
+		if w.Host == nil || !validWeatherURL(*w.Host) || w.Key == nil || *w.Key == "" || !wire.Text(*w.Key, 127) {
 			return bad()
 		}
 		if w.LocationMode == "coordinates" {
@@ -80,19 +48,21 @@ func validateConfig(c wire.Config, allowHTTP func(string) bool) error {
 			return bad()
 		}
 		u, e := url.Parse(*d.URL)
-		if e != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || u.RawPath != "" || (u.Scheme != "https" && (u.Scheme != "http" || allowHTTP == nil || !allowHTTP(*d.URL))) {
+		if e != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || u.RawPath != "" {
 			return bad()
 		}
-		if ip, e := netip.ParseAddr(u.Hostname()); e == nil && forbidden(ip) {
-			return bad()
-		}
-		// A private literal is permitted only for the exact locally approved
-		// base URL, including its scheme and port (also for HTTPS).
-		if ip, e := netip.ParseAddr(u.Hostname()); e == nil && ip.Unmap().IsPrivate() && (allowHTTP == nil || !allowHTTP(*d.URL)) {
+		if u.Scheme != "https" && u.Scheme != "http" {
 			return bad()
 		}
 	}
 	return nil
+}
+func validWeatherURL(raw string) bool {
+	if validDNS(raw) {
+		return true
+	} // Older firmware sends only the hostname.
+	u, err := url.Parse(raw)
+	return err == nil && len(raw) <= 191 && (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != "" && u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && u.Opaque == "" && u.RawPath == "" && (u.Path == "" || u.Path == "/")
 }
 func validDNS(s string) bool {
 	if !dnsHost.MatchString(s) || len(s) > 191 || net.ParseIP(s) != nil {
@@ -105,36 +75,9 @@ func validDNS(s string) bool {
 	}
 	return true
 }
-func forbidden(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	return !ip.IsValid() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() || ip.String() == "255.255.255.255" || netip.MustParsePrefix("100.64.0.0/10").Contains(ip) || netip.MustParsePrefix("0.0.0.0/8").Contains(ip)
-}
-
-// Resolve and validate at dial time, not only at config submission (DNS rebinding).
-// Private Device endpoints require an exact local user authorization.
-func guardedClient(allowPrivate func(string) bool) *http.Client {
+func guardedClient() *http.Client {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.Proxy = nil
 	t.DisableKeepAlives = false
-	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, port, e := net.SplitHostPort(addr)
-		if e != nil {
-			return nil, errors.New("endpoint_rejected")
-		}
-		ips, e := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-		if e != nil {
-			return nil, errors.New("upstream_unavailable")
-		}
-		if len(ips) == 0 {
-			return nil, errors.New("endpoint_rejected")
-		}
-		for _, ip := range ips {
-			if forbidden(ip) || (ip.IsPrivate() && (allowPrivate == nil || !allowPrivate(host))) {
-				return nil, errors.New("endpoint_rejected")
-			}
-		}
-		var d net.Dialer
-		return d.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
-	}
 	return &http.Client{Transport: t, Timeout: 4 * 1e9, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }

@@ -4,15 +4,16 @@ import re
 import subprocess
 import tempfile
 from host_harness import function as production_function
+import host_port
 
 repo = Path(__file__).resolve().parents[2]
-source = (repo / 'firmware/components/firmware/monitor_wifi_manager.cpp').read_text()
+source = (repo / 'firmware/components/firmware/monitor_wifi_manager.cpp').read_text(encoding='utf-8')
 
 def function(name):
     return production_function(source, name)
 
-wifi_header = (repo / 'firmware/components/esp_wifi_connect/include/wifi_manager.h').read_text()
-ui_header = (repo / 'firmware/include/monitor_ui.h').read_text()
+wifi_header = (repo / 'firmware/components/esp_wifi_connect/include/wifi_manager.h').read_text(encoding='utf-8')
+ui_header = (repo / 'firmware/include/monitor_ui.h').read_text(encoding='utf-8')
 events = re.search(r'enum class WifiEvent \{.*?\};', wifi_header, re.S)[0]
 states = re.search(r'typedef enum \{\s*MONITOR_WIFI_PROVISIONING.*?monitor_wifi_state_t;', ui_header, re.S)[0]
 defines = '\n'.join(line for line in source.splitlines() if line.startswith('#define BTN_') or
@@ -91,14 +92,14 @@ static monitor_wifi_state_t s_state = MONITOR_WIFI_DISCONNECTED;
 static void set_event(WifiEvent, const std::string&);
 class WifiManager {
 public:
-    bool connected = false, config = false, station = false;
+    bool connected = false, config = false, station = false, config_start_ok = true;
     unsigned starts = 0, exits = 0;
     WifiPowerSaveLevel power = WifiPowerSaveLevel::LOW_POWER;
     static WifiManager& GetInstance() { static WifiManager m; return m; }
     unsigned ap_starts=0, initializations=0;
     bool Initialize(const WifiManagerConfig&) { ++initializations;return init_ok; }
     void SetEventCallback(void (*)(WifiEvent,const std::string&)) {}
-    void StartConfigAp() { config=true;++ap_starts;set_event(WifiEvent::ConfigModeEnter, ""); }
+    bool StartConfigAp() { if(!config_start_ok)return false;config=true;++ap_starts;set_event(WifiEvent::ConfigModeEnter, "");return true; }
     bool IsConnected() { return connected; }
     void SetPowerSaveLevel(WifiPowerSaveLevel level) { power = level; }
     void StartStation() { station = true; ++starts; }
@@ -138,6 +139,14 @@ static void reset_boot(bool credentials=false) {
     init_ok=task_ok=true;now=response_ready_at=0;
 }
 int main() {
+    reset_boot(true);assert(monitor_wifi_start()==ESP_OK);
+    auto& failed = WifiManager::GetInstance();
+    failed.config_start_ok = false;
+    auto previous_state = s_state;
+    assert(enter_config_mode()==ESP_FAIL);
+    assert(!failed.config && !s_provisioning && !s_config_session_active && s_state==previous_state);
+    failed.config_start_ok = true;
+    assert(enter_config_mode()==ESP_OK && failed.config && s_provisioning && s_config_session_active);
     reset_boot();
     assert(monitor_wifi_start()==ESP_OK);
     auto& boot=WifiManager::GetInstance();
@@ -262,6 +271,7 @@ with tempfile.TemporaryDirectory() as directory:
     unit = path / 'wifi_session.cc'
     unit.write_text('\n'.join([prefix, events, states, defines, manager]) + '\n' + '\n'.join(function(name) for name in
         ['update_wifi_state', 'start_config_timeout', 'start_station_attempt', 'set_event', 'enter_config_mode', 'config_timeout_callback', 'process_manager_events']) + production_function(source, 'monitor_wifi_start') + production_function(source, 'monitor_wifi_suspend') + production_function(source, 'monitor_wifi_resume') + tests)
-    subprocess.run(['c++', '-std=c++17', '-Wall', '-Wextra', '-Werror', str(unit), '-o', str(path / 'test')], check=True)
-    subprocess.run([str(path / 'test')], check=True, timeout=5)
+    binary = host_port.binary(path)
+    subprocess.run([host_port.cxx(), '-std=c++17', '-Wall', '-Wextra', '-Werror', str(unit), '-o', str(binary)], check=True)
+    host_port.run(binary, timeout=5)
 print('Wi-Fi session transitions passed: idle edits, immediate save, AP/LAN exit, late connection recovery, offline without credentials')

@@ -66,7 +66,7 @@ func (s *Server) routeCompanion(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_request")
 			return
 		}
-		if err := s.app.SetCompanionSettings(req.Enabled, req.BindIP, req.LocalDevicesURL); err != nil {
+		if err := s.app.SetCompanionSettings(req.Enabled, req.BindIP); err != nil {
 			writeAppError(w, err)
 			return
 		}

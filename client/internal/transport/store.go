@@ -163,6 +163,7 @@ type DeviceStatus struct {
 	Address          string    `json:"address"`
 	ConfirmedOnline  bool      `json:"confirmed_online"`
 	ConnectionState  string    `json:"connection_state"`
+	ConfigError      string    `json:"config_error,omitempty"`
 	Transport        string    `json:"transport,omitempty"`
 	PairingLost      bool      `json:"pairing_lost"`
 	SessionID        string    `json:"session_id"`

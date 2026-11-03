@@ -9,6 +9,7 @@ export interface DeviceStatus {
   address: string;
   confirmed_online: boolean;
   connection_state: string;
+  config_error?: string;
   transport?: "serial" | "lan";
   pairing_lost?: boolean;
   session_id: string;

@@ -237,6 +237,10 @@ func (p *proxyWorker) weatherLoop(ctx context.Context) {
 }
 func (p *proxyWorker) weather(ctx context.Context, lat, lon float64) {
 	host := *p.config.Weather.Host
+	if !strings.Contains(host, "://") {
+		host = "https://" + host
+	}
+	host = strings.TrimRight(host, "/")
 	location := url.QueryEscape(fmt.Sprintf("%.4f,%.4f", lon, lat))
 	var weather struct {
 		Code string `json:"code"`
@@ -244,7 +248,7 @@ func (p *proxyWorker) weather(ctx context.Context, lat, lon float64) {
 			Icon string `json:"icon"`
 		} `json:"now"`
 	}
-	e := p.fetch(ctx, "https://"+host+"/v7/weather/now?location="+location, &weather, 16384, p.qweatherHeaders)
+	e := p.fetch(ctx, host+"/v7/weather/now?location="+location, &weather, 16384, p.qweatherHeaders)
 	condition := -1
 	if e == nil {
 		if weather.Code != "200" {
@@ -262,7 +266,7 @@ func (p *proxyWorker) weather(ctx context.Context, lat, lon float64) {
 			AQI     *json.RawMessage `json:"aqi,omitempty"`
 		} `json:"indexes"`
 	}
-	e = p.fetch(ctx, fmt.Sprintf("https://%s/airquality/v1/current/%.5f/%.5f?lang=zh", host, lat, lon), &air, 16384, p.qweatherHeaders)
+	e = p.fetch(ctx, fmt.Sprintf("%s/airquality/v1/current/%.5f/%.5f?lang=zh", host, lat, lon), &air, 16384, p.qweatherHeaders)
 	v := -1
 	if e == nil {
 		if len(air.Indexes) == 0 {

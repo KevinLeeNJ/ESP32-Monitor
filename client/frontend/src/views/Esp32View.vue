@@ -119,7 +119,9 @@ async function beginPairing() {
     startPairingPoll();
   } catch (error) {
     const message = String(error);
-    if (message.includes("session_conflict")) {
+    if (message.includes("pairing_port_in_use")) {
+      toast("LAN 配对失败：本机 TCP 18080 端口已被占用，请关闭占用该端口的程序后重试。");
+    } else if (message.includes("session_conflict")) {
       markPaired(device.device_id);
       await refreshDevices();
       toast("该设备已配对");

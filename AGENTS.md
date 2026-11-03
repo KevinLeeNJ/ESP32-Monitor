@@ -53,8 +53,10 @@ make build                            # Agent
 make test                             # go test -race ./...
 make check                            # go vet ./...
 make test-collector-e2e
-go run ./cmd/sim-server -listen 127.0.0.1:18080
+go run ./cmd/sim-server -listen 127.0.0.1:18081
 ```
+
+Client LAN pairing starts a TCP listener on port 18080 on the selected LAN address; its MQTT broker uses TCP 18883. Do not run a simulator or another local service on the same address and port while testing pairing. Use a separate port such as 18081, and update the device's Devices API URL when applicable. A port-18080 conflict prevents pairing; it does not mean the device retained its pairing record.
 
 For the frontend: `cd client/frontend && npm ci && npm test` (includes type checks, build and DOM tests). `make build-app-darwin` builds the macOS app; `client/scripts/build-windows-app.ps1` builds the Windows app. Platform builds and native WebView or hardware behavior require appropriate platform validation.
 
@@ -85,6 +87,8 @@ make test-v2                          # real Client Agent and Server loopback
 `firmware/main/main.c` is the application entry point. `firmware/components/firmware/` contains display, clock, RTC, sensors, weather, device transport, power and Wi-Fi integration. `firmware/components/esp_wifi_connect/` implements provisioning; `firmware/components/lvgl/` adapts LVGL to ESP-IDF. `firmware/sdkconfig.defaults` specifies target defaults and `firmware/partitions.csv` defines the partition layout. Inspect the generated `sdkconfig` as well as defaults when diagnosing a build.
 
 On first boot without saved Wi-Fi credentials the device starts its provisioning AP; BOOT (GPIO0) and KEY (GPIO18) provide a reconfiguration gesture. The configuration page also supports weather settings. See the implementation and firmware capability document for current behavior before changing provisioning or networking.
+
+The ESP32's internal RAM is a scarce resource even when PSRAM is mostly free. UI objects, networking, TLS, task stacks, DMA and the configuration server can overlap. Keep CPU-only allocations in PSRAM where appropriate; preserve internal/DMA-capable memory for hardware and task requirements. In particular, many small LVGL objects can exhaust internal RAM: inspect the firmware LVGL allocator and generated `sdkconfig`, and measure both internal free heap and largest contiguous block on hardware with Devices, weather and configuration enabled. Simulator/host tests cannot establish this headroom. Treat allocation and service-start failures as recoverable where possible; avoid unconditionally rebooting on resource exhaustion. See `docs/FIRMWARE_COMPANION_HANDOFF.md` for the observed failure and verification limits.
 
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.

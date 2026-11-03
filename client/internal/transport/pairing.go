@@ -11,7 +11,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"runtime"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -29,6 +31,10 @@ type pairWindow struct {
 	lastStatus      time.Time
 	cancel          func()
 }
+
+// Windows exposes WSAEADDRINUSE separately from syscall.EADDRINUSE.
+const windowsAddressInUse = syscall.Errno(10048)
+
 type PairingStatus struct {
 	DeviceID    string `json:"device_id"`
 	PairingID   string `json:"pairing_id"`
@@ -77,6 +83,9 @@ func (p *pairingServer) open(device, ip string) error {
 	if p.listener == nil {
 		l, e := net.Listen("tcp4", p.service.httpAddress())
 		if e != nil {
+			if errors.Is(e, syscall.EADDRINUSE) || (runtime.GOOS == "windows" && errors.Is(e, windowsAddressInUse)) {
+				return errors.New("pairing_port_in_use")
+			}
 			return errors.New("pairing_listen_failed")
 		}
 		p.listener = l

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 
 	"esp32-monitor/client/internal/platform"
-	"esp32-monitor/client/internal/transport"
 )
 
 // Settings is the persisted, non-sensitive GUI configuration. It decides the
@@ -37,7 +36,6 @@ type CollectorSettings struct {
 type CompanionSettings struct {
 	Enabled bool   `json:"enabled"`
 	BindIP  string `json:"bind_ip,omitempty"`
-	LocalDevicesURL string `json:"local_devices_url,omitempty"`
 }
 
 // GitHubSettings selects the contribution provider account.
@@ -118,9 +116,6 @@ func LoadSettings() (Settings, error) {
 	if settings.SchemaVersion != 1 {
 		return DefaultSettings(), errors.New("unsupported_gui_settings_version")
 	}
-	localURL, err := transport.NormalizeLocalDevicesURL(settings.Companion.LocalDevicesURL)
-	if err != nil { return DefaultSettings(), err }
-	settings.Companion.LocalDevicesURL = localURL
 	// Existing settings predate the embedded client ID; adopt it on upgrade.
 	if settings.GitHub.ClientID == "" {
 		settings.GitHub.ClientID = DefaultGitHubClientID
@@ -133,9 +128,6 @@ func SaveSettings(settings Settings) error {
 	if settings.SchemaVersion != 1 {
 		return errors.New("unsupported_gui_settings_version")
 	}
-	localURL, err := transport.NormalizeLocalDevicesURL(settings.Companion.LocalDevicesURL)
-	if err != nil { return err }
-	settings.Companion.LocalDevicesURL = localURL
 	path, err := SettingsPath()
 	if err != nil {
 		return err

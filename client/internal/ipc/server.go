@@ -121,9 +121,8 @@ type collectorSettingsRequest struct {
 }
 
 type companionSettingsRequest struct {
-	Enabled         bool   `json:"enabled"`
-	BindIP          string `json:"bind_ip"`
-	LocalDevicesURL string `json:"local_devices_url"`
+	Enabled bool   `json:"enabled"`
+	BindIP  string `json:"bind_ip"`
 }
 
 type serverTestRequest struct {

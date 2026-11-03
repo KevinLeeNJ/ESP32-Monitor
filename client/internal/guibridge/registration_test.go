@@ -36,6 +36,8 @@ func TestNormalizeServerBase(t *testing.T) {
 		"http://127.0.0.1:18080":                       "http://127.0.0.1:18080",
 		"http://localhost:18080/":                      "http://localhost:18080",
 		"http://nas.example.com":                       "http://nas.example.com",
+		"http://192.168.110.120:18081":                 "http://192.168.110.120:18081",
+		"http://nas.local:8080":                        "http://nas.local:8080",
 		"http://[::1]:18080":                           "http://[::1]:18080",
 		"https://nas.example.com/v2/collector/samples": "https://nas.example.com",
 	}

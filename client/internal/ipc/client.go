@@ -192,8 +192,8 @@ func (c *Client) SetCollectorSettings(ctx context.Context, enabled bool, uploadU
 
 // SetCompanionSettings starts, stops or rebinds the Companion backend without
 // restarting the Agent.
-func (c *Client) SetCompanionSettings(ctx context.Context, enabled bool, bindIP, localURL string) error {
-	return c.post(ctx, "/v1/companion/settings", companionSettingsRequest{Enabled: enabled, BindIP: bindIP, LocalDevicesURL: localURL}, nil)
+func (c *Client) SetCompanionSettings(ctx context.Context, enabled bool, bindIP string) error {
+	return c.post(ctx, "/v1/companion/settings", companionSettingsRequest{Enabled: enabled, BindIP: bindIP}, nil)
 }
 
 // GitHubSession returns the current login session state.

@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 	"hash/crc32"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,26 +26,107 @@ func disabledConfig() wire.Config {
 }
 func TestConfigValidation(t *testing.T) {
 	base := disabledConfig()
-	if e := validateConfig(base, nil); e != nil {
+	if e := validateConfig(base); e != nil {
 		t.Fatal(e)
 	}
 	tests := []func(*wire.Config){func(c *wire.Config) { c.Revision = 0 }, func(c *wire.Config) { c.Weather.Key = wire.Ptr("secret") }, func(c *wire.Config) { c.Time.Offset = 841 }, func(c *wire.Config) {
 		c.Weather.Enabled = true
-		c.Weather.Host = wire.Ptr("https://weather.example")
+		c.Weather.Host = wire.Ptr("ftp://weather.example")
 		c.Weather.Key = wire.Ptr("key")
 	}, func(c *wire.Config) {
-		c.Devices = wire.DevicesConfig{Enabled: true, URL: wire.Ptr("https://127.0.0.1"), Token: wire.Ptr("token")}
-	}, func(c *wire.Config) {
-		c.Devices = wire.DevicesConfig{Enabled: true, URL: wire.Ptr("http://server.example"), Token: wire.Ptr("token")}
+		c.Devices = wire.DevicesConfig{Enabled: true, URL: wire.Ptr("ftp://server.example"), Token: wire.Ptr("token")}
 	}, func(c *wire.Config) {
 		c.Devices = wire.DevicesConfig{Enabled: true, URL: wire.Ptr("https://server.example/?key=x"), Token: wire.Ptr("token")}
 	}}
 	for i, change := range tests {
 		c := base
 		change(&c)
-		if validateConfig(c, nil) == nil {
+		if validateConfig(c) == nil {
 			t.Errorf("accepted %d", i)
 		}
+	}
+}
+
+func TestLocalDevicesConfigAndConnection(t *testing.T) {
+	for _, raw := range []string{"http://192.168.110.120:18081", "https://10.1.2.3:8443", "http://172.16.1.2", "http://localhost", "http://nas.local:8080", "http://127.0.0.1"} {
+		c := disabledConfig()
+		c.Devices = wire.DevicesConfig{Enabled: true, URL: &raw, Token: wire.Ptr("token")}
+		if err := validateConfig(c); err != nil {
+			t.Errorf("%s: %v", raw, err)
+		}
+	}
+	for _, raw := range []string{"ftp://192.168.1.2", "http://example.com/?token=secret", "http://user:pass@example.com"} {
+		c := disabledConfig()
+		c.Devices = wire.DevicesConfig{Enabled: true, URL: &raw, Token: wire.Ptr("token")}
+		if validateConfig(c) == nil {
+			t.Errorf("unexpectedly accepted %s", raw)
+		}
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, addr := range addrs {
+		ip, _, err := net.ParseCIDR(addr.String())
+		if err != nil || ip.To4() == nil || !ip.IsPrivate() {
+			continue
+		}
+		listener, err := net.Listen("tcp4", net.JoinHostPort(ip.String(), "0"))
+		if err != nil {
+			continue
+		}
+		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })}
+		go server.Serve(listener)
+		defer server.Close()
+		resp, err := guardedClient().Get("http://" + listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("status: %s", resp.Status)
+		}
+		return
+	}
+	t.Skip("no private IPv4 interface available for connection test")
+}
+
+func TestWeatherBaseURLValidation(t *testing.T) {
+	for _, raw := range []string{"https://weather.example", "http://192.168.1.2:8080", "http://nas.local", "weather.example"} {
+		if !validWeatherURL(raw) {
+			t.Errorf("rejected %q", raw)
+		}
+	}
+	for _, raw := range []string{"ftp://weather.example", "https://weather.example/path", "http://user@nas.local", "http://nas.local?x=1"} {
+		if validWeatherURL(raw) {
+			t.Errorf("accepted %q", raw)
+		}
+	}
+}
+
+func TestWeatherProxyUsesConfiguredScheme(t *testing.T) {
+	paths := make(map[string]bool)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths[r.URL.Path] = true
+		if strings.HasPrefix(r.URL.Path, "/v7/weather/") {
+			_, _ = io.WriteString(w, `{"code":"200","now":{"icon":"100"}}`)
+		} else {
+			_, _ = io.WriteString(w, `{"indexes":[{"aqi":42}]}`)
+		}
+	}))
+	defer server.Close()
+	cfg := disabledConfig()
+	cfg.Weather = wire.WeatherConfig{Enabled: true, LocationMode: "coordinates", Latitude: wire.Ptr(31.2), Longitude: wire.Ptr(121.5), Host: wire.Ptr(server.URL), Key: wire.Ptr("key")}
+	if err := validateConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	p := &proxyWorker{config: cfg, client: server.Client(), now: time.Now, successTimes: map[*wire.Section]time.Time{}}
+	p.weather(context.Background(), 31.2, 121.5)
+	if !paths["/v7/weather/now"] || !paths["/airquality/v1/current/31.20000/121.50000"] {
+		t.Fatalf("requests: %v", paths)
+	}
+	if p.data.Weather.State != "healthy" || p.data.AQI.State != "healthy" {
+		t.Fatalf("weather=%s aqi=%s", p.data.Weather.State, p.data.AQI.State)
 	}
 }
 func TestStorePersistenceAndScope(t *testing.T) {

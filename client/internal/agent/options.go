@@ -39,7 +39,6 @@ func parseOptions(args []string, errOut io.Writer) (options, error) {
 	fs.StringVar(&c.Music.NativeLibrary, "music-native-library", "", "absolute path to macOS read-only MediaRemote bridge")
 	fs.BoolVar(&c.Companion.Enabled, "companion", false, "enable Monitor Companion backend on the selected LAN interface")
 	fs.StringVar(&c.Companion.BindIP, "companion-ip", "", "selected LAN IPv4 address; required with --companion")
-	fs.StringVar(&c.Companion.LocalDevicesURL, "companion-local-devices-url", "", "explicitly approved private IPv4 Devices base URL")
 	fs.StringVar(&c.Companion.StateDirectory, "companion-state-dir", "", "private identity/pairing vault; proxy configuration is never persisted")
 	fs.BoolVar(&o.watch, "watch", false, "emit snapshots as JSONL until interrupted")
 	fs.BoolVar(&c.Collector.Enabled, "collector", false, "enable in-process Core/Native collectors and restore the last committed configuration")

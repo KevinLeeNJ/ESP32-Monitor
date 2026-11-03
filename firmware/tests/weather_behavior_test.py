@@ -1,7 +1,7 @@
 """Real location/configuration/JSON update code with bounded HTTP and NVS fakes."""
 import sys
 from host_harness import REPO, defines, function, run
-source=(REPO/'firmware/components/firmware/monitor_weather.c').read_text()
+source=(REPO/'firmware/components/firmware/monitor_weather.c').read_text(encoding='utf-8')
 code=r'''
 #include <assert.h>
 #include <stdarg.h>
@@ -93,6 +93,8 @@ static bool http_get(const char *url,char *out,size_t size,const char *api_key){
     const char *body;
     if(strstr(url,"ipwho.is")){++http_calls[0];assert(!api_key);body=ip_body;}
     else {assert(api_key && !strcmp(api_key,"fixture-key"));
+        if (!strncmp(host,"http://",7) || !strncmp(host,"https://",8)) assert(!strncmp(url,host,strlen(host)));
+        else assert(!strncmp(url,"https://fixture.test/",21));
         if(strstr(url,"/v7/weather/")){++http_calls[1];assert(strstr(url,"location=121.50000,31.20000"));body=weather_body;}
         else {++http_calls[2];assert(strstr(url,"/current/31.20000/121.50000"));body=aqi_body;}
     }
@@ -115,6 +117,8 @@ int main(void){
     reset();update_weather();
     assert(s_data.weather_valid && s_data.aqi_valid && s_data.location_valid && s_data.aqi==42 && !http_calls[0]);
     assert(notifications==1 && reason==MONITOR_REFRESH_RECOVER && opened==closed);
+    reset();host="http://192.168.1.2:8080";update_weather();assert(s_data.weather_valid && s_data.aqi_valid);
+    reset();host="https://fixture.test";update_weather();assert(s_data.weather_valid && s_data.aqi_valid);
     update_weather();assert(notifications==1); // unchanged success is silent
     monitor_weather_data_t before=s_data;
     weather_body=aqi_body=NULL;update_weather();
@@ -182,4 +186,4 @@ int main(void){
     puts("Weather/AQI first data, unchanged/partial/error cache, no location, cached/IP location, NVS failure, strict coordinates/API code/metrics, allocation failure and recovery: PASS");
 }
 '''
-run(code,sys.argv[1] if len(sys.argv)>1 else 'cc',cjson=sys.argv[2] if len(sys.argv)>2 else REPO/'firmware/managed_components/espressif__cjson/cJSON')
+run(code,sys.argv[1] if len(sys.argv)>1 else None,cjson=sys.argv[2] if len(sys.argv)>2 else REPO/'firmware/managed_components/espressif__cjson/cJSON')

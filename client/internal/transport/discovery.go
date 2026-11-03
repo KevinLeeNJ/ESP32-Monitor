@@ -393,6 +393,7 @@ func (b *Backend) Devices() ([]DeviceStatus, bool) {
 	for _, p := range b.store.pairs() {
 		c := b.candidates[p.DeviceID]
 		s := DeviceStatus{DeviceID: p.DeviceID, Name: p.DeviceName, Paired: true, Enabled: !b.disabled[p.DeviceID], ConnectionState: "disconnected", LastSeen: c.Seen}
+		s.ConfigError = b.configErrors[p.DeviceID]
 		if c.Addr != nil {
 			s.Address = c.Addr.IP.String()
 		}

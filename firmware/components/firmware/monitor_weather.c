@@ -315,10 +315,11 @@ static void update_weather(void)
 
     char weather_url[384];
     char aqi_url[384];
+    const char *scheme = strstr(host, "://") ? "" : "https://"; /* Existing saved hosts predate URL input. */
     snprintf(weather_url, sizeof(weather_url),
-             "https://%s/v7/weather/now?location=%.5f,%.5f&key=%s", host, lon, lat, key);
+             "%s%s/v7/weather/now?location=%.5f,%.5f&key=%s", scheme, host, lon, lat, key);
     snprintf(aqi_url, sizeof(aqi_url),
-             "https://%s/airquality/v1/current/%.5f/%.5f?key=%s&lang=zh", host, lat, lon, key);
+             "%s%s/airquality/v1/current/%.5f/%.5f?key=%s&lang=zh", scheme, host, lat, lon, key);
 
     char *response = heap_caps_malloc_prefer(RESPONSE_MAX, 2,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);

@@ -178,10 +178,11 @@ static esp_err_t enter_config_mode(void)
 {
     if (s_suspended) return ESP_ERR_INVALID_STATE;
     if (s_provisioning) return ESP_OK;
-    s_provisioning = true;
-    update_wifi_state(MONITOR_WIFI_PROVISIONING);
+    if (!WifiManager::GetInstance().StartConfigAp()) {
+        ESP_LOGE(TAG, "Could not enter configuration mode");
+        return ESP_FAIL;
+    }
     s_config_session_active = true;
-    WifiManager::GetInstance().StartConfigAp();
     return ESP_OK;
 }
 

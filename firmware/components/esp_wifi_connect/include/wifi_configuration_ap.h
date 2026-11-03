@@ -37,9 +37,9 @@ public:
     void SetLanguage(const std::string &language);
     void SetShowOtaConfig(bool show) { show_ota_config_ = show; }
     void SetShowSleepConfig(bool show) { show_sleep_config_ = show; }
-    void Start();
+    bool Start();
     // Start the configuration page on the station/LAN interface.
-    void StartStationWebServer();
+    bool StartStationWebServer();
     void StopWebServer();
     void Stop();
 #if !CONFIG_IDF_TARGET_ESP32P4
@@ -97,7 +97,7 @@ private:
     std::function<void()> on_advanced_settings_saved_;
 
     void StartAccessPoint();
-    void StartWebServer();
+    bool StartWebServer();
     void StartScanTimer();
 
     // Event handlers

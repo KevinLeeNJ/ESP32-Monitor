@@ -3,13 +3,14 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import host_port
 
 repo = Path(__file__).resolve().parents[2]
-station = (repo / 'firmware/components/esp_wifi_connect/wifi_station.cc').read_text()
-portal = (repo / 'firmware/components/esp_wifi_connect/wifi_configuration_ap.cc').read_text()
+station = (repo / 'firmware/components/esp_wifi_connect/wifi_station.cc').read_text(encoding='utf-8')
+portal = (repo / 'firmware/components/esp_wifi_connect/wifi_configuration_ap.cc').read_text(encoding='utf-8')
 
 def method(source, name):
-    match = re.search(r'^(?:void|std::vector<wifi_ap_record_t>) ' + re.escape(name) + r'\(', source, re.M)
+    match = re.search(r'^(?:void|bool|std::vector<wifi_ap_record_t>) ' + re.escape(name) + r'\(', source, re.M)
     assert match, name
     end = source.index('{', match.start()) + 1
     depth = 1
@@ -77,8 +78,8 @@ public:
     bool station_web_mode_ = false, is_connecting_ = false;
     std::vector<wifi_ap_record_t> ap_records_;
     std::function<void()> on_station_scan_requested_;
-    void StartStationWebServer(); void StopWebServer(); void StartScanTimer();
-    void StartWebServer() { server_ = this; }
+    bool StartStationWebServer(); void StopWebServer(); void StartScanTimer();
+    bool StartWebServer() { server_ = this; return true; }
     void SetAccessPoints(const std::vector<wifi_ap_record_t>&);
     std::vector<wifi_ap_record_t> GetAccessPoints();
 };
@@ -159,6 +160,7 @@ for name in ['ScanForConfig', 'HandleScanResult']:
 code = code.replace('scan_timer_ = nullptr', 'scan_timer_ = 0')
 with tempfile.TemporaryDirectory() as temp:
     unit = Path(temp) / 'scan.cc'; unit.write_text(code + tests)
-    subprocess.run(['c++', '-std=c++17', '-Wall', '-Wextra', '-Werror', str(unit), '-o', str(Path(temp) / 'test')], check=True)
-    subprocess.run([str(Path(temp) / 'test')], check=True, timeout=5)
+    binary = host_port.binary(temp)
+    subprocess.run([host_port.cxx(), '-std=c++17', '-Wall', '-Wextra', '-Werror', str(unit), '-o', str(binary)], check=True)
+    host_port.run(binary, timeout=5)
 print('Portal scan checks passed: immediate/periodic scan, shared results, no connected reconnect, disconnect ownership, cleanup, AP mode')

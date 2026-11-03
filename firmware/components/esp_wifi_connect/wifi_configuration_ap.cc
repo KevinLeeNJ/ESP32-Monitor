@@ -80,18 +80,19 @@ void WifiConfigurationAp::SetSsidPrefix(const std::string &ssid_prefix)
     ssid_prefix_ = ssid_prefix;
 }
 
-void WifiConfigurationAp::StartStationWebServer()
+bool WifiConfigurationAp::StartStationWebServer()
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (server_ != nullptr) {
         ESP_LOGI(TAG, "Configuration web server already running");
-        return;
+        return true;
     }
     ESP_LOGI(TAG, "Starting configuration web server on station interface");
     station_web_mode_ = true;
     ap_records_.clear();
-    StartWebServer();
+    if (!StartWebServer()) return false;
     StartScanTimer();
+    return true;
 }
 
 void WifiConfigurationAp::StopWebServer()
@@ -115,7 +116,7 @@ void WifiConfigurationAp::StopWebServer()
     }
 }
 
-void WifiConfigurationAp::Start()
+bool WifiConfigurationAp::Start()
 {
     // Register event handlers
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
@@ -130,10 +131,11 @@ void WifiConfigurationAp::Start()
                                                         &instance_got_ip_));
 
     StartAccessPoint();
-    StartWebServer();
+    if (!StartWebServer()) return false;
     
     station_web_mode_ = false;
     StartScanTimer();
+    return true;
 }
 
 void WifiConfigurationAp::StartScanTimer()
@@ -271,7 +273,7 @@ void WifiConfigurationAp::StartAccessPoint()
     }
 }
 
-void WifiConfigurationAp::StartWebServer()
+bool WifiConfigurationAp::StartWebServer()
 {
     // Start the web server
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -280,7 +282,21 @@ void WifiConfigurationAp::StartWebServer()
     // 5G Network takes longer to connect
     config.recv_wait_timeout = 15;
     config.send_wait_timeout = 15;
-    ESP_ERROR_CHECK(httpd_start(&server_, &config));
+    esp_err_t error = httpd_start(&server_, &config);
+    if (error != ESP_OK) {
+        server_ = nullptr;
+        ESP_LOGE(TAG, "Configuration server start failed: %s", esp_err_to_name(error));
+        return false;
+    }
+
+    auto register_uri = [this](const httpd_uri_t *uri) {
+        esp_err_t err = httpd_register_uri_handler(server_, uri);
+        if (err == ESP_OK) return true;
+        ESP_LOGE(TAG, "Configuration route registration failed: %s", esp_err_to_name(err));
+        httpd_stop(server_);
+        server_ = nullptr;
+        return false;
+    };
 
     // Register the index.html file
     httpd_uri_t index_html = {
@@ -295,7 +311,7 @@ void WifiConfigurationAp::StartWebServer()
         },
         .user_ctx = NULL
     };
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &index_html));
+    if (!register_uri(&index_html)) return false;
 
     // Register the /saved/list URI
     httpd_uri_t saved_list = {
@@ -318,7 +334,7 @@ void WifiConfigurationAp::StartWebServer()
         },
         .user_ctx = NULL
     };
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &saved_list));
+    if (!register_uri(&saved_list)) return false;
 
     // Register the /saved/set_default URI
     httpd_uri_t saved_set_default = {
@@ -341,7 +357,7 @@ void WifiConfigurationAp::StartWebServer()
         },
         .user_ctx = NULL
     };
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &saved_set_default));
+    if (!register_uri(&saved_set_default)) return false;
 
     // Register the /saved/delete URI
     httpd_uri_t saved_delete = {
@@ -364,7 +380,7 @@ void WifiConfigurationAp::StartWebServer()
         },
         .user_ctx = NULL
     };
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &saved_delete));
+    if (!register_uri(&saved_delete)) return false;
 
     // Register the /scan URI
     httpd_uri_t scan = {
@@ -407,7 +423,7 @@ void WifiConfigurationAp::StartWebServer()
         },
         .user_ctx = this
     };
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &scan));
+    if (!register_uri(&scan)) return false;
 
     // Register the form submission
     httpd_uri_t form_submit = {
@@ -480,7 +496,7 @@ void WifiConfigurationAp::StartWebServer()
         },
         .user_ctx = this
     };
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &form_submit));
+    if (!register_uri(&form_submit)) return false;
 
     // Register the done.html page
     httpd_uri_t done_html = {
@@ -493,7 +509,7 @@ void WifiConfigurationAp::StartWebServer()
         },
         .user_ctx = NULL
     };
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &done_html));
+    if (!register_uri(&done_html)) return false;
 
     // Register the exit endpoint - exits config mode without rebooting
     httpd_uri_t exit_config = {
@@ -527,7 +543,7 @@ void WifiConfigurationAp::StartWebServer()
         },
         .user_ctx = this
     };
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &exit_config));
+    if (!register_uri(&exit_config)) return false;
 
     auto captive_portal_handler = [](httpd_req_t *req) -> esp_err_t {
         auto *this_ = static_cast<WifiConfigurationAp *>(req->user_ctx);
@@ -562,7 +578,7 @@ void WifiConfigurationAp::StartWebServer()
             .handler = captive_portal_handler,
             .user_ctx = this
         };
-        ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &redirect_uri));
+        if (!register_uri(&redirect_uri)) return false;
     }
 
     // Register the /advanced/config URI
@@ -602,7 +618,9 @@ void WifiConfigurationAp::StartWebServer()
                 nvs_get_str(host_nvs, "qweather_host", qweather_host, &host_size);
                 nvs_close(host_nvs);
             }
-            cJSON_AddStringToObject(json, "qweather_host", qweather_host);
+            std::string weather_url = qweather_host;
+            if (!weather_url.empty() && weather_url.find("://") == std::string::npos) weather_url.insert(0, "https://");
+            cJSON_AddStringToObject(json, "qweather_host", weather_url.c_str());
             bool qweather_key_configured = false;
             nvs_handle_t weather_nvs;
             if (nvs_open("monitor_loc", NVS_READONLY, &weather_nvs) == ESP_OK) {
@@ -649,7 +667,7 @@ void WifiConfigurationAp::StartWebServer()
         },
         .user_ctx = this
     };
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &advanced_config));
+    if (!register_uri(&advanced_config)) return false;
 
     // Only actual edits extend a configuration session. Scans and page polling
     // deliberately do not count as activity.
@@ -663,7 +681,7 @@ void WifiConfigurationAp::StartWebServer()
         },
         .user_ctx = this
     };
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &activity));
+    if (!register_uri(&activity)) return false;
 
     // Register the /advanced/submit URI
     httpd_uri_t advanced_submit = {
@@ -735,6 +753,16 @@ void WifiConfigurationAp::StartWebServer()
             }
             const std::string previous_devices_url = devices_url;
             const char *validation_error = nullptr;
+            const cJSON *weather_url_item = cJSON_GetObjectItemCaseSensitive(json, "qweather_host");
+            char weather_url[192] = {0};
+            if (weather_url_item) {
+                if (!cJSON_IsString(weather_url_item) || strlen(weather_url_item->valuestring) >= sizeof(weather_url))
+                    validation_error = "invalid_qweather_host";
+                else {
+                    snprintf(weather_url, sizeof(weather_url), "%s", weather_url_item->valuestring);
+                    if (!monitor_devices_normalize_url(weather_url)) validation_error = "invalid_qweather_host";
+                }
+            }
             if (devices_url_item) {
                 if (!cJSON_IsString(devices_url_item) || strlen(devices_url_item->valuestring) > MONITOR_DEVICES_URL_MAX)
                     validation_error = "invalid_devices_api_url";
@@ -802,7 +830,7 @@ void WifiConfigurationAp::StartWebServer()
                 cJSON *qweather_host = cJSON_GetObjectItem(json, "qweather_host");
                 if (location_err == ESP_OK && cJSON_IsString(qweather_host) &&
                     qweather_host->valuestring && qweather_host->valuestring[0] != '\0') {
-                    location_err = nvs_set_str(location_nvs, "qweather_host", qweather_host->valuestring);
+                    location_err = nvs_set_str(location_nvs, "qweather_host", weather_url);
                     qweather_host_saved = location_err == ESP_OK;
                 }
                 cJSON *qweather_key = cJSON_GetObjectItem(json, "qweather_key");
@@ -911,9 +939,10 @@ void WifiConfigurationAp::StartWebServer()
         },
         .user_ctx = this
     };
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server_, &advanced_submit));
+    if (!register_uri(&advanced_submit)) return false;
 
     ESP_LOGI(TAG, "Web server started");
+    return true;
 }
 
 bool WifiConfigurationAp::ConnectToWifi(const std::string &ssid, const std::string &password)
