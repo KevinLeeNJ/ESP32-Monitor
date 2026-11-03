@@ -2,6 +2,8 @@
 
 Guidance for coding agents working in this repository. Commands below assume the repository root unless a working directory is shown.
 
+On Windows, default to PowerShell 7 (launch via `pwsh`) for shell commands. Shell snippets shown as `sh` should be translated to PowerShell equivalents instead of relying on a POSIX shell.
+
 ## Project overview
 
 ESP32-Monitor comprises ESP32-S3 firmware for a 400×300 reflective LCD, a deterministic desktop simulator sharing the firmware UI, a desktop Client, and a NAS Server. The target has 16 MB flash and octal PSRAM; the UI uses LVGL v9.4.0.

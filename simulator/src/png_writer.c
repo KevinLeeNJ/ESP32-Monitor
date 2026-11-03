@@ -69,7 +69,11 @@ bool monitor_write_rgb565_png(const char *path, const uint16_t *pixels,
         }
     }
 
-    const size_t z_size = raw_size + raw_size / 65535U + 16U;
+    /* zlib header (2) + 5 bytes per stored block, rounded up to one extra
+       partial block, + raw payload + Adler-32 (4). The previous estimate
+       allotted one byte per block and overflowed the allocation. */
+    const size_t blocks = raw_size / 65535U + 1U;
+    const size_t z_size = 2U + blocks * 5U + raw_size + 4U;
     uint8_t *z = (uint8_t *)malloc(z_size);
     if(z == NULL) { free(raw); return false; }
 

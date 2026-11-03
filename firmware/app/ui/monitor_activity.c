@@ -41,10 +41,14 @@ typedef struct {
 typedef struct {
     lv_obj_t *track, *fill;
     int width;
+    int fill_px; /* Last applied fill width; skips redundant geometry work. */
 } activity_bar_t;
 
 typedef struct {
     activity_state_t wall;
+    bool github_available;
+    int github_start_year, github_start_month, github_start_day;
+    bool playback_available, playback_playing;
     lv_obj_t *wall_obj, *wall_unavailable, *weekday[3];
     lv_obj_t *usage_value[2];
     activity_bar_t usage_bar[2];
@@ -97,11 +101,14 @@ static const lv_font_t *music_font(const char *value, const lv_font_t *latin)
 static void set_music_label(lv_obj_t *obj, const char *value, const lv_font_t *latin)
 {
     const lv_font_t *font = music_font(value, latin);
-    lv_label_set_text(obj, value && value[0] ? value : "--");
-    lv_obj_set_style_text_font(obj, font, 0);
+    const char *shown = value && value[0] ? value : "--";
+    if(strcmp(lv_label_get_text(obj), shown)) lv_label_set_text(obj, shown);
     /* The dynamic CJK font is taller than the Latin default; keep the fixed
      * viewport in sync or glyphs clip after a live update. */
-    lv_obj_set_height(obj, font->line_height);
+    if(lv_obj_get_style_text_font(obj, LV_PART_MAIN) != font) {
+        lv_obj_set_style_text_font(obj, font, 0);
+        lv_obj_set_height(obj, font->line_height);
+    }
 }
 
 
@@ -113,6 +120,7 @@ static activity_bar_t progress_create(lv_obj_t *parent, int x, int y, int width,
     int fill = percent > 0 ? bar.width * percent / 100 : 0;
     bar.fill = box(bar.track, 2, 1, fill > 0 ? fill : 1, 4, 0, true, false, inv);
     if(!fill) lv_obj_add_flag(bar.fill, LV_OBJ_FLAG_HIDDEN);
+    bar.fill_px = fill;
     return bar;
 }
 
@@ -120,6 +128,8 @@ static void progress_apply(activity_bar_t *bar, int percent)
 {
     if(percent > 100) percent = 100;
     int fill = percent > 0 ? bar->width * percent / 100 : 0;
+    if(fill == bar->fill_px) return;
+    bar->fill_px = fill;
     if(fill > 0) {
         lv_obj_set_width(bar->fill, fill);
         lv_obj_clear_flag(bar->fill, LV_OBJ_FLAG_HIDDEN);
@@ -277,6 +287,17 @@ static void draw_playback(activity_view_t *view, bool available, bool playing)
 
 static void apply_github(lv_obj_t *root, activity_view_t *view, const monitor_activity_data_t *data)
 {
+    /* Heartbeats re-publish an unchanged wall every second; only a semantic
+     * change may repaint the 353x78 grid or rebuild the month labels. */
+    if(data->github_available == view->github_available &&
+       data->github_start_year == view->github_start_year &&
+       data->github_start_month == view->github_start_month &&
+       data->github_start_day == view->github_start_day &&
+       memcmp(view->wall.levels, data->levels, sizeof(view->wall.levels)) == 0) return;
+    view->github_available = data->github_available;
+    view->github_start_year = data->github_start_year;
+    view->github_start_month = data->github_start_month;
+    view->github_start_day = data->github_start_day;
     memcpy(view->wall.levels, data->levels, sizeof(view->wall.levels));
     lv_obj_invalidate(view->wall_obj);
     clear_month_labels(root);
@@ -302,7 +323,12 @@ static void apply_music(activity_view_t *view, const monitor_activity_data_t *da
                     &monitor_misans_12);
     set_music_label(view->music_title, data->music_title, &monitor_misans_20);
     set_music_label(view->music_artist, data->music_artist, &monitor_misans_14);
-    draw_playback(view, data->music_available, data->music_playing);
+    if(view->playback_available != data->music_available ||
+       view->playback_playing != data->music_playing) {
+        view->playback_available = data->music_available;
+        view->playback_playing = data->music_playing;
+        draw_playback(view, data->music_available, data->music_playing);
+    }
     int percent = -1;
     if(data->music_available && data->music_position_seconds >= 0 && data->music_duration_seconds > 0) {
         int pos = data->music_position_seconds;
@@ -332,11 +358,13 @@ void monitor_activity_apply(lv_obj_t *root, const monitor_activity_data_t *data)
     usage_apply(view, 1, data->usage_week_percent);
     unsigned task = (unsigned)data->agent_state;
     if(task >= sizeof(TASK_STYLES) / sizeof(TASK_STYLES[0])) task = MONITOR_TASK_UNKNOWN;
-    lv_image_set_src(view->task_icon, TASK_STYLES[task].icon);
-    if(strcmp(lv_label_get_text(view->task_name), TASK_STYLES[task].name))
+    if(lv_image_get_src(view->task_icon) != TASK_STYLES[task].icon)
+        lv_image_set_src(view->task_icon, TASK_STYLES[task].icon);
+    if(strcmp(lv_label_get_text(view->task_name), TASK_STYLES[task].name)) {
         lv_label_set_text(view->task_name, TASK_STYLES[task].name);
-    lv_obj_set_style_text_font(view->task_name,
-        task == MONITOR_TASK_WAITING_APPROVAL ? &monitor_misans_12 : &monitor_misans_14, 0);
+        lv_obj_set_style_text_font(view->task_name,
+            task == MONITOR_TASK_WAITING_APPROVAL ? &monitor_misans_12 : &monitor_misans_14, 0);
+    }
     apply_music(view, data);
 }
 
@@ -348,6 +376,12 @@ lv_obj_t *monitor_activity_create(lv_obj_t *parent, const monitor_activity_data_
     if(!view) return NULL;
     memcpy(view->wall.levels, data->levels, sizeof(view->wall.levels));
     view->wall.inverted = variant == MONITOR_FRAME_INVERTED;
+    view->github_available = data->github_available;
+    view->github_start_year = data->github_start_year;
+    view->github_start_month = data->github_start_month;
+    view->github_start_day = data->github_start_day;
+    view->playback_available = data->music_available;
+    view->playback_playing = data->music_playing;
     bool inv = view->wall.inverted;
     lv_obj_t *root = box(parent, 0, 0, 400, 300, 0, false, false, inv);
     lv_obj_t *holder = box(root, 0, 0, 0, 0, 0, false, false, inv);

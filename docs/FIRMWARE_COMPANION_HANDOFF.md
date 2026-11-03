@@ -1,6 +1,6 @@
 # 固件 Companion 交接
 
-更新时间：2026-11-02。目标和协议以 [固件能力计划](FIRMWARE_CAPABILITIES_PLAN.md) 与 [Companion 协议](ESP32_COMPANION_PROTOCOL_V1.md) 为准。本文保留当前状态、验收证据和下一步；测试结果只适用于所记录的构建与环境。
+更新时间：2026-11-03。目标和协议以 [固件能力计划](FIRMWARE_CAPABILITIES_PLAN.md) 与 [Companion 协议](ESP32_COMPANION_PROTOCOL_V1.md) 为准。本文保留当前状态、验收证据和下一步；测试结果只适用于所记录的构建与环境。
 
 ## 当前状态
 
@@ -21,7 +21,7 @@
 
 ### 内存
 
-Serial 编码及 Config 中间缓冲、天气响应、MQTT RX/Config 和会话对象优先 PSRAM，失败回退；最终 USB 帧、显示 DMA staging 和任务栈保留现有策略。依据 [ESP-IDF 外部 RAM 指南](https://github.com/espressif/esp-idf/blob/master/docs/en/api-guides/external-ram.rst)。活动构建 `firmware/sdkconfig` 中普通分配内部优先阈值为 8192 B、mbedTLS 使用外部内存、Wi-Fi 静态 RX 为 2；当前源码 Serial 栈 16 KB、常驻 MQTT worker 栈 12 KB。worker 同时服务配对与 LAN，避免运行时申请大块连续内部栈；不要未经验证缩栈。
+Serial 编码及 Config 中间缓冲、天气响应、MQTT RX/Config 和会话对象优先 PSRAM，失败回退；最终 USB 帧、显示 DMA staging 和任务栈保留现有策略。依据 [ESP-IDF 外部 RAM 指南](https://github.com/espressif/esp-idf/blob/master/docs/en/api-guides/external-ram.rst)。当前源码 Serial 栈 16 KB、常驻 MQTT worker 栈 10 KB、Devices 栈 8 KB、Discovery 栈 16 KB。Serial 收紧到 12 KB 后曾出现认证问题，已恢复 16 KB，后续不要收紧。2026-11-03 通过 COM10 采集到 Serial 历史最低剩余 1920 B，但未确认板上构建与当前源码一致，且未覆盖所有峰值场景；临时水位采集代码已移除。worker 同时服务配对与 LAN，避免运行时申请大块连续内部栈。
 
 | 场景 | 三轮最低内部空闲 | 最大连续块 | 口径 |
 |---|---:|---:|---|

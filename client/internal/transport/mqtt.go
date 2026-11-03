@@ -2,6 +2,7 @@ package transport
 
 import (
 	"crypto/subtle"
+	"esp32-monitor/client/internal/logging"
 	"esp32-monitor/client/internal/transport/wire"
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/packets"
@@ -174,8 +175,9 @@ func (h *brokerHook) OnQosPublish(cl *mqtt.Client, p packets.Packet, _ int64, _ 
 	}
 }
 
-func (h *brokerHook) OnDisconnect(cl *mqtt.Client, _ error, _ bool) {
+func (h *brokerHook) OnDisconnect(cl *mqtt.Client, err error, expired bool) {
 	if s := h.find(cl); s != nil {
+		logging.L("transport").Info("device_mqtt_disconnect", "device", logging.Ref(s.pair.DeviceID), "error", err, "expired", expired)
 		s.cancel()
 	}
 }

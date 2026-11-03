@@ -96,7 +96,8 @@ static bool http_get(const char *url,char *out,size_t size,const char *api_key){
         if(strstr(url,"/v7/weather/")){++http_calls[1];assert(strstr(url,"location=121.50000,31.20000"));body=weather_body;}
         else {++http_calls[2];assert(strstr(url,"/current/31.20000/121.50000"));body=aqi_body;}
     }
-    if(!body)return false;assert(strlen(body)<size);strcpy(out,body);return true;
+    if(!body)return false;
+    assert(strlen(body)<size);strcpy(out,body);return true;
 }
 '''
 code+=defines(source,['RESPONSE_MAX','WEATHER_EVT_UPDATE','WEATHER_EVT_WIFI_CHANGED'])+'\n'
@@ -172,10 +173,11 @@ int main(void){
     queued=0;monitor_weather_on_time_valid();assert(queued==WEATHER_EVT_UPDATE);
     reset();worker_step=0;if(!setjmp(worker_done))weather_task(NULL);
     assert(http_calls[1]==2 && http_calls[2]==2 && !http_calls[0]);
-    // A Companion-owned page must suppress the direct producer entirely.
+    // Companion mode resolves the device's location without fetching weather.
     reset();s_companion_active=true;worker_step=4;
     if(!setjmp(worker_done))weather_task(NULL);
-    assert(!http_calls[1] && !http_calls[2] && !notifications);
+    assert(http_calls[0] == 1 && !http_calls[1] && !http_calls[2] && !notifications);
+    assert(s_data.location_valid && s_data.latitude > 31 && s_data.longitude > 121);
     s_companion_active=false;
     puts("Weather/AQI first data, unchanged/partial/error cache, no location, cached/IP location, NVS failure, strict coordinates/API code/metrics, allocation failure and recovery: PASS");
 }

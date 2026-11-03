@@ -94,13 +94,22 @@ export async function refreshCompanion() {
 }
 
 export async function refreshDevices() {
+  const request = ++devicesRequest;
   try {
-    store.devices = await monitorService.devices();
+    const devices = await monitorService.devices();
+    if (request < devicesApplied) return;
+    devicesApplied = request;
+    store.devices = devices;
     store.devicesError = "";
   } catch (error) {
+    if (request < devicesApplied) return;
+    devicesApplied = request;
     if (!store.restarting) store.devicesError = String(error);
   }
 }
+
+let devicesRequest = 0;
+let devicesApplied = 0;
 
 export async function quitApp() {
   try {
@@ -160,8 +169,10 @@ export function startPolling() {
       if (document.hidden) return;
       void refreshStatus();
       void refreshCompanion();
-      void refreshDevices();
     }, GUI_REFRESH_MS),
+    setInterval(() => {
+      if (!document.hidden) void refreshDevices();
+    }, 2000),
   ];
   document.addEventListener("visibilitychange", onVisibilityChange);
 }

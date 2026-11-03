@@ -1,5 +1,6 @@
 #include "monitor_companion_config.h"
 #include "monitor_devices_data.h"
+#include "monitor_weather.h"
 #include "nvs.h"
 #include <errno.h>
 #include <math.h>
@@ -47,6 +48,19 @@ esp_err_t monitor_companion_config_read(esp32monitor_companion_Config *config)
             strcpy(config->weather.location_mode,"coordinates");
             config->weather.has_latitude=config->weather.has_longitude=true;
             config->weather.latitude=latitude; config->weather.longitude=longitude;
+        } else {
+            monitor_weather_data_t weather;
+            monitor_weather_get(&weather);
+            if (weather.location_valid) {
+                strcpy(config->weather.location_mode,"coordinates");
+                config->weather.has_latitude=config->weather.has_longitude=true;
+                config->weather.latitude=weather.latitude;
+                config->weather.longitude=weather.longitude;
+            } else {
+                /* Never locate using the host's potentially proxied IP. */
+                memset(&config->weather, 0, sizeof config->weather);
+                strcpy(config->weather.location_mode, "ip");
+            }
         }
     } else {
         memset(config->weather.qweather_host,0,sizeof config->weather.qweather_host);

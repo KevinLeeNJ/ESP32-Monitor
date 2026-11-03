@@ -325,7 +325,8 @@ esp_err_t monitor_companion_worker_submit(void (*work)(void *), void *arg)
 esp_err_t monitor_companion_mqtt_init(void)
 {
     if (s_worker) return ESP_OK;
-    if (xTaskCreate(worker, "companion_mqtt", 12288, NULL, 3, &s_worker) != pdPASS) {
+    /* Session setup measured 3.3 KB; keep room for snapshot/pairing decode. */
+    if (xTaskCreate(worker, "companion_mqtt", 10240, NULL, 3, &s_worker) != pdPASS) {
         ESP_LOGE(TAG, "worker task create failed: internal free=%u largest=%u",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));

@@ -11,6 +11,62 @@
 #define STATE_VERSION 2U
 #define MAX_REVOCATIONS 4
 
+/* Approve (serial/MQTT worker tasks) and revoke (button task) run
+ * concurrently on different tasks. NVS serializes single calls, but the
+ * read-modify-write sequences here are not atomic without this store-wide
+ * lock; a recursive mutex also covers identity() called inside them. */
+static void *s_store_lock;
+
+#ifdef ESP_PLATFORM
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
+static portMUX_TYPE s_store_lock_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static void *pairing_store_lock(void)
+{
+    portENTER_CRITICAL(&s_store_lock_mux);
+    SemaphoreHandle_t lock = s_store_lock;
+    portEXIT_CRITICAL(&s_store_lock_mux);
+    if (lock) return lock;
+    SemaphoreHandle_t created = xSemaphoreCreateRecursiveMutex();
+    portENTER_CRITICAL(&s_store_lock_mux);
+    if (!s_store_lock && created) s_store_lock = created;
+    lock = s_store_lock;
+    portEXIT_CRITICAL(&s_store_lock_mux);
+    if (created && created != lock) vSemaphoreDelete(created);
+    return lock;
+}
+
+static void pairing_store_take(void *lock) { xSemaphoreTakeRecursive(lock, portMAX_DELAY); }
+static void pairing_store_give(void *lock) { xSemaphoreGiveRecursive(lock); }
+#else
+#include <pthread.h>
+#include <stdlib.h>
+
+static pthread_once_t s_store_once = PTHREAD_ONCE_INIT;
+
+static void pairing_store_lock_init(void)
+{
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_t *mutex = malloc(sizeof *mutex);
+    if (mutex && pthread_mutex_init(mutex, &attr) == 0) s_store_lock = mutex;
+    else free(mutex);
+    pthread_mutexattr_destroy(&attr);
+}
+
+static void *pairing_store_lock(void)
+{
+    pthread_once(&s_store_once, pairing_store_lock_init);
+    return s_store_lock;
+}
+
+static void pairing_store_take(void *lock) { pthread_mutex_lock(lock); }
+static void pairing_store_give(void *lock) { pthread_mutex_unlock(lock); }
+#endif
+
 typedef struct {
     char host_id[37];
     char pairing_id[37];
@@ -121,9 +177,14 @@ static void add_revocation(stored_state_t *s, const monitor_pairing_record_t *r,
 esp_err_t monitor_pairing_identity(char out[37])
 {
     if (!out) return ESP_ERR_INVALID_ARG;
+    void *lock = pairing_store_lock();
+    if (lock) pairing_store_take(lock);
     nvs_handle_t nvs;
     esp_err_t e = nvs_open(NAMESPACE, NVS_READWRITE, &nvs);
-    if (e != ESP_OK) return e;
+    if (e != ESP_OK) {
+        if (lock) pairing_store_give(lock);
+        return e;
+    }
     char id[37] = {0}; size_t len = sizeof id;
     e = nvs_get_str(nvs, "device_id", id, &len);
     if (e == ESP_ERR_NVS_NOT_FOUND) {
@@ -137,42 +198,51 @@ esp_err_t monitor_pairing_identity(char out[37])
     if (e == ESP_OK && !uuid_valid(id)) e = ESP_ERR_INVALID_STATE;
     if (e == ESP_OK) memcpy(out, id, sizeof id);
     nvs_close(nvs);
+    if (lock) pairing_store_give(lock);
     return e;
 }
 
 esp_err_t monitor_pairing_store_load(monitor_pairing_record_t *out)
 {
     if (!out) return ESP_ERR_INVALID_ARG;
+    void *lock = pairing_store_lock();
+    if (lock) pairing_store_take(lock);
     nvs_handle_t nvs;
     esp_err_t e = nvs_open(NAMESPACE, NVS_READONLY, &nvs);
-    if (e != ESP_OK) return e;
-    stored_state_t state;
-    e = read_state(nvs, &state);
-    nvs_close(nvs);
-    if (e == ESP_OK && !state.has_pair) e = ESP_ERR_NVS_NOT_FOUND;
-    if (e == ESP_OK) *out = state.pair;
-    memset(&state, 0, sizeof state);
+    if (e == ESP_OK) {
+        stored_state_t state;
+        e = read_state(nvs, &state);
+        nvs_close(nvs);
+        if (e == ESP_OK && !state.has_pair) e = ESP_ERR_NVS_NOT_FOUND;
+        if (e == ESP_OK) *out = state.pair;
+        memset(&state, 0, sizeof state);
+    }
+    if (lock) pairing_store_give(lock);
     return e;
 }
 
 size_t monitor_pairing_store_revocations(monitor_pairing_revocation_t *out, size_t capacity)
 {
     if (!out || !capacity) return 0;
+    void *lock = pairing_store_lock();
+    if (lock) pairing_store_take(lock);
     nvs_handle_t nvs;
-    if (nvs_open(NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) return 0;
-    stored_state_t state;
-    esp_err_t e = read_state(nvs, &state);
-    nvs_close(nvs);
     size_t count = 0;
-    if (e == ESP_OK) {
-        count = state.revocation_count < capacity ? state.revocation_count : capacity;
-        for (size_t i = 0; i < count; i++) {
-            memcpy(out[i].host_id, state.revocations[i].host_id, sizeof out[i].host_id);
-            memcpy(out[i].pairing_id, state.revocations[i].pairing_id, sizeof out[i].pairing_id);
-            memcpy(out[i].discovery_key, state.revocations[i].discovery_key, sizeof out[i].discovery_key);
+    if (nvs_open(NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
+        stored_state_t state;
+        esp_err_t e = read_state(nvs, &state);
+        nvs_close(nvs);
+        if (e == ESP_OK) {
+            count = state.revocation_count < capacity ? state.revocation_count : capacity;
+            for (size_t i = 0; i < count; i++) {
+                memcpy(out[i].host_id, state.revocations[i].host_id, sizeof out[i].host_id);
+                memcpy(out[i].pairing_id, state.revocations[i].pairing_id, sizeof out[i].pairing_id);
+                memcpy(out[i].discovery_key, state.revocations[i].discovery_key, sizeof out[i].discovery_key);
+            }
         }
+        memset(&state, 0, sizeof state);
     }
-    memset(&state, 0, sizeof state);
+    if (lock) pairing_store_give(lock);
     return count;
 }
 
@@ -181,11 +251,16 @@ esp_err_t monitor_pairing_store_approved(const monitor_pairing_session_t *sessio
     if (!session || session->state != MONITOR_PAIR_APPROVED) return ESP_ERR_INVALID_ARG;
     const esp32monitor_companion_PairResponse *r = &session->approved;
     if (!monitor_pairing_validate_response(r, r->host_id)) return ESP_ERR_INVALID_ARG;
+    void *lock = pairing_store_lock();
+    if (lock) pairing_store_take(lock);
     char device[37] = {0};
     bool have_device = monitor_pairing_identity(device) == ESP_OK;
     nvs_handle_t nvs;
     esp_err_t e = nvs_open(NAMESPACE, NVS_READWRITE, &nvs);
-    if (e != ESP_OK) return e;
+    if (e != ESP_OK) {
+        if (lock) pairing_store_give(lock);
+        return e;
+    }
     stored_state_t state;
     e = read_state(nvs, &state);
     if (e != ESP_OK) {
@@ -207,20 +282,27 @@ esp_err_t monitor_pairing_store_approved(const monitor_pairing_session_t *sessio
     if (e == ESP_OK) e = nvs_commit(nvs);
     nvs_close(nvs);
     memset(&state, 0, sizeof state);
+    if (lock) pairing_store_give(lock);
     return e;
 }
 
 esp_err_t monitor_pairing_store_revoke(void)
 {
+    void *lock = pairing_store_lock();
+    if (lock) pairing_store_take(lock);
     char device[37] = {0};
     bool have_device = monitor_pairing_identity(device) == ESP_OK;
     nvs_handle_t nvs;
     esp_err_t e = nvs_open(NAMESPACE, NVS_READWRITE, &nvs);
-    if (e != ESP_OK) return e;
+    if (e != ESP_OK) {
+        if (lock) pairing_store_give(lock);
+        return e;
+    }
     stored_state_t state;
     e = read_state(nvs, &state);
     if (e == ESP_ERR_NVS_NOT_FOUND) {
         nvs_close(nvs);
+        if (lock) pairing_store_give(lock);
         return ESP_OK;
     }
     if (e != ESP_OK) {
@@ -229,6 +311,7 @@ esp_err_t monitor_pairing_store_revoke(void)
         if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;
         if (e == ESP_OK) e = nvs_commit(nvs);
         nvs_close(nvs);
+        if (lock) pairing_store_give(lock);
         return e;
     }
     if (state.has_pair) {
@@ -243,5 +326,6 @@ esp_err_t monitor_pairing_store_revoke(void)
     }
     nvs_close(nvs);
     memset(&state, 0, sizeof state);
+    if (lock) pairing_store_give(lock);
     return e;
 }

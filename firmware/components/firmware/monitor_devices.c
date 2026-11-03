@@ -477,7 +477,8 @@ esp_err_t monitor_devices_start(void)
     esp_err_t err = esp_timer_create(&timer_args, &s_expiry_timer);
     if (err != ESP_OK) return err;
     monitor_devices_config_changed();
-    if (xTaskCreate(devices_task, "monitor_devices", 12288, NULL, 3, &s_task) != pdPASS) {
+    /* HTTPS attempt measured 5.0 KB; weather's TLS peak is 4.7 KB. */
+    if (xTaskCreate(devices_task, "monitor_devices", 8192, NULL, 3, &s_task) != pdPASS) {
         esp_timer_delete(s_expiry_timer);
         s_expiry_timer = NULL;
         return ESP_ERR_NO_MEM;

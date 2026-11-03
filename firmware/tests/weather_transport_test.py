@@ -167,7 +167,7 @@ int main(void){
     reset();connect_failures=1;s_wifi_available=false;
     assert(!http_get("url",out,sizeof(out),NULL) && performed==1 && !delays);
     reset();connect_failures=1;s_companion_active=true;
-    assert(!http_get("url",out,sizeof(out),NULL) && performed==1 && !delays);
+    assert(http_get("url",out,sizeof(out),NULL) && performed==2 && delays==1);
     const int errors[]={301,400,401,403,404,429,500,503};
     for(unsigned i=0;i<sizeof(errors)/sizeof(*errors);++i){reset();http_status=errors[i];assert(!http_get("url",out,sizeof(out),NULL) && created==cleaned && performed==1 && !delays);}
     reset();wire_size=0;assert(!http_get("url",out,sizeof(out),NULL) && created==cleaned);

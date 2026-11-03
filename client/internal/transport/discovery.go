@@ -407,10 +407,9 @@ func (b *Backend) Devices() ([]DeviceStatus, bool) {
 			s.Transport = x.transport
 			s.IdentityVerified = true
 			s.LastSeen = now
-			// maintain() stops probing once a session exists, so candidate.Seen
-			// goes stale; a live session (self-expiring on lost receipts) is the
-			// authoritative presence signal.
-			s.ConfirmedOnline = true
+			// A session being authenticated or synchronized does not yet prove
+			// the monitor has accepted the current snapshot and heartbeat.
+			s.ConfirmedOnline = x.state == "connected"
 		} else if lost, ok := b.pairingLost[p.DeviceID]; ok && pairingLostActive(lost, now) {
 			/* The device answered but no longer recognises this pairing. Keep
 			 * the credential; surface a re-pair hint only. */

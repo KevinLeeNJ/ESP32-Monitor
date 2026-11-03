@@ -439,8 +439,11 @@ static void apply_display_snapshot(monitor_lvgl_t *renderer, const display_snaps
 
 static bool boot_data_complete(const display_snapshot_t *snapshot)
 {
-    /* A successful empty Devices response is complete too. Failed/unconfigured
-     * sources retain -- until the fixed deadline; battery is not a roller. */
+    /* A successful empty Devices response is complete too. An unconfigured or
+     * rejected source cannot produce data without user action, so it must not
+     * hold the boot animation until the fixed deadline; a configured source
+     * that is still waiting or retrying keeps the placeholder. Battery is not
+     * a roller. */
     if (snapshot->wifi_state == MONITOR_WIFI_OFFLINE)
         return snapshot->temperature_tenths_c != MONITOR_TEMPERATURE_UNAVAILABLE &&
                snapshot->humidity_percent >= 0;
@@ -449,7 +452,9 @@ static bool boot_data_complete(const display_snapshot_t *snapshot)
            snapshot->humidity_percent >= 0 &&
            snapshot->weather_condition != MONITOR_WEATHER_UNKNOWN && snapshot->aqi >= 0 &&
            (snapshot->devices.status == MONITOR_DEVICES_READY ||
-            snapshot->devices.status == MONITOR_DEVICES_STALE);
+            snapshot->devices.status == MONITOR_DEVICES_STALE ||
+            snapshot->devices.status == MONITOR_DEVICES_NOT_CONFIGURED ||
+            snapshot->devices.status == MONITOR_DEVICES_AUTH_ERROR);
 }
 
 static esp_err_t present_boot_monitor(monitor_lvgl_t *renderer, rlcd_port_t *port,

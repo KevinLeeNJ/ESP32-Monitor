@@ -169,18 +169,19 @@ static bool http_get_once(const char *url, char *out, size_t out_size, const cha
 
 static bool http_get(const char *url, char *out, size_t out_size, const char *api_key)
 {
+    bool stop_on_companion = !s_companion_active;
     for (unsigned attempt = 0; attempt < HTTP_CONNECT_ATTEMPTS; ++attempt) {
         bool retryable;
         if (http_get_once(url, out, out_size, api_key, &retryable)) return true;
         if (!retryable || attempt + 1 == HTTP_CONNECT_ATTEMPTS ||
-            !s_wifi_available || s_companion_active) return false;
+            !s_wifi_available || (stop_on_companion && s_companion_active)) return false;
         /* DHCP/DNS can lag the first request. Release the failed client before
          * retrying, and let Companion ownership or disconnect cancel recovery. */
         ESP_LOGI(TAG, "connection retry %u/%u", attempt + 2, HTTP_CONNECT_ATTEMPTS);
         feed_task_watchdog();
         vTaskDelay(pdMS_TO_TICKS(HTTP_CONNECT_RETRY_MS));
         feed_task_watchdog();
-        if (!s_wifi_available || s_companion_active) return false;
+        if (!s_wifi_available || (stop_on_companion && s_companion_active)) return false;
     }
     return false;
 }
@@ -397,8 +398,22 @@ static void weather_task(void *arg)
         xTaskNotifyWait(0, UINT32_MAX, &notified, portMAX_DELAY);
         ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
         feed_task_watchdog();
-        if (!s_companion_active && s_wifi_available && monitor_clock_is_valid() &&
-            (notified & WEATHER_EVT_UPDATE)) update_weather();
+        if (s_wifi_available && monitor_clock_is_valid() && (notified & WEATHER_EVT_UPDATE)) {
+            if (!s_companion_active) update_weather();
+            else {
+                float lat, lon;
+                portENTER_CRITICAL(&s_data_mux);
+                bool valid = s_data.location_valid;
+                portEXIT_CRITICAL(&s_data_mux);
+                if (!valid && locate_by_public_ip(&lat, &lon)) {
+                    portENTER_CRITICAL(&s_data_mux);
+                    s_data.latitude = lat;
+                    s_data.longitude = lon;
+                    s_data.location_valid = true;
+                    portEXIT_CRITICAL(&s_data_mux);
+                }
+            }
+        }
     }
 }
 
@@ -419,7 +434,7 @@ void monitor_weather_set_companion_active(bool active)
     if (s_companion_active == active) return;
     s_companion_active = active;
     ESP_LOGI(TAG, "direct producer %s", active ? "paused" : "resumed");
-    if (!active) monitor_weather_request_refresh();
+    monitor_weather_request_refresh();
 }
 
 static void log_dns_servers(void)
@@ -438,6 +453,9 @@ static void log_dns_servers(void)
 void monitor_weather_on_wifi_connected(void)
 {
     s_wifi_available = true;
+    portENTER_CRITICAL(&s_data_mux);
+    s_data.location_valid = false;
+    portEXIT_CRITICAL(&s_data_mux);
     log_dns_servers();
     monitor_weather_request_refresh();
 }
