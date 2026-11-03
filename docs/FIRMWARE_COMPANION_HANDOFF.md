@@ -10,7 +10,7 @@
 - **配对与撤销**：LAN/Serial 显示相同六位码，板端 KEY 确认；BOOT 长按撤销只清除 Companion 配对，保留 Wi-Fi、天气和 Devices 配置。墓碑最多 4 条，仅保留派生 discovery key。
 - **界面与来源**：断线回第一页并禁用翻页、串口 USB 图标、Codex/音乐显示及 KEY 翻页已由用户确认。音乐标题/歌手使用 MiSans，韩文与音符回退 Fusion Pixel。GitHub 真实数据、Serial 真实来源续租和音乐/Codex 长稳仍需补证。
 - **Windows**：ESP-IDF 环境、生产固件构建和 COM10 烧录已验证；Windows Client 的 GUI、Agent、串口与 LAN **尚未真机验收**。
-- **Linux**：AppImage 构建脚本、GTK4/WebKitGTK 6.0 GUI、XDG 自启、StatusNotifier 托盘、Unix socket IPC、MPRIS、原生采集和 Secret Service 已有实现；**尚无 Linux 真机验收**，差距见下。
+- **Linux**：AppImage 构建脚本、GTK4/WebKitGTK 6.0 GUI、XDG 自启、StatusNotifier 托盘、Unix socket IPC、MPRIS、原生采集和 Secret Service 已有实现；发布构建已固定到 Ubuntu 24.04 容器，基线检查、Xvfb 启动冒烟和 `make ci-linux` 流水线（不依赖 GitHub Actions）已通过，**尚无 Linux 真机验收**，差距见下。
 
 ## 已验证要点与限制
 
@@ -20,7 +20,7 @@
 - **音乐字体**：18px 标题、12px 歌手，MiSans Regular 主字体，韩文与 `♪/♫` 由 Fusion Pixel 回退；18px 拆主字体 + fallback，12px 合并。`generate_music_font.py` 需 `--misans`，资源用 `#embed` 和 8 字节描述表。模拟器 `activity-long-music`/`activity-cjk-music` 已目视检查。
 - **Client 修复**：Agent 退出改为有界等待（5 秒），避免协程卡住；LAN 恢复探测 5 秒并加快退避；天气代理记录 `proxy_worker_start` / `proxy_weather_result`（不含 Host/Key）。
 - **自动化**：模拟器 `ctest` **34/34**；ESP-IDF 生产构建成功，镜像 4,294,416 B，8 MB app 分区剩余 49%；Client 完整 transport 集成测试通过，`make test-fast` 约 21 秒。Windows 固件主机套件仍受 POSIX 头文件限制；模拟器结论不代表硬件。
-- **未验证**：新字体、LAN 恢复参数、天气代理日志和 Agent 退出修复均需实板/长时间复测；Linux 尚未构建或运行验收。
+- **未验证**：新字体、LAN 恢复参数、天气代理日志和 Agent 退出修复均需实板/长时间复测；Linux 容器构建、基线检查、Xvfb 冒烟和 `make ci-linux` 已通过，但尚无真机验收。
 
 ## Linux Client 差距审计（2026-11-03）
 
@@ -28,8 +28,8 @@ Linux 并非从零开始：MPRIS 音乐、原生采集（`/proc`、`/sys`、gops
 
 | 优先级 | 领域 | Windows / macOS | Linux 现状与缺口 | 建议 |
 |---|---|---|---|---|
-| P0 | 构建与运行 | Windows WebView2；macOS WKWebView | GTK4 + WebKitGTK 6.0；AppImage 在 Debian 13/glibc 2.41 构建，Ubuntu 24.04（glibc 2.39）可能无法运行 | 在最低支持发行版或 Flatpak runtime 构建；明确最低 glibc/GTK/WebKit 版本 |
-| P0 | CI 与验收 | 手工 Windows/macOS 打包 | 无 `.github` CI，无 Linux AppImage 冒烟测试 | 增加 Ubuntu 24.04 CI：`make test-fast`、AppImage 构建、xvfb/WebKit 启动检查 |
+| P0 | 构建与运行 | Windows WebView2；macOS WKWebView | GTK4 + WebKitGTK 6.0；发布构建已固定到 Ubuntu 24.04 容器（glibc 2.39、GTK 4.14、WebKitGTK 6.0），支持 Ubuntu 24.04+/Debian 13+；Debian 12/Ubuntu 22.04 无 WebKitGTK 6.0，不支持 | 已提供 `build-appimage-linux-repro`、`check-linux-baseline`、Xvfb 冒烟和 `make ci-linux`；仍需真机验收 |
+| P0 | CI 与验收 | 手工 Windows/macOS 打包 | 已有不依赖 GitHub 的 `make ci-linux`：Docker 内 vet、短测试、前端测试、AppImage 构建、基线/布局检查和 Xvfb 冒烟；未接 GitHub Actions | 按需接入 GitHub Actions 或其他托管 runner；补签名与真实桌面验收 |
 | P0 | 运行时依赖 | WebView2 运行时可安装；macOS 自带 | 需 GTK4、WebKitGTK 6.0、bubblewrap、xdg-dbus-proxy；容器/未启用 user namespace 时沙箱启动失败 | 启动前检测并给出可操作提示；完善 README/AppImage 提示 |
 | P0 | Agent 权限与采集 | 提权 Agent + LHM/PawnIO/WMI | Linux 为同用户 managed Agent，无提权 helper；SMART 依赖 UDisks2、电量依赖 UPower、GPU 仅 `nvtop`（NVIDIA） | 明确各指标的宿主依赖；增加缺失工具提示；评估 AMD/Intel GPU 与风扇/电压 |
 | P0 | 串口 | COM 端口即插即用 | `/dev/ttyACM*`/`ttyUSB*` 需 `dialout` 权限；无 udev 规则 | 检测权限失败并提示 `dialout`/udev；文档化 |
@@ -40,11 +40,11 @@ Linux 并非从零开始：MPRIS 音乐、原生采集（`/proc`、`/sys`、gops
 | P1 | 打包 | Inno Setup / .app（ad-hoc 签名） | 仅 AppImage；无 deb/rpm/Flatpak、无签名/更新机制 | 增加 Flatpak 或 deb；明确签名/更新策略 |
 | P2 | 测试 | 有平台测试与真机验收 | MPRIS 测试需 `dbus-run-session`；原生采集只有解析测试，无 live probe；无 Linux 真机证据 | 增加 Linux live collector/MPRIS/串口测试与真机清单 |
 
-**Linux 开发环境要点**：Go、Node.js、pkg-config、GTK4/WebKitGTK 6.0 开发包、appimagetool；测试 MPRIS 需 `dbus-run-session`；采集验证需 `udisks2`、`upower`、`nvtop`。AppImage 构建使用 `make build-appimage-linux`。
+**Linux 开发环境要点**：Go、Node.js、pkg-config、GTK4/WebKitGTK 6.0 开发包、appimagetool；测试 MPRIS 需 `dbus-run-session`；采集验证需 `udisks2`、`upower`、`nvtop`。发布 AppImage 使用 `make build-appimage-linux-repro`（Docker），宿主迭代使用 `make build-appimage-linux`，完整校验使用 `make ci-linux`（仅需 Docker）。
 
 ## 下一步（Linux 优先）
 
-1. **P0 Linux 构建/CI**：在 Ubuntu 24.04 建立可重复构建，跑 `make test-fast` 和 AppImage 启动冒烟；确定 glibc/GTK/WebKit 支持范围。
+1. **P0 Linux CI**：`make ci-linux` 已在本机跑通（vet、短测试、前端测试、AppImage 构建、基线/布局检查、Xvfb 冒烟）；剩余工作是按需接入 GitHub Actions 或其他托管 runner，并补签名与真实桌面验收。
 2. **P0 依赖与权限**：对 GTK/WebKit、bubblewrap、xdg-dbus-proxy、UDisks2、UPower、nvtop、Secret Service、串口 `dialout` 做启动检测和可操作提示。
 3. **P0 采集与音乐验收**：在真实 Linux 桌面验证 CPU/内存/磁盘/网络/电量/GPU、MPRIS 播放与串口/LAN；补 live collector 测试。
 4. **P1 平台覆盖**：KDE/非 GNOME 代理、无托盘桌面、无 Secret Service 的降级路径；评估 Flatpak/deb。
@@ -67,7 +67,10 @@ Linux 并非从零开始：MPRIS 音乐、原生采集（`/proc`、`/sys`、gops
 ./simulator/run.sh companion-update
 ctest --test-dir simulator/build --output-on-failure
 cd client && make test && make test-fast
-cd client && make build-appimage-linux
+cd client && make ci-linux
+cd client && make build-appimage-linux-repro
+cd client && make check-linux-baseline
+cd client && make test-appimage-linux
 ```
 
 ```sh

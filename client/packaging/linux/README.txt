@@ -1,7 +1,10 @@
 ESP32 Monitor Linux
 
-On Debian 13 or Ubuntu 24.04 with a desktop environment, install GTK4,
-WebKitGTK 6.0, and the AppImage's host tools and services:
+Supported systems are Ubuntu 24.04 LTS or newer and Debian 13 or newer, plus
+any distribution shipping WebKitGTK 6.0 (for example Fedora). Debian 12 and
+Ubuntu 22.04 only provide WebKitGTK 4.1 and cannot run this client. With a
+desktop environment, install GTK4, WebKitGTK 6.0, and the AppImage's host
+tools and services:
 
   sudo apt install libgtk-4-1 libwebkitgtk-6.0-4 xdg-utils libglib2.0-bin udisks2 upower bubblewrap xdg-dbus-proxy
 
@@ -31,10 +34,10 @@ their dependencies, graphics drivers and the tools above are provided by the
 host. Project, asset and third-party license texts are inside the AppImage
 under /usr/share/doc/esp32-monitor/.
 
-The distributed build is made on Debian 13 with glibc 2.41. Compatibility
-with older host runtimes and other GTK/WebKit versions is not guaranteed.
-The AppImage uses the host's default GTK backend; set GDK_BACKEND explicitly
-to override it.
+Release builds are made in a pinned Ubuntu 24.04 LTS container (glibc 2.39,
+GTK 4.14, WebKitGTK 6.0). Each artifact records its toolchain in
+/usr/share/doc/esp32-monitor/build-info.json. The AppImage uses the host's
+default GTK backend; set GDK_BACKEND explicitly to override it.
 
 Make the AppImage executable and run it. If FUSE mounting is unavailable:
   APPIMAGE_EXTRACT_AND_RUN=1 ./ESP32-Monitor-x86_64.AppImage
@@ -63,7 +66,29 @@ This removes the sandbox's process isolation; treat it as a security
 downgrade and do not use it by default. WEBKIT_DISABLE_SANDBOX is not
 honored.
 
-To build the AppImage, install Go, Node.js, rsync, pkg-config, GTK4 and
-WebKitGTK 6.0 development packages, and appimagetool. The Go module pins
-Wails v3.0.0. Run `make build-appimage-linux` in client/. appimagetool may
-download the AppImage runtime during packaging.
+To build the release AppImage, install Docker and run this in client/:
+
+  make build-appimage-linux-repro
+
+The command builds client/packaging/linux/build-env/Dockerfile and mounts the
+repository into it. The defaults target a mainland China network: DaoCloud for
+the base image, Tsinghua for apt and Node.js, Aliyun for Go, and gh-proxy for
+appimagetool and the AppImage type2 runtime. The runtime is only published as
+a mutable "continuous" build, so it is downloaded once when the image is built
+and reused from the image afterwards.
+
+The same image runs the Linux CI pipeline, which needs only Docker:
+
+  make ci-linux
+
+It runs go vet, the short Go tests, frontend tests, the AppImage build, the
+baseline and layout checks, and the Xvfb startup smoke. No GitHub Actions
+workflow is configured yet; run the script locally or from any CI runner.
+
+For faster iteration against the system GTK4/WebKitGTK, install Go, Node.js,
+rsync, pkg-config, appimagetool and the development packages, then run
+`make build-appimage-linux`. That path is not used for release artifacts.
+
+Validate an artifact with `make check-linux-baseline` (glibc symbol ceiling,
+host GTK/WebKit linkage, no bundled shared libraries, build metadata) and
+`make test-appimage-linux`.

@@ -26,7 +26,7 @@ Wails GUI + Vue 页面
 | 登录自启 | 已实现 | 通用开关；macOS 写 LaunchAgent、Windows 写 HKCU Run、Linux 写 XDG autostart；以 `--login-item` 后台启动且不显示窗口 | [settings.go](../client/internal/guibridge/settings.go)、[loginitem_darwin.go](../client/internal/guibridge/loginitem_darwin.go) |
 | 系统采集服务 | 待实现 | 用户会话音乐/账号与系统服务隔离、跨模式所有权未产品化 | [lifecycle](../client/internal/platform/lifecycle/doc.go) |
 | macOS 应用打包 | 部分实现 | `.app` 构建脚本含 GUI、Agent、播放 dylib 与本地 ad-hoc 签名；默认部署目标 macOS 13，可用 `MACOSX_DEPLOYMENT_TARGET` 覆盖，`GO=/path/to/go` 可换用上游或更老的 Go（工具链运行时对象要求更高版本时会告警）；正式签名/公证/升级/卸载未完成 | [build-darwin-app.sh](../client/scripts/build-darwin-app.sh) |
-| Windows/Linux 分发 | 部分实现 | Windows 绿色 zip（GUI/Agent/LHM helper、内嵌图标与版本信息、WebView2 启动检测、README/第三方声明）已构建并在本机启动；安装器（已提供 `.iss`，无 ISCC 未编译）、签名、干净机器与 Linux 分发仍待验收 | [packaging/windows](../client/packaging/windows)、[build-windows-app.ps1](../client/scripts/build-windows-app.ps1) |
+| Windows/Linux 分发 | 部分实现 | Windows 绿色 zip（GUI/Agent/LHM helper、内嵌图标与版本信息、WebView2 启动检测、README/第三方声明）已构建并在本机启动；Linux 已有 Ubuntu 24.04 固定容器构建、glibc/宿主库基线检查、Xvfb 启动冒烟、`build-info.json` 与不依赖 GitHub 的 `make ci-linux` 流水线，但尚无 GitHub Actions、签名、更新机制和真机验收；Windows 安装器（已提供 `.iss`，无 ISCC 未编译）、签名与干净机器验收仍待完成 | [packaging/windows](../client/packaging/windows)、[packaging/linux/build-env](../client/packaging/linux/build-env)、[build-windows-app.ps1](../client/scripts/build-windows-app.ps1) |
 
 默认 GUI 开启 Collector，Companion、Codex、音乐默认关闭；GitHub 在完成 Device Flow 登录后启用，GUI 内置本项目公开的 OAuth App Client ID（无需 Client Secret）。模块独立，采集不强制登录第三方账号，Companion 不强制注册指标 Server。当前 Collector 已是 **进程内 Core/Native**，不再管理 Telegraf 子进程。
 
@@ -181,7 +181,7 @@ make build
 ./bin/monitor-agent --collector-scan
 ```
 
-macOS 应用构建入口为 `cd client && make build-app-darwin`，生成 `client/build/ESP32 Monitor.app`；脚本构建并嵌入前端、Agent与播放桥接库，执行本地签名。该入口不等于已有公证安装包。Windows 构建入口为 `cd client && powershell -ExecutionPolicy Bypass -File scripts/build-windows-app.ps1`，生成 `client/build/windows/ESP32-Monitor/` 与 `ESP32-Monitor-<version>-windows-amd64.zip`；需 Go、Node.js、.NET SDK 与 windres（无 windres 时使用已生成的 `.syso`），未安装 Inno Setup 时跳过安装器。纯Agent可通过 `--collector` 及私有状态目录运行；真实上传需先得到v2 Server签发的Token，GUI优先走验证码注册。
+macOS 应用构建入口为 `cd client && make build-app-darwin`，生成 `client/build/ESP32 Monitor.app`；脚本构建并嵌入前端、Agent与播放桥接库，执行本地签名。该入口不等于已有公证安装包。Linux 发布构建入口为 `cd client && make build-appimage-linux-repro`，在固定的 Ubuntu 24.04 容器内生成 AppImage，并用 `make check-linux-baseline` 校验 glibc/GTK/WebKit 基线；`make build-appimage-linux` 仅用于宿主快速迭代；`make ci-linux` 在同一容器内执行 vet、短测试、前端测试、打包、基线/布局检查和 Xvfb 冒烟（目前未接 GitHub Actions，可在本机或任意 runner 上运行）。Windows 构建入口为 `cd client && powershell -ExecutionPolicy Bypass -File scripts/build-windows-app.ps1`，生成 `client/build/windows/ESP32-Monitor/` 与 `ESP32-Monitor-<version>-windows-amd64.zip`；需 Go、Node.js、.NET SDK 与 windres（无 windres 时使用已生成的 `.syso`），未安装 Inno Setup 时跳过安装器。纯Agent可通过 `--collector` 及私有状态目录运行；真实上传需先得到v2 Server签发的Token，GUI优先走验证码注册。
 
 可选模块参数：GitHub使用 `--github-login --github-client-id <public-id>` 或 `--github-user <login>`；额度用 `--codex`，任务用 `--codex-task-adapter auto`，可通过 `--codex-thread <id>` 指定会话；GUI启用Codex时自动传入任务观察参数。自动模式优先只读本地桌面状态库中的未归档用户会话ID，排除内部审查和子任务，不读取任务正文；没有状态库时回退会话索引，桌面状态不可用时不推断任务空闲。Windows 使用同用户校验的命名管道；本次状态库筛选改动仍需真实 Windows 桌面端验收。播放用 `--music`；LAN上位机用 `--companion --companion-ip <local-ip>`。完整参数以 [Agent参数表](../client/internal/agent/options.go) 为准。
 
