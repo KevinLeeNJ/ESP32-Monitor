@@ -30,7 +30,7 @@ Linux 并非从零开始：MPRIS 音乐、原生采集（`/proc`、`/sys`、gops
 |---|---|---|---|---|
 | P0 | 构建与运行 | Windows WebView2；macOS WKWebView | GTK4 + WebKitGTK 6.0；发布构建已固定到 Ubuntu 24.04 容器（glibc 2.39、GTK 4.14、WebKitGTK 6.0），支持 Ubuntu 24.04+/Debian 13+；Debian 12/Ubuntu 22.04 无 WebKitGTK 6.0，不支持 | 已提供 `build-appimage-linux-repro`、`check-linux-baseline`、Xvfb 冒烟和 `make ci-linux`；仍需真机验收 |
 | P0 | CI 与验收 | 手工 Windows/macOS 打包 | 已有不依赖 GitHub 的 `make ci-linux`：Docker 内 vet、短测试、前端测试、AppImage 构建、基线/布局检查和 Xvfb 冒烟；未接 GitHub Actions | 按需接入 GitHub Actions 或其他托管 runner；补签名与真实桌面验收 |
-| P0 | 运行时依赖 | WebView2 运行时可安装；macOS 自带 | 需 GTK4、WebKitGTK 6.0、bubblewrap、xdg-dbus-proxy；容器/未启用 user namespace 时沙箱启动失败 | 启动前检测并给出可操作提示；完善 README/AppImage 提示 |
+| P0 | 运行时依赖 | WebView2 运行时可安装；macOS 自带 | 需 GTK4、WebKitGTK 6.0、bubblewrap、xdg-dbus-proxy；容器/未启用 user namespace 时沙箱启动失败 | 启动前检查缺失运行库、沙箱工具和 user namespace：缺运行库用桌面弹窗只显示原因并停止；仅沙箱不可用时先尝试 `distrobox-host-exec`/`flatpak-spawn` 改在宿主桌面启动，否则弹警告后以关闭沙箱方式启动。采集类依赖不阻断启动，继续只写在 README |
 | P0 | Agent 权限与采集 | 提权 Agent + LHM/PawnIO/WMI | Linux 为同用户 managed Agent，无提权 helper；SMART 依赖 UDisks2、电量依赖 UPower、GPU 仅 `nvtop`（NVIDIA） | 明确各指标的宿主依赖；增加缺失工具提示；评估 AMD/Intel GPU 与风扇/电压 |
 | P0 | 串口 | COM 端口即插即用 | `/dev/ttyACM*`/`ttyUSB*` 需 `dialout` 权限；无 udev 规则 | 检测权限失败并提示 `dialout`/udev；文档化 |
 | P1 | GitHub 凭据 | Credential Manager / Keychain | 依赖已解锁的 Secret Service；无文件回退，headless 环境不可用 | 增加明确错误提示；评估加密文件回退 |
@@ -45,7 +45,7 @@ Linux 并非从零开始：MPRIS 音乐、原生采集（`/proc`、`/sys`、gops
 ## 下一步（Linux 优先）
 
 1. **P0 Linux CI**：`make ci-linux` 已在本机跑通（vet、短测试、前端测试、AppImage 构建、基线/布局检查、Xvfb 冒烟）；剩余工作是按需接入 GitHub Actions 或其他托管 runner，并补签名与真实桌面验收。
-2. **P0 依赖与权限**：对 GTK/WebKit、bubblewrap、xdg-dbus-proxy、UDisks2、UPower、nvtop、Secret Service、串口 `dialout` 做启动检测和可操作提示。
+2. **P0 依赖与权限**：启动阻断检查已加入 AppRun：缺 GTK/WebKit 运行库时弹窗只显示原因并停止；仅沙箱不可用时先尝试宿主桌面重启，否则弹警告后关闭 WebKit 沙箱启动。采集类依赖继续只记录在 README，待真机验收确认提示是否足够。
 3. **P0 采集与音乐验收**：在真实 Linux 桌面验证 CPU/内存/磁盘/网络/电量/GPU、MPRIS 播放与串口/LAN；补 live collector 测试。
 4. **P1 平台覆盖**：KDE/非 GNOME 代理、无托盘桌面、无 Secret Service 的降级路径；评估 Flatpak/deb。
 5. **固件遗留**：天气 DNS 抓包与实板重试；Devices 内存修复在 LAN/Serial/生产模式复测；LAN 异常、UI 来源续租、72 小时长稳；Windows 真机验收按需恢复。

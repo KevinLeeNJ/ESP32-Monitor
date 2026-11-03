@@ -34,6 +34,16 @@ their dependencies, graphics drivers and the tools above are provided by the
 host. Project, asset and third-party license texts are inside the AppImage
 under /usr/share/doc/esp32-monitor/.
 
+Before opening a window the AppImage checks the dependencies that would
+otherwise prevent startup: the GTK4/WebKitGTK 6.0 runtime libraries,
+bubblewrap, xdg-dbus-proxy and whether unprivileged user namespaces are
+allowed. Missing runtime libraries stop startup with the reason in a desktop
+dialog. If only the WebKit sandbox is unavailable, the AppImage first tries
+to relaunch on the host desktop through distrobox-host-exec or flatpak-spawn;
+otherwise it warns and starts with the WebKit sandbox disabled. Collector-only
+dependencies (udisks2, upower, nvtop, Secret Service and serial port
+permissions) are documented above and never block startup.
+
 Release builds are made in a pinned Ubuntu 24.04 LTS container (glibc 2.39,
 GTK 4.14, WebKitGTK 6.0). Each artifact records its toolchain in
 /usr/share/doc/esp32-monitor/build-info.json. The AppImage uses the host's
