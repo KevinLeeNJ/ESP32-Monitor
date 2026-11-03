@@ -4,9 +4,10 @@ import re
 import subprocess
 import sys
 import tempfile
+import host_port
 
 root = Path(__file__).resolve().parents[2] / 'firmware'
-src = (root / 'components/firmware/monitor_pairing_discovery.c').read_text()
+src = (root / 'components/firmware/monitor_pairing_discovery.c').read_text(encoding='utf-8')
 def function(name):
     match = re.search(r'^static bool ' + name + r'\(', src, re.M)
     assert match
@@ -63,7 +64,9 @@ int main(void) {
 with tempfile.TemporaryDirectory() as tmp:
     path = Path(tmp) / 'test.c'
     path.write_text(prefix + function('match_offer') + function('match_paired_offer') + tests)
-    subprocess.run([sys.argv[1], '-std=c11', '-Wall', '-Wextra', '-Werror',
+    binary = host_port.binary(tmp)
+    subprocess.run([host_port.cc(sys.argv[1] if len(sys.argv) > 1 else None), '-std=c11', '-Wall', '-Wextra', '-Werror',
                     '-I'+str(root/'src/companion'), '-I'+str(root/'third_party/nanopb'),
-                    str(path), '-o', str(Path(tmp)/'test')], check=True)
-    subprocess.run([str(Path(tmp)/'test')], check=True)
+                    '-I'+str(root/'tests/fakes'),
+                    str(path), '-o', str(binary), *host_port.winsock_libraries()], check=True)
+    host_port.run(binary)

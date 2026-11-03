@@ -3,6 +3,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import host_port
 
 root = pathlib.Path(__file__).resolve().parents[2]
 source = root / 'firmware'
@@ -92,10 +93,11 @@ int main(void) {
  assert(!monitor_pairing_identity(b) && !strcmp(a,b)); assert(!monitor_pairing_store_revoke()); return 0;
 }
 ''')
-    cmd = [sys.argv[1], '-std=c11', '-D_POSIX_C_SOURCE=200809L', '-Wall', '-Wextra', '-Werror',
+    binary = host_port.binary(p)
+    cmd = [host_port.cc(sys.argv[1] if len(sys.argv)>1 else None), '-std=c11', '-D_POSIX_C_SOURCE=200809L', '-Wall', '-Wextra', '-Werror',
            '-I'+str(p), '-I'+str(source/'components/firmware'), '-I'+str(source/'src/companion'),
            '-I'+str(source/'third_party/nanopb'), str(p/'test.c'),
            str(source/'components/firmware/monitor_pairing_store.c'), str(source/'src/companion/monitor_pairing_code.c'),
-           '-o', str(p/'test')]
+           '-o', str(binary)]
     subprocess.run(cmd, check=True)
-    subprocess.run([str(p/'test')], check=True)
+    host_port.run(binary)

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -166,7 +167,12 @@ func Read(path string) ([]byte, error) {
 	if err != nil {
 		return nil, errors.New("cannot stat configuration")
 	}
-	if !st.Mode().IsRegular() || st.Mode().Perm() != 0600 {
+	if !st.Mode().IsRegular() {
+		return nil, errors.New("configuration must be a regular file with permission 0600")
+	}
+	// Windows does not expose Unix permission bits through FileMode. The file
+	// still lives under the user's private configuration directory.
+	if runtime.GOOS != "windows" && st.Mode().Perm() != 0600 {
 		return nil, errors.New("configuration must be a regular file with permission 0600")
 	}
 	b, err := os.ReadFile(path)
@@ -237,13 +243,15 @@ func Save(path string, c Config, original []byte) error {
 	if err = os.Rename(f.Name(), path); err != nil {
 		return errors.New("cannot replace configuration")
 	}
-	d, err := os.Open(dir)
-	if err != nil {
-		return errors.New("cannot sync configuration directory")
-	}
-	defer d.Close()
-	if err = d.Sync(); err != nil {
-		return errors.New("cannot sync configuration directory")
+	if runtime.GOOS != "windows" {
+		d, err := os.Open(dir)
+		if err != nil {
+			return errors.New("cannot sync configuration directory")
+		}
+		defer d.Close()
+		if err = d.Sync(); err != nil {
+			return errors.New("cannot sync configuration directory")
+		}
 	}
 	return nil
 }

@@ -54,7 +54,11 @@ static size_t wrap(esp32monitor_companion_Envelope *outer,esp32monitor_companion
     if(request){c->has_request_id=true;strcpy(c->request_id,request);} c->data.size=n;memcpy(c->data.bytes,nested,n);
     return encode(outer,out,16384);
 }
+#ifdef ESP_PLATFORM
+void monitor_test_lan_session(void)
+#else
 int main(void)
+#endif
 {
     esp32monitor_companion_Config cfg=esp32monitor_companion_Config_init_zero;
     cfg.protocol_version=1;strcpy(cfg.request_id,cfg_id);strcpy(cfg.device_id,device);strcpy(cfg.session_id,sid);
@@ -107,5 +111,7 @@ int main(void)
     assert(monitor_lan_state(s2)==MONITOR_LAN_CLOSED && !strcmp(monitor_lan_close_reason(s2),"host_revoked"));
     monitor_lan_destroy(s2);
     monitor_lan_destroy(s);free(outer);free(inner);free(bytes);
+#ifndef ESP_PLATFORM
     puts("LAN session handshake, snapshot, heartbeat, replay, timeout and goodbye passed");return 0;
+#endif
 }

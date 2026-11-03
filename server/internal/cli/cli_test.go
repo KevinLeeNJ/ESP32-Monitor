@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -154,7 +155,7 @@ func TestCLIValidationAndFirstServe(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, err := os.Stat(path)
-	if err != nil || st.Mode().Perm() != 0600 {
+	if err != nil || !st.Mode().IsRegular() || (runtime.GOOS != "windows" && st.Mode().Perm() != 0600) {
 		t.Fatal("unsafe generated config")
 	}
 	if err = Run([]string{"configure", "--config", path}, strings.NewReader(""), io.Discard, io.Discard, false, nil); err == nil {

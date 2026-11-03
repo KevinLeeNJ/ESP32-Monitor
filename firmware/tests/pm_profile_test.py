@@ -5,16 +5,49 @@ from host_harness import run
 
 root = Path(__file__).resolve().parents[2]
 directory = root / 'firmware/components/firmware'
-report = (directory / 'monitor_pm_profile_report.c').read_text()
-profile = (directory / 'monitor_pm_profile.c').read_text()
+report = (directory / 'monitor_pm_profile_report.c').read_text(encoding='utf-8')
+profile = (directory / 'monitor_pm_profile.c').read_text(encoding='utf-8')
 profile = re.sub(r'^#include[^\n]*\n', '', profile, flags=re.M)
 
 prefix = r'''
 #include <assert.h>
 #include <stdarg.h>
 #include <setjmp.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+/* MinGW has no open_memstream; back it with tmpfile and capture on fclose. */
+struct test_memstream { FILE *file; char **buffer; size_t *size; };
+static struct test_memstream test_streams[8];
+static int test_stream_count;
+static FILE *open_memstream(char **buffer, size_t *size)
+{
+    FILE *file = tmpfile();
+    if (!file) return NULL;
+    test_streams[test_stream_count++] = (struct test_memstream){file, buffer, size};
+    return file;
+}
+static int test_fclose(FILE *file)
+{
+    for (int i = 0; i < test_stream_count; ++i) {
+        if (test_streams[i].file != file) continue;
+        fseek(file, 0, SEEK_END);
+        long length = ftell(file);
+        rewind(file);
+        char *text = malloc((size_t)length + 1);
+        assert(text);
+        size_t read = fread(text, 1, (size_t)length, file);
+        text[read] = '\0';
+        *test_streams[i].buffer = text;
+        *test_streams[i].size = read;
+        test_streams[i] = test_streams[--test_stream_count];
+        return fclose(file);
+    }
+    return fclose(file);
+}
+#define fclose test_fclose
+#endif
 #define CONFIG_MONITOR_PM_PROFILE 1
 #include "monitor_pm_profile.h"
 #define CONFIG_PM_PROFILING 1

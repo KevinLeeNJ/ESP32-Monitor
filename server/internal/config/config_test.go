@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -115,11 +116,13 @@ func TestSaveAtomicPermissionsConflict(t *testing.T) {
 		t.Fatal("ignored concurrent editor")
 	}
 	lock.Close()
-	if err = os.Chmod(path, 0644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = Load(path); err == nil {
-		t.Fatal("insecure permissions accepted")
+	if runtime.GOOS != "windows" {
+		if err = os.Chmod(path, 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = Load(path); err == nil {
+			t.Fatal("insecure permissions accepted")
+		}
 	}
 }
 func TestReadMissingAndSymlink(t *testing.T) {

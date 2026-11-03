@@ -113,11 +113,14 @@ target_compile_options(monitor_lan_session_tests PRIVATE -Wall -Wextra -Werror -
 add_test(NAME monitor_lan_session_tests COMMAND monitor_lan_session_tests)
 set_tests_properties(monitor_lan_session_tests PROPERTIES TIMEOUT 30 LABELS "unit;companion")
 
-add_executable(monitor_mqtt_wire_tests "${CMAKE_CURRENT_LIST_DIR}/test_mqtt_wire.c")
-target_link_libraries(monitor_mqtt_wire_tests PRIVATE monitor_sim_core)
-target_compile_options(monitor_mqtt_wire_tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
-add_test(NAME monitor_mqtt_wire_tests COMMAND monitor_mqtt_wire_tests)
-set_tests_properties(monitor_mqtt_wire_tests PROPERTIES TIMEOUT 30 LABELS "unit;companion")
+# socketpair(AF_UNIX) is POSIX-only; the firmware target uses lwIP sockets.
+if(NOT WIN32)
+    add_executable(monitor_mqtt_wire_tests "${CMAKE_CURRENT_LIST_DIR}/test_mqtt_wire.c")
+    target_link_libraries(monitor_mqtt_wire_tests PRIVATE monitor_sim_core)
+    target_compile_options(monitor_mqtt_wire_tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+    add_test(NAME monitor_mqtt_wire_tests COMMAND monitor_mqtt_wire_tests)
+    set_tests_properties(monitor_mqtt_wire_tests PROPERTIES TIMEOUT 30 LABELS "unit;companion")
+endif()
 
 add_executable(monitor_serial_session_tests "${CMAKE_CURRENT_LIST_DIR}/test_serial_session.c")
 target_link_libraries(monitor_serial_session_tests PRIVATE monitor_sim_core)

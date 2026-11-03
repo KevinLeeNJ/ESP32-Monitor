@@ -11,7 +11,6 @@ idf_component_register(
         "../../src/companion/monitor_pairing_session.c"
         "../../src/companion/monitor_lan_session.c"
         "../../src/companion/monitor_serial_proto.c"
-        "../../src/companion/monitor_mqtt_wire.c"
         "../../src/companion/monitor_proto_strict.c"
         "../../src/companion/monitor_companion_view.c"
         "../../src/display/monitor_pack.c"

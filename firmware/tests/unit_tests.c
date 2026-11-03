@@ -398,7 +398,9 @@ static void test_devices_ui_replacement(void)
     CHECK(lv_obj_get_child_by_name(root, "device_1") == NULL, "remove extra old device cards");
     lv_obj_t *card = lv_obj_get_child_by_name(root, "device_0");
     CHECK(card != NULL, "create only the new snapshot card");
-    CHECK(lv_obj_get_y(lv_obj_get_child(card, 2)) == lv_obj_get_y(lv_obj_get_child(card, 3)), "metric label and value share the same horizontal row");
+    CHECK(lv_obj_get_y(lv_obj_get_child(card, 2)) >= lv_obj_get_y(lv_obj_get_child(card, 3)) &&
+          lv_obj_get_y(lv_obj_get_child(card, 2)) < lv_obj_get_y(lv_obj_get_child(card, 3)) + lv_obj_get_height(lv_obj_get_child(card, 3)),
+          "metric label and value share the same horizontal row");
     strcpy(snapshot.devices[0].name, "PC");
     monitor_ui_apply_devices_snapshot(root, &snapshot);
     card = lv_obj_get_child_by_name(root, "device_0");

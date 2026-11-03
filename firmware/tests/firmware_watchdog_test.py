@@ -3,10 +3,10 @@ from pathlib import Path
 import re
 
 repo = Path(__file__).resolve().parents[2]
-defaults = (repo / "firmware/sdkconfig.defaults").read_text()
-main = (repo / "firmware/main/main.c").read_text()
-weather = (repo / "firmware/components/firmware/monitor_weather.c").read_text()
-devices = (repo / "firmware/components/firmware/monitor_devices.c").read_text()
+defaults = (repo / "firmware/sdkconfig.defaults").read_text(encoding='utf-8')
+main = (repo / "firmware/main/main.c").read_text(encoding='utf-8')
+weather = (repo / "firmware/components/firmware/monitor_weather.c").read_text(encoding='utf-8')
+devices = (repo / "firmware/components/firmware/monitor_devices.c").read_text(encoding='utf-8')
 
 def enabled(name):
     assert re.search(rf"^{re.escape(name)}=y$", defaults, re.M), name

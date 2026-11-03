@@ -13,6 +13,7 @@ idf_component_register(
         "monitor_serial_crypto.c"
         "monitor_serial_service.c"
         "../../src/companion/monitor_serial_wire.c"
+        "../../src/companion/monitor_mqtt_wire.c"
         "monitor_wifi_manager.cpp"
         "monitor_clock.c"
         "monitor_sensors.c"

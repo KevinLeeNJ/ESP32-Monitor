@@ -8,11 +8,12 @@ import re
 import subprocess
 import sys
 import tempfile
+import host_port
 
 repo = Path(__file__).resolve().parents[2]
-main = (repo / 'firmware/main/main.c').read_text()
-driver = (repo / 'firmware/components/firmware/display_port.c').read_text()
-header = (repo / 'firmware/components/firmware/display_port.h').read_text()
+main = (repo / 'firmware/main/main.c').read_text(encoding='utf-8')
+driver = (repo / 'firmware/components/firmware/display_port.c').read_text(encoding='utf-8')
+header = (repo / 'firmware/components/firmware/display_port.h').read_text(encoding='utf-8')
 
 def function(source, name):
     match = re.search(r'^static [^\n]*\b' + name + r'\(|^(?:esp_err_t|bool) ' + name + r'\(', source, re.M)
@@ -353,7 +354,7 @@ int main(void) {
 with tempfile.TemporaryDirectory(prefix='monitor-animation-') as directory:
     source = Path(directory) / 'test.c'
     source.write_text(code)
-    binary = Path(directory) / 'test'
-    compiler = sys.argv[1] if len(sys.argv) > 1 else 'cc'
+    binary = host_port.binary(directory)
+    compiler = host_port.cc(sys.argv[1] if len(sys.argv) > 1 else None)
     subprocess.run([compiler, '-std=c11', '-I'+str(repo/'firmware/include'), '-Wall', '-Wextra', '-Werror', str(source), '-o', str(binary)], check=True)
-    subprocess.run([str(binary)], check=True)
+    host_port.run(binary)

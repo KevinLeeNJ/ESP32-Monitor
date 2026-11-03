@@ -3,6 +3,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import host_port
 
 root = pathlib.Path(__file__).resolve().parents[2] / 'firmware'
 with tempfile.TemporaryDirectory() as tmp:
@@ -49,6 +50,7 @@ int main(void) { esp32monitor_companion_PairRequest req=esp32monitor_companion_P
  status=200;mode=1;assert(monitor_pairing_http_exchange("192.168.1.4",18080,&req,&out)==ESP_FAIL);
  assert(monitor_pairing_http_exchange("example.com",18080,&req,&out)==ESP_ERR_INVALID_ARG);assert(calls==3); return 0; }
 ''')
-    cmd=[sys.argv[1],'-std=c11','-Wall','-Wextra','-Werror','-I'+str(p),'-I'+str(root/'components/firmware'),'-I'+str(root/'src/companion'),'-I'+str(root/'third_party/nanopb'),str(p/'test.c'),str(root/'components/firmware/monitor_pairing_http.c'),str(root/'src/companion/monitor_pairing_wire.c'),str(root/'src/companion/companion.pb.c'),*[str(root/'third_party/nanopb'/x) for x in ('pb_common.c','pb_encode.c','pb_decode.c')],'-o',str(p/'test')]
+    binary = host_port.binary(p)
+    cmd=[host_port.cc(sys.argv[1] if len(sys.argv)>1 else None),'-std=c11','-Wall','-Wextra','-Werror','-I'+str(p),'-I'+str(root/'components/firmware'),'-I'+str(root/'src/companion'),'-I'+str(root/'third_party/nanopb'),'-I'+str(root/'tests/fakes'),str(p/'test.c'),str(root/'components/firmware/monitor_pairing_http.c'),str(root/'src/companion/monitor_pairing_wire.c'),str(root/'src/companion/companion.pb.c'),*[str(root/'third_party/nanopb'/x) for x in ('pb_common.c','pb_encode.c','pb_decode.c')],'-o',str(binary),*host_port.winsock_libraries()]
     subprocess.run(cmd,check=True)
-    subprocess.run([str(p/'test')],check=True)
+    host_port.run(binary)

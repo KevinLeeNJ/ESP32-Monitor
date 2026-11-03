@@ -1,7 +1,7 @@
 """Exercise the production boot transaction across long waits and fresh timelines."""
 import sys
 from host_harness import REPO, defines, function, run
-source = (REPO/'firmware/main/main.c').read_text()
+source = (REPO/'firmware/main/main.c').read_text(encoding='utf-8')
 code = r'''
 #include <assert.h>
 #include <stdbool.h>
@@ -17,7 +17,9 @@ typedef unsigned TickType_t, UBaseType_t;
 #define ESP_LOGE(...) ((void)0)
 #define pdMS_TO_TICKS(x) (x)
 #define portTICK_PERIOD_MS 1
+#ifndef UINT32_MAX
 #define UINT32_MAX 4294967295U
+#endif
 #define MONITOR_UI_ANIMATION_FRAME_MS 32
 #define LV_NO_TIMER_READY UINT32_MAX
 static unsigned tick, priority, stage, mode_changes, idle_waits, draws, fresh_draws, scenario;
@@ -102,4 +104,4 @@ int main(void) {
     puts("Boot: long LPM idle without TWDT wake, absolute timeout, full fresh timelines after HPM settling, resume/draw errors restore LPM: PASS");
 }
 '''
-run(code, sys.argv[1] if len(sys.argv)>1 else 'cc')
+run(code, sys.argv[1] if len(sys.argv)>1 else None)

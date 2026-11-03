@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+import host_port
 
 root = Path(__file__).resolve().parents[2]
 source = root / 'firmware'
@@ -168,9 +169,9 @@ test = (test.replace('@HOST@', host)
 with tempfile.TemporaryDirectory() as tmp:
     path = Path(tmp) / 'test.c'
     path.write_text(test)
-    binary = Path(tmp) / 'test'
+    binary = host_port.binary(tmp)
     subprocess.run([
-        sys.argv[1], '-std=c11', '-Wall', '-Wextra', '-Werror',
+        host_port.cc(sys.argv[1] if len(sys.argv) > 1 else None), '-std=c11', '-Wall', '-Wextra', '-Werror',
         '-I' + str(source / 'src/companion'), '-I' + str(source / 'third_party/nanopb'),
         str(path),
         str(source / 'src/companion/monitor_serial_proto.c'),
@@ -180,4 +181,4 @@ with tempfile.TemporaryDirectory() as tmp:
         str(source / 'third_party/nanopb/pb_decode.c'),
         str(source / 'third_party/nanopb/pb_encode.c'),
         '-o', str(binary)], check=True)
-    subprocess.run([str(binary)], check=True)
+    host_port.run(binary)

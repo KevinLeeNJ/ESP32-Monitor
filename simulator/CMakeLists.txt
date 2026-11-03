@@ -36,6 +36,13 @@ if(NOT EXISTS "${CJSON_SOURCE_DIR}/cJSON.c")
     set(CJSON_SOURCE_DIR "${monitor_cjson_SOURCE_DIR}")
 endif()
 
+# monitor_mqtt_wire.c uses POSIX sockets and is covered by a POSIX-only host
+# test; Windows keeps the simulator build free of that transport.
+set(MONITOR_MQTT_WIRE_SOURCE)
+if(NOT WIN32)
+    set(MONITOR_MQTT_WIRE_SOURCE "${FIRMWARE_ROOT}/src/companion/monitor_mqtt_wire.c")
+endif()
+
 add_library(monitor_sim_core STATIC
     "${FIRMWARE_ROOT}/third_party/nanopb/pb_common.c"
     "${FIRMWARE_ROOT}/third_party/nanopb/pb_decode.c"
@@ -48,7 +55,7 @@ add_library(monitor_sim_core STATIC
     "${FIRMWARE_ROOT}/src/companion/monitor_pairing_session.c"
     "${FIRMWARE_ROOT}/src/companion/monitor_lan_session.c"
     "${FIRMWARE_ROOT}/src/companion/monitor_serial_proto.c"
-    "${FIRMWARE_ROOT}/src/companion/monitor_mqtt_wire.c"
+    ${MONITOR_MQTT_WIRE_SOURCE}
     "${FIRMWARE_ROOT}/src/companion/monitor_proto_strict.c"
     "${FIRMWARE_ROOT}/src/companion/monitor_companion_view.c"
     "${FIRMWARE_ROOT}/src/display/monitor_pack.c"

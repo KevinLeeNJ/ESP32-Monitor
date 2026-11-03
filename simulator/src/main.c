@@ -3,6 +3,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#define monitor_mkdir(path) _mkdir(path)
+#else
+#define monitor_mkdir(path) mkdir((path), 0755)
+#endif
 
 #include "monitor_render.h"
 #include "monitor_pages.h"
@@ -42,14 +48,14 @@ static int ensure_directory(const char *path)
     for(char *p = current + 1; *p != '\0'; ++p) {
         if(*p != '/') continue;
         *p = '\0';
-        if(mkdir(current, 0755) != 0 && errno != EEXIST) {
+        if(monitor_mkdir(current) != 0 && errno != EEXIST) {
             fprintf(stderr, "mkdir %s: %s\n", current, strerror(errno));
             return -1;
         }
         *p = '/';
     }
 
-    if(mkdir(current, 0755) != 0 && errno != EEXIST) {
+    if(monitor_mkdir(current) != 0 && errno != EEXIST) {
         fprintf(stderr, "mkdir %s: %s\n", current, strerror(errno));
         return -1;
     }

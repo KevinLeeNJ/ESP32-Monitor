@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import zlib
+import host_port
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[2]
@@ -271,9 +272,9 @@ test = (test.replace('@HOST_ID@', host)
 with tempfile.TemporaryDirectory() as tmp:
     path = Path(tmp) / 'test.c'
     path.write_text(test)
-    binary = Path(tmp) / 'test'
-    subprocess.run([sys.argv[1], '-std=c11', '-Wall', '-Wextra', '-Werror',
+    binary = host_port.binary(tmp)
+    subprocess.run([host_port.cc(sys.argv[1] if len(sys.argv) > 1 else None), '-std=c11', '-Wall', '-Wextra', '-Werror',
                     '-I' + str(source / 'src/companion'), '-I' + str(source / 'third_party/nanopb'),
                     str(path), str(source / 'src/companion/monitor_serial_wire.c'),
                     '-o', str(binary)], check=True)
-    subprocess.run([str(binary)], check=True)
+    host_port.run(binary)

@@ -393,7 +393,11 @@ static void cleared(void)
     assert(view.devices.count == 0);
 }
 
+#ifdef ESP_PLATFORM
+void monitor_test_companion_view(void)
+#else
 int main(void)
+#endif
 {
     github_full_week();
     github_partial_week();
@@ -403,6 +407,8 @@ int main(void)
     devices_lease();
     heartbeat_time();
     cleared();
+#ifndef ESP_PLATFORM
     puts("companion view conversion tests passed");
     return 0;
+#endif
 }

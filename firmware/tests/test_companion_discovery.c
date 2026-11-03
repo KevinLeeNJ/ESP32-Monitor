@@ -35,7 +35,12 @@ static bool test_hmac(const uint8_t key[32], const uint8_t *data, size_t len, ui
     return test_hash(buffer, 96, digest);
 }
 
+/* Board tests reuse the same assertions under the Unity runner. */
+#ifdef ESP_PLATFORM
+void monitor_test_companion_discovery(void)
+#else
 int main(void)
+#endif
 {
     esp32monitor_companion_Envelope env = esp32monitor_companion_Envelope_init_zero;
     env.wire_version = 2;
@@ -224,5 +229,7 @@ int main(void)
     decoded.nonce[42] = 'B'; /* nonzero base64url padding bits */
     assert(!monitor_discovery_announce(&decoded, "12345678-1234-1234-1234-123456789abc",
                                       "Monitor", "1.0", decoded.nonce, bytes, sizeof bytes, &written));
+#ifndef ESP_PLATFORM
     return 0;
+#endif
 }

@@ -1,7 +1,7 @@
 """Actual station event handler, scan backoff and stop lifecycle with SDK fakes."""
 import sys
 from host_harness import REPO, defines, function, run
-source=(REPO/'firmware/components/esp_wifi_connect/wifi_station.cc').read_text()
+source=(REPO/'firmware/components/esp_wifi_connect/wifi_station.cc').read_text(encoding='utf-8')
 code=r'''
 #include <cassert>
 #include <cstdint>
@@ -122,4 +122,4 @@ int main() {
     puts("Station five-retry limit, disconnect notification coalescing, 10/20/40/80/160/300s capped backoff, custom cap, AP switching, success reset and stop cleanup: PASS");
 }
 '''
-run(code,sys.argv[1] if len(sys.argv)>1 else 'c++',cpp=True)
+run(code,sys.argv[1] if len(sys.argv)>1 else None,cpp=True)

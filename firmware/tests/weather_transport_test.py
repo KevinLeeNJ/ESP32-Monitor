@@ -5,7 +5,7 @@ import random
 import sys
 from host_harness import REPO, defines, run
 
-source = (REPO/'firmware/components/firmware/monitor_weather.c').read_text()
+source = (REPO/'firmware/components/firmware/monitor_weather.c').read_text(encoding='utf-8')
 plain = b'{"code":"200"}'
 compressed = gzip.compress(plain, mtime=0)
 header = bytearray(compressed[:10])
@@ -221,4 +221,4 @@ zlib_dir = REPO/'firmware/managed_components/espressif__zlib/zlib'
 sources = ['adler32.c', 'crc32.c', 'inffast.c', 'inflate.c', 'inftrees.c', 'zutil.c']
 libraries = (['-I'+str(zlib_dir), *[str(zlib_dir/name) for name in sources]]
              if (zlib_dir/'zlib.h').is_file() else ['-lz'])
-run(code, sys.argv[1] if len(sys.argv)>1 else 'cc', libraries=libraries)
+run(code, sys.argv[1] if len(sys.argv)>1 else None, libraries=libraries)

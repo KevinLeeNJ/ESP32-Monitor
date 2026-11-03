@@ -1,7 +1,7 @@
 """Exercise the real SNTP worker's initial-time and RTC-restored notifications."""
 from host_harness import REPO, function, run
 
-source = (REPO / 'firmware/components/firmware/monitor_clock.c').read_text()
+source = (REPO / 'firmware/components/firmware/monitor_clock.c').read_text(encoding='utf-8')
 code = r'''
 #include <assert.h>
 #include <stdbool.h>

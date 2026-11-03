@@ -4,9 +4,10 @@ import re
 import subprocess
 import sys
 import tempfile
+import host_port
 
 repo = Path(__file__).resolve().parents[2]
-source = (repo / 'firmware/components/firmware/monitor_sensors.c').read_text()
+source = (repo / 'firmware/components/firmware/monitor_sensors.c').read_text(encoding='utf-8')
 
 def function(name):
     match = re.search(r'^static [^\n]*\b' + name + r'\(', source, re.M)
@@ -125,10 +126,10 @@ int main(void) {
 with tempfile.TemporaryDirectory(prefix='monitor-sensors-') as directory:
     unit = Path(directory) / 'test.c'
     unit.write_text(code)
-    binary = Path(directory) / 'test'
-    compiler = sys.argv[1] if len(sys.argv) > 1 else 'cc'
+    binary = host_port.binary(directory)
+    compiler = host_port.cc(sys.argv[1] if len(sys.argv) > 1 else None)
     subprocess.run([compiler, '-std=c11', '-Wall', '-Wextra', '-Werror',
                     '-I'+str(repo/'firmware/tests/fakes'),
                     '-I'+str(repo/'firmware/components/firmware'),
                     str(unit), '-lm', '-o', str(binary)], check=True)
-    subprocess.run([str(binary)], check=True, timeout=5)
+    host_port.run(binary, timeout=5)

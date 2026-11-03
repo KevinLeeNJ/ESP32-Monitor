@@ -3,9 +3,10 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import host_port
 
 repo = Path(__file__).resolve().parents[2]
-source = (repo / 'firmware/components/firmware/monitor_wifi_manager.cpp').read_text()
+source = (repo / 'firmware/components/firmware/monitor_wifi_manager.cpp').read_text(encoding='utf-8')
 
 def function(name):
     match = re.search(r'^static void (?:IRAM_ATTR )?' + name + r'\(', source, re.M)
@@ -225,6 +226,7 @@ with tempfile.TemporaryDirectory() as temp:
                                      f'#define CONFIG_MONITOR_PM_PROFILE {enabled}')
         unit.write_text(prefix + config + function('button_gpio_isr') + function('configure_wake_levels') +
                         function('button_task') + tests.replace('int main()', 'static void irq_main()') + task_tests)
-        subprocess.run(['c++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-I', str(repo / 'firmware/components/firmware'), str(unit), '-o', str(Path(temp) / 'test')], check=True)
-        subprocess.run([str(Path(temp) / 'test')], check=True)
+        binary = host_port.binary(temp)
+        subprocess.run([host_port.cxx(), '-std=c++17', '-Wall', '-Wextra', '-Werror', '-I', str(repo / 'firmware/components/firmware'), str(unit), '-o', str(binary)], check=True)
+        host_port.run(binary)
 print('Button IRQ and gesture regression passed with profiling enabled/disabled: bounce, rearm, KEY/chord priority, repeat holds, startup holds and tick wrap')

@@ -60,7 +60,11 @@ static void heartbeat(esp32monitor_companion_Envelope *e,uint32_t seq,uint32_t l
     h->has_config_epoch=true;strcpy(h->config_epoch,epoch);h->has_config_revision=true;h->config_revision=1;
 }
 
+#ifdef ESP_PLATFORM
+void monitor_test_serial_session(void)
+#else
 int main(void)
+#endif
 {
     esp32monitor_companion_Config cfg=esp32monitor_companion_Config_init_zero;
     cfg.protocol_version=1;strcpy(cfg.request_id,request);strcpy(cfg.device_id,device);strcpy(cfg.session_id,sid);
@@ -97,5 +101,7 @@ int main(void)
     assert(monitor_lan_goodbye(s,"pairing_revoked",103));
     assert(goodbyes==1 && monitor_lan_state(s)==MONITOR_LAN_CLOSED);
     monitor_lan_destroy(s);
+#ifndef ESP_PLATFORM
     puts("Serial session config/ack/snapshot/heartbeat/goodbye passed");return 0;
+#endif
 }

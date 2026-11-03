@@ -2,6 +2,18 @@
  * Only the SDK boundary is faked, so signatures and error paths compile too. */
 #include "unity.h"
 #include <string.h>
+#ifdef _WIN32
+#include <time.h>
+static struct tm *monitor_test_gmtime_r(const time_t *value, struct tm *out)
+{
+    struct tm *result = gmtime(value);
+    if (!result) return NULL;
+    *out = *result;
+    return out;
+}
+#define gmtime_r monitor_test_gmtime_r
+#define timegm _mkgmtime
+#endif
 #include "../components/firmware/monitor_rtc_pcf85063.c"
 
 static uint8_t registers[16];

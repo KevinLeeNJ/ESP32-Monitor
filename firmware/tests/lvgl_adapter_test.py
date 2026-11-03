@@ -7,10 +7,11 @@ import re
 import subprocess
 import sys
 import tempfile
+import host_port
 
 repo = Path(__file__).resolve().parents[2]
-backend = (repo / "firmware/components/firmware/monitor_lvgl.c").read_text()
-main = (repo / "firmware/main/main.c").read_text()
+backend = (repo / "firmware/components/firmware/monitor_lvgl.c").read_text(encoding='utf-8')
+main = (repo / "firmware/main/main.c").read_text(encoding='utf-8')
 
 
 def function(source, name):
@@ -114,8 +115,8 @@ int main(void) {
 '''
 with tempfile.TemporaryDirectory(prefix="monitor-lvgl-adapter-") as directory:
     source = Path(directory) / "test.c"
-    binary = Path(directory) / "test"
+    binary = host_port.binary(directory)
     source.write_text(code)
-    compiler = sys.argv[1] if len(sys.argv) > 1 else "cc"
+    compiler = host_port.cc(sys.argv[1] if len(sys.argv) > 1 else None)
     subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-I"+str(repo/"firmware/include"), str(source), "-o", str(binary)], check=True)
-    subprocess.run([str(binary)], check=True)
+    host_port.run(binary)

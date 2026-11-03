@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 
 	"esp32-monitor/server/internal/metrics"
 	_ "modernc.org/sqlite"
@@ -51,7 +53,13 @@ func Open(ctx context.Context, path string, ids []string, now int64) (*Store, er
 	if err != nil {
 		return nil, err
 	}
-	u := url.URL{Scheme: "file", Path: abs}
+	// SQLite parses a file: URI's first path segment as an authority. Windows
+	// drive paths therefore need a leading slash so C:\... becomes file:///C:/...
+	dsnPath := filepath.ToSlash(abs)
+	if runtime.GOOS == "windows" && len(dsnPath) > 1 && dsnPath[1] == ':' && !strings.HasPrefix(dsnPath, "/") {
+		dsnPath = "/" + dsnPath
+	}
+	u := url.URL{Scheme: "file", Path: dsnPath}
 	q := url.Values{}
 	for _, p := range []string{"journal_mode(WAL)", "foreign_keys(1)", "busy_timeout(5000)"} {
 		q.Add("_pragma", p)

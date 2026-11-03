@@ -4,8 +4,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import host_port
 repo = Path(__file__).resolve().parents[2]
-source = (repo/'firmware/components/firmware/display_port.c').read_text()
+source = (repo/'firmware/components/firmware/display_port.c').read_text(encoding='utf-8')
 
 def function(name):
     match = re.search(r'^(?:static )?esp_err_t '+name+r'\(', source, re.M)
@@ -150,7 +151,7 @@ int main(void) {
 '''
 with tempfile.TemporaryDirectory(prefix='monitor-diff-') as directory:
     unit=Path(directory)/'test.c';unit.write_text(code)
-    binary=Path(directory)/'test'
-    compiler=sys.argv[1] if len(sys.argv)>1 else 'cc'
+    binary=host_port.binary(directory)
+    compiler=host_port.cc(sys.argv[1] if len(sys.argv)>1 else None)
     subprocess.run([compiler,'-std=c11','-Wall','-Wextra','-Werror','-I'+str(repo/'firmware/include'),str(repo/'firmware/src/display/monitor_damage.c'),str(unit),'-o',str(binary)],check=True)
-    subprocess.run([str(binary)],check=True,timeout=5)
+    host_port.run(binary,timeout=5)

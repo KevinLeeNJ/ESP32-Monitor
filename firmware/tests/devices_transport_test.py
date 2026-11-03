@@ -4,9 +4,10 @@ import subprocess
 import sys
 import re
 import tempfile
+import host_port
 
 repo = Path(__file__).resolve().parents[2]
-source = (repo / 'firmware/components/firmware/monitor_devices.c').read_text()
+source = (repo / 'firmware/components/firmware/monitor_devices.c').read_text(encoding='utf-8')
 start = source.index('typedef struct {\n    int64_t deadline;')
 end = source.index('static void devices_task(', start)
 production = source[start:end]
@@ -233,6 +234,7 @@ int main(void) {
 with tempfile.TemporaryDirectory(prefix='monitor-devices-') as directory:
     c = Path(directory) / 'transport.c'
     c.write_text(prefix.replace('__REQUEST_DEFINE__', re.search(r'^#define REQUEST_US[^\n]*', source, re.M)[0]) + '\n#define malloc test_malloc\n' + production + tests)
-    binary = Path(directory) / 'transport'
-    subprocess.run([sys.argv[1] if len(sys.argv)>1 else 'cc', '-std=c11', '-Wall', '-Wextra', '-Werror', str(c), '-o', str(binary)], check=True)
-    subprocess.run([str(binary)], check=True)
+    binary = host_port.binary(directory, 'transport')
+    compiler = host_port.cc(sys.argv[1] if len(sys.argv)>1 else None)
+    subprocess.run([compiler, '-std=c11', '-Wall', '-Wextra', '-Werror', '-Wno-misleading-indentation', str(c), '-o', str(binary)], check=True)
+    host_port.run(binary)

@@ -1,7 +1,7 @@
 """Exercise the Client-time fallback priority against RTC and Wi-Fi state."""
 from host_harness import REPO, function, run
 
-source = (REPO / 'firmware/components/firmware/monitor_clock.c').read_text()
+source = (REPO / 'firmware/components/firmware/monitor_clock.c').read_text(encoding='utf-8')
 code = r'''
 #include <assert.h>
 #include <stdbool.h>
@@ -13,7 +13,9 @@ code = r'''
 #define TAG "clock"
 #define ESP_LOGI(...) ((void)0)
 typedef int esp_err_t;
+#ifndef _WIN32
 struct timeval { int64_t tv_sec; int64_t tv_usec; };
+#endif
 static int test_settimeofday(const struct timeval *tv, void *tz);
 static int test_gettimeofday(struct timeval *tv, void *tz);
 #define settimeofday test_settimeofday

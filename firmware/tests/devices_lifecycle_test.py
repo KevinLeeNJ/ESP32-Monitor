@@ -1,7 +1,7 @@
 """Run the actual Devices worker loop with virtual time, NVS and request outcomes."""
 import sys
 from host_harness import REPO, defines, function, run
-source=(REPO/'firmware/components/firmware/monitor_devices.c').read_text()
+source=(REPO/'firmware/components/firmware/monitor_devices.c').read_text(encoding='utf-8')
 state=source[source.index('typedef struct { char url[193]'):source.index('typedef struct {\n    int64_t deadline;')]
 code=r'''
 #include <assert.h>
@@ -140,4 +140,4 @@ int main(void){
     puts("Devices worker: missing/invalid config, offline/HTTPS clock gate, fixed polling/no spin, first/unchanged data, 90s stale expiry, auth failure, recovery, disconnect/config races and configuration removal: PASS");
 }
 '''
-run(code,sys.argv[1] if len(sys.argv)>1 else 'cc',cjson=sys.argv[2] if len(sys.argv)>2 else REPO/'firmware/managed_components/espressif__cjson/cJSON')
+run(code,sys.argv[1] if len(sys.argv)>1 else None,cjson=sys.argv[2] if len(sys.argv)>2 else REPO/'firmware/managed_components/espressif__cjson/cJSON')
