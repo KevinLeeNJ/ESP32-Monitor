@@ -1,4 +1,85 @@
 #!/bin/sh
-set -e
+# Report missing host dependencies through a desktop dialog: a GUI user who
+# double-clicks the AppImage will not look at the console for the reason.
+set -eu
 APPDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$APPDIR/usr/bin/monitor-client" "$@"
+client="$APPDIR/usr/bin/monitor-client"
+
+notify() {
+  title=$1
+  body=$2
+  kind=${3:-error}
+  # Always print first: desktop dialogs may be unavailable, and terminal users
+  # should still see the reason.
+  printf '\n%s\n%s\n' "$title" "$body" >&2
+  for tool in zenity kdialog xmessage gxmessage; do
+    if command -v "$tool" >/dev/null 2>&1; then
+      case $tool in
+        zenity) if zenity "--$kind" --title "$title" --text "$body" 2>/dev/null; then return 0; fi ;;
+        kdialog) if kdialog --title "$title" "--$kind" "$body" 2>/dev/null; then return 0; fi ;;
+        xmessage) if xmessage -center -title "$title" "$body" 2>/dev/null; then return 0; fi ;;
+        gxmessage) if gxmessage -center -title "$title" "$body" 2>/dev/null; then return 0; fi ;;
+      esac
+    fi
+  done
+  command -v notify-send >/dev/null 2>&1 && notify-send -u critical "$title" "$body" 2>/dev/null || true
+}
+
+fail() {
+  notify 'ESP32 Monitor cannot start' "$1" error
+  exit 1
+}
+
+warn() {
+  notify 'ESP32 Monitor warning' "$1" warning
+}
+
+missing_libs=$(ldd "$client" 2>/dev/null | awk '/not found/ {print $1}' | sort -u || true)
+if [ -n "$missing_libs" ]; then
+  fail "Missing system libraries:
+$missing_libs"
+fi
+
+# Some desktop containers expose a launcher for the host session. Reuse it so
+# the AppImage starts on the host desktop instead of failing inside the
+# container, where WebKit cannot sandbox its web process.
+try_host_desktop() {
+  [ -n "${APPIMAGE:-}" ] && [ -x "$APPIMAGE" ] || return 1
+  if command -v distrobox-host-exec >/dev/null 2>&1; then
+    if distrobox-host-exec "$APPIMAGE" "$@" >/dev/null 2>&1; then return 0; fi
+  fi
+  if command -v flatpak-spawn >/dev/null 2>&1; then
+    if flatpak-spawn --host "$APPIMAGE" "$@" >/dev/null 2>&1; then return 0; fi
+  fi
+  return 1
+}
+
+# WebKit's web process is sandboxed with bubblewrap and xdg-dbus-proxy. If the
+# sandbox cannot start the GUI never appears, so try the host desktop and then
+# fall back to an unsandboxed launch with a warning instead of blocking.
+if [ "${WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS:-}" != "1" ]; then
+  missing_tools=
+  for tool in bwrap xdg-dbus-proxy; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      missing_tools="${missing_tools:+$missing_tools }$tool"
+    fi
+  done
+  reason=
+  if [ -n "$missing_tools" ]; then
+    reason="missing sandbox tools: $missing_tools"
+  elif ! bwrap --unshare-user --uid 0 --gid 0 --ro-bind / / /bin/true >/dev/null 2>&1; then
+    if [ -f /.dockerenv ] || [ -f /run/.containerenv ] || [ -n "${container:-}" ]; then
+      reason="unprivileged user namespaces are disabled in this container"
+    else
+      reason="unprivileged user namespaces are disabled"
+    fi
+  fi
+  if [ -n "$reason" ]; then
+    if try_host_desktop; then exit 0; fi
+    warn "WebKit sandbox unavailable: $reason
+Starting with the WebKit sandbox disabled."
+    export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+  fi
+fi
+
+exec "$client" "$@"

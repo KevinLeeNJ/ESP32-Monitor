@@ -32,6 +32,9 @@ with tempfile.TemporaryDirectory(prefix="esp32-appimage-test-") as tmp:
     client.chmod(0o755)
     env = os.environ.copy()
     env.update(DISPLAY=":1", LD_LIBRARY_PATH="/host")
+    # The fixture is not a real AppImage and CI containers often lack the
+    # WebKit sandbox helpers; this test only covers launch environment passing.
+    env["WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS"] = "1"
     env.pop("ESP32_MONITOR_SKIP_DESKTOP_INTEGRATION", None)
     for backend in (None, "wayland"):
         if backend is None:
