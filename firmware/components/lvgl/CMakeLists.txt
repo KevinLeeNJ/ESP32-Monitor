@@ -2,6 +2,9 @@
 # component system build it with the same lv_conf.h used by the host runner.
 set(LVGL_ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../third_party/lvgl")
 include("${LVGL_ROOT_DIR}/env_support/cmake/esp.cmake")
+if(NOT CMAKE_SCRIPT_MODE_FILE)
+    target_sources(${COMPONENT_LIB} PRIVATE "monitor_lv_mem.c")
+endif()
 
 # IDF's Xtensa port leaves portFORCE_INLINE undefined; atomic.h then emits
 # unused static functions. Supply the inline fallback only for this adapter.

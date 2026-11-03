@@ -42,9 +42,10 @@ typedef struct {
 } activity_state_t;
 
 typedef struct {
-    lv_obj_t *track, *fill;
-    int width;
-    int fill_px; /* Last applied fill width; skips redundant geometry work. */
+    lv_obj_t *segments[10];
+    lv_obj_t *separators[9];
+    int filled;
+    bool inverted;
 } activity_bar_t;
 
 typedef struct {
@@ -168,28 +169,36 @@ static void set_music_label(lv_obj_t *obj, const char *value)
 
 static activity_bar_t progress_create(lv_obj_t *parent, int x, int y, int width, int percent, bool inv)
 {
-    activity_bar_t bar = {.width = width - 4};
-    bar.track = box(parent, x, y, width, 6, 2, false, true, inv);
+    activity_bar_t bar = {.inverted = inv};
     if(percent > 100) percent = 100;
-    int fill = percent > 0 ? bar.width * percent / 100 : 0;
-    bar.fill = box(bar.track, 2, 1, fill > 0 ? fill : 1, 4, 0, true, false, inv);
-    if(!fill) lv_obj_add_flag(bar.fill, LV_OBJ_FLAG_HIDDEN);
-    bar.fill_px = fill;
+    bar.filled = percent > 0 ? (percent + 9) / 10 : 0;
+    lv_obj_t *track = box(parent, x, y, width, 9, 0, false, true, inv);
+    for(int i = 0; i < 10; i++) {
+        int left = i * (width - 2) / 10;
+        int right = (i + 1) * (width - 2) / 10;
+        bar.segments[i] = box(track, left, 0, right - left, 7, 0,
+                              i < bar.filled, false, inv);
+        if(i < 9)
+            bar.separators[i] = box(track, right - 1, 0, 1, 7, 0,
+                                    i >= bar.filled, false, inv);
+    }
     return bar;
 }
 
 static void progress_apply(activity_bar_t *bar, int percent)
 {
     if(percent > 100) percent = 100;
-    int fill = percent > 0 ? bar->width * percent / 100 : 0;
-    if(fill == bar->fill_px) return;
-    bar->fill_px = fill;
-    if(fill > 0) {
-        lv_obj_set_width(bar->fill, fill);
-        lv_obj_clear_flag(bar->fill, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(bar->fill, LV_OBJ_FLAG_HIDDEN);
+    int filled = percent > 0 ? (percent + 9) / 10 : 0;
+    if(filled == bar->filled) return;
+    for(int i = 0; i < 10; i++) {
+        if((i < filled) != (i < bar->filled))
+            lv_obj_set_style_bg_color(bar->segments[i],
+                lv_color_hex(((i < filled) != bar->inverted) ? BLACK : WHITE), 0);
+        if(i < 9 && (i < filled) != (i < bar->filled))
+            lv_obj_set_style_bg_color(bar->separators[i],
+                lv_color_hex(((i >= filled) != bar->inverted) ? BLACK : WHITE), 0);
     }
+    bar->filled = filled;
 }
 
 static void format_time(char *out, size_t size, int seconds)

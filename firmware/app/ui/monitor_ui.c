@@ -259,17 +259,44 @@ static lv_obj_t *make_ink(lv_obj_t *parent, int32_t x, int32_t y, int32_t width,
     return ink;
 }
 
+static void resize_bar(lv_obj_t *track, int32_t width)
+{
+    lv_obj_set_width(track, width);
+    if(width < 12) {
+        lv_obj_add_flag(track, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_clear_flag(track, LV_OBJ_FLAG_HIDDEN);
+    int32_t inner_width = width - 2;
+    for(int i = 0; i < 10; ++i) {
+        int32_t left = i * inner_width / 10;
+        int32_t right = (i + 1) * inner_width / 10;
+        lv_obj_t *segment = lv_obj_get_child(track, i * 2);
+        lv_obj_set_x(segment, left);
+        lv_obj_set_width(segment, right - left);
+        if(i < 9) lv_obj_set_x(lv_obj_get_child(track, i * 2 + 1), right - 1);
+    }
+}
+
 static lv_obj_t *make_bar(lv_obj_t *parent, int32_t x, int32_t y, int32_t width,
                           int32_t value)
 {
     if(value < 0) value = 0;
     if(value > 100) value = 100;
 
-    lv_obj_t *track = make_box(parent, x, y, width, 7, 3, COLOR_WHITE, 1, COLOR_BLACK);
+    lv_obj_t *track = make_box(parent, x, y, width, 7, 0, COLOR_WHITE, 1, COLOR_BLACK);
     set_name(track, "track");
-    const int32_t inner_width = width - 4;
-    const int32_t fill_width = (inner_width * value) / 100;
-    if(fill_width > 0) make_ink(track, 2, 1, fill_width, 5, 2);
+    int filled = (value + 9) / 10;
+    for(int i = 0; i < 10; ++i) {
+        make_box(track, 0, 0, 1, 5, 0, i < filled ? COLOR_BLACK : COLOR_WHITE, 0, COLOR_BLACK);
+        if(i < filled) set_name(lv_obj_get_child(track, i * 2), "ink");
+        if(i < 9) {
+            lv_obj_t *separator = make_box(track, 0, 0, 1, 5, 0,
+                                           i < filled ? COLOR_WHITE : COLOR_BLACK, 0, COLOR_BLACK);
+            if(i >= filled) set_name(separator, "ink");
+        }
+    }
+    resize_bar(track, width);
     return track;
 }
 
@@ -325,17 +352,31 @@ const lv_image_dsc_t *monitor_weather_condition_icon(monitor_weather_condition_t
 }
 
 static void make_metric(lv_obj_t *card, int32_t card_width, int32_t y,
-                        const monitor_device_metric_t *metric, const lv_font_t *font)
+                        const monitor_device_metric_t *metric)
 {
     lv_point_t name_size, value_size;
-    lv_text_get_size(&name_size, metric->name, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-    lv_text_get_size(&value_size, metric->value, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-    if (name_size.x + value_size.x + 4 > card_width - 14) font = &monitor_misans_8;
-    make_label(card, metric->name, 7, y, font, COLOR_MUTED);
-    lv_obj_t *value_label = make_label(card, metric->value, 7, y, font, COLOR_BLACK);
-    lv_obj_set_width(value_label, card_width - 14);
+    const lv_font_t *name_font = &monitor_misans_12;
+    const lv_font_t *value_font = &monitor_ndot57_20;
+    char number[sizeof(metric->value)];
+    snprintf(number, sizeof(number), "%s", metric->value);
+    size_t len = strlen(number);
+    bool has_percent = len > 0 && number[len - 1] == '%';
+    if(has_percent) number[len - 1] = '\0';
+    lv_point_t percent_size;
+    lv_text_get_size(&percent_size, has_percent ? "%" : "", name_font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    lv_text_get_size(&name_size, metric->name, name_font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    lv_text_get_size(&value_size, number, value_font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    if (name_size.x + value_size.x + percent_size.x + 4 > card_width - 14) value_font = &monitor_ndot57_14;
+    lv_text_get_size(&value_size, number, value_font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    if (name_size.x + value_size.x + percent_size.x + 4 > card_width - 14) value_font = &monitor_ndot57_8;
+    make_label(card, metric->name, 7, y + 7, name_font, COLOR_MUTED);
+    lv_obj_t *value_label = make_label(card, number, 7, y, value_font, COLOR_BLACK);
+    lv_obj_set_width(value_label, card_width - 14 - percent_size.x);
     lv_obj_set_style_text_align(value_label, LV_TEXT_ALIGN_RIGHT, 0);
-    make_bar(card, 7, y + 16, card_width - 14,
+    lv_obj_t *percent_label = make_label(card, has_percent ? "%" : "", 7, y + 7, name_font, COLOR_BLACK);
+    lv_obj_set_width(percent_label, card_width - 14);
+    lv_obj_set_style_text_align(percent_label, LV_TEXT_ALIGN_RIGHT, 0);
+    make_bar(card, 7, y + 24, card_width - 14,
              metric->percent_valid ? metric->percent : -1);
 }
 
@@ -607,15 +648,12 @@ static void fill_device_card(lv_obj_t *card, const monitor_device_t *device,
 {
     const bool compact = device_count >= 4;
     const lv_font_t *name_font = compact ? &monitor_misans_12 : &monitor_misans_14;
-    const lv_font_t *metric_font = compact ? &monitor_misans_12 : &monitor_misans_14;
-    const int32_t metric_y = compact ? 58 : 60;
-    const int32_t metric_step = compact ? 39 : 40;
 
     lv_obj_clean(card);
     make_label(card, device->name, 7, 7, name_font, COLOR_BLACK);
     make_label(card, device->uptime, 7, 29, &monitor_misans_12, COLOR_MUTED);
     for (uint8_t i = 0; i < device->metric_count && i < 3; ++i)
-        make_metric(card, width, metric_y + metric_step * i, &device->metrics[i], metric_font);
+        make_metric(card, width, 48 + 40 * i, &device->metrics[i]);
 }
 
 static lv_obj_t *make_device_card(lv_obj_t *parent, const monitor_device_t *device,
@@ -632,17 +670,15 @@ static void resize_device_contents(lv_obj_t *card, const monitor_device_t *devic
     /* Keep right-aligned values and bars attached to the moving right edge.
      * Recreating children per frame would add heap churn during the animation. */
     int32_t content_width = width > 14 ? width - 14 : 0;
-    int32_t inner_width = width > 18 ? width - 18 : 0;
     for (unsigned i = 0; i < device->metric_count && i < 3; ++i) {
-        lv_obj_set_width(lv_obj_get_child(card, 3 + i * 3), content_width);
-        lv_obj_t *track = lv_obj_get_child(card, 4 + i * 3);
-        lv_obj_set_width(track, content_width);
-        if (lv_obj_get_child_count(track)) {
-            int percent = device->metrics[i].percent_valid ? device->metrics[i].percent : 0;
-            if (percent < 0) percent = 0;
-            if (percent > 100) percent = 100;
-            lv_obj_set_width(lv_obj_get_child(track, 0), inner_width * percent / 100);
-        }
+        lv_obj_t *value = lv_obj_get_child(card, 3 + i * 4);
+        lv_obj_t *percent = lv_obj_get_child(card, 4 + i * 4);
+        lv_point_t percent_size;
+        lv_text_get_size(&percent_size, lv_label_get_text(percent), &monitor_misans_12, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        lv_obj_set_width(value, content_width > percent_size.x ? content_width - percent_size.x : 0);
+        lv_obj_set_width(percent, content_width);
+        lv_obj_t *track = lv_obj_get_child(card, 5 + i * 4);
+        resize_bar(track, content_width);
     }
 }
 

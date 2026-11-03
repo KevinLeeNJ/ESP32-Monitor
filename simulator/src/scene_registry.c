@@ -240,6 +240,14 @@ ACTIVITY_FACTORY(unknown, MONITOR_TASK_UNKNOWN)
 static lv_obj_t *create_activity_paused(lv_obj_t *parent, monitor_frame_variant_t variant)
 { return create_activity_state(parent, variant, MONITOR_TASK_RUNNING, false); }
 
+static lv_obj_t *create_activity_low_progress(lv_obj_t *parent, monitor_frame_variant_t variant)
+{
+    monitor_activity_data_t data = activity_fixture(MONITOR_TASK_RUNNING, true);
+    data.usage_5h_percent = 2;
+    data.usage_week_percent = 5;
+    return monitor_activity_create(parent, &data, variant);
+}
+
 static lv_obj_t *create_activity_long_music(lv_obj_t *parent, monitor_frame_variant_t variant)
 {
     monitor_activity_data_t data = activity_fixture(MONITOR_TASK_RUNNING, true);
@@ -361,6 +369,7 @@ static const simulator_scene_t SCENES[] = {
     { .name = "page-next", .description = "First to second page transition", .create = create_page_next },
     { .name = "page-previous", .description = "Second to first page transition", .create = create_page_previous },
     { .name = "activity-paused", .description = "Music is not playing", .create = create_activity_paused },
+    { .name = "activity-low-progress", .description = "Low usage values", .create = create_activity_low_progress },
     { .name = "activity", .description = "GitHub, agent and playback second page", .create = create_activity_running },
     { .name = "activity-idle", .description = "Codex idle", .create = create_activity_idle },
     { .name = "activity-waiting-input", .description = "Codex waiting for input", .create = create_activity_waiting_input },

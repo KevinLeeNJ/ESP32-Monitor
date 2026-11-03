@@ -40,7 +40,11 @@
  * - LV_STDLIB_RTTHREAD:    RT-Thread implementation
  * - LV_STDLIB_CUSTOM:      Implement the functions externally
  */
+#ifdef ESP_PLATFORM
+#define LV_USE_STDLIB_MALLOC    LV_STDLIB_CUSTOM
+#else
 #define LV_USE_STDLIB_MALLOC    LV_STDLIB_CLIB
+#endif
 
 /** Possible values
  * - LV_STDLIB_BUILTIN:     LVGL's built in implementation
