@@ -25,6 +25,9 @@ idf_component_register(
         "../../app/ui/monitor_pages.c"
         "../../app/ui/activity_assets.c"
         "../../app/ui/weather_assets.c"
+        "../../app/ui/fonts/monitor_music_18.c"
+        "../../app/ui/fonts/monitor_music_18_extra.c"
+        "../../app/ui/fonts/monitor_music_12.c"
         "../../app/ui/fonts/monitor_misans_8.c"
         "../../app/ui/fonts/monitor_misans_12.c"
         "../../app/ui/fonts/monitor_misans_14.c"
@@ -41,5 +44,4 @@ idf_component_register(
         "../../include"
         "../../app/ui"
     REQUIRES lvgl cjson
-    EMBED_FILES "../../assets/fonts/music-cjk.bin"
 )

@@ -202,7 +202,7 @@ static void build_music(const esp32monitor_companion_MusicSection *section,
     activity->music_artist = m->has_artist ? m->artist : NULL;
     activity->music_source = m->has_source ? m->source : NULL;
     if (m->has_duration && isfinite(m->duration) && m->duration >= 0)
-        activity->music_duration_seconds = (int)(m->duration + 0.5);
+        activity->music_duration_seconds = (int)m->duration;
     if (m->has_position && isfinite(m->position) && m->position >= 0) {
         double position = m->position;
         int64_t now = snapshot->sent_at + (int64_t)(clock->snapshot_elapsed_ms / 1000);
@@ -210,7 +210,7 @@ static void build_music(const esp32monitor_companion_MusicSection *section,
             position += (double)(now - m->position_observed_at);
         if (m->has_duration && isfinite(m->duration) && position > m->duration)
             position = m->duration;
-        activity->music_position_seconds = (int)(position + 0.5);
+        activity->music_position_seconds = (int)position;
     }
 }
 

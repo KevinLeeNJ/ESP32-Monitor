@@ -121,6 +121,9 @@ typedef struct {
     /* Usage percentages, or -1 if unavailable. */
     int usage_5h_percent, usage_week_percent; /* Remaining percentage, -1 if unavailable. */
     const char *music_title, *music_artist, *music_source;
+    /* Serial sessions stream frequently enough to advance the clock locally;
+     * LAN keeps the slower snapshot cadence to save power. */
+    bool music_live;
     /* Playback state is valid only when music_available is true. */
     bool music_available, music_playing;
     /* Seconds, or -1 if unavailable. */

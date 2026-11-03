@@ -8,6 +8,9 @@
 #define DAYS 7
 #define BLACK 0x111111U
 #define WHITE 0xf7f7f7U
+#define MUSIC_TITLE_X 10
+#define MUSIC_TITLE_Y 31
+#define MUSIC_TITLE_WIDTH 115
 
 extern const lv_image_dsc_t activity_openai, activity_github, activity_circle_question_mark;
 extern const lv_image_dsc_t activity_circle_minus, activity_loader_circle;
@@ -53,9 +56,14 @@ typedef struct {
     lv_obj_t *usage_value[2];
     activity_bar_t usage_bar[2];
     lv_obj_t *task_icon, *task_name;
-    lv_obj_t *music_source, *music_title, *music_artist;
+    lv_obj_t *music_source, *music_title, *music_artist, *music_ellipsis;
+    char music_title_text[160];
     lv_obj_t *playback;
     activity_bar_t music_bar;
+    int music_position_base, music_duration_seconds;
+    bool music_live;
+    uint32_t music_anchor_tick;
+    lv_timer_t *music_timer;
     lv_obj_t *music_position, *music_duration;
 } activity_view_t;
 
@@ -88,27 +96,73 @@ static lv_obj_t *label(lv_obj_t *parent, const char *text, int x, int y, int wid
     return obj;
 }
 
-static const lv_font_t *music_font(const char *value, const lv_font_t *latin)
+static const lv_font_t *music_font(void)
 {
-    if (value) for (const unsigned char *p = (const unsigned char *)value; *p; ++p)
-        if (*p >= 0x80) {
-            const lv_font_t *font = monitor_music_font();
-            return font ? font : latin;
-        }
-    return latin;
+    const lv_font_t *font = monitor_music_font();
+    return font ? font : &monitor_misans_20;
 }
 
-static void set_music_label(lv_obj_t *obj, const char *value, const lv_font_t *latin)
+static int text_width(const char *text, const lv_font_t *font)
 {
-    const lv_font_t *font = music_font(value, latin);
+    lv_point_t size;
+    lv_text_get_size(&size, text, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    return size.x;
+}
+
+static size_t utf8_char_size(const char *text)
+{
+    unsigned char lead = (unsigned char)text[0];
+    if(lead < 0x80) return 1;
+    if((lead & 0xE0) == 0xC0) return 2;
+    if((lead & 0xF0) == 0xE0) return 3;
+    if((lead & 0xF8) == 0xF0) return 4;
+    return 1;
+}
+
+/* Keep the 18px title, but draw its truncation dots in the small font so
+ * they do not consume a full title glyph. */
+static void set_music_title(activity_view_t *view, const char *value)
+{
+    const char *shown = value && value[0] ? value : "--";
+    if(!strcmp(view->music_title_text, shown)) return;
+    snprintf(view->music_title_text, sizeof(view->music_title_text), "%s", shown);
+
+    const lv_font_t *title_font = music_font();
+    const lv_font_t *dots_font = monitor_music_small_font();
+    if(!dots_font) dots_font = &monitor_misans_12;
+    if(text_width(shown, title_font) <= MUSIC_TITLE_WIDTH) {
+        lv_label_set_text(view->music_title, shown);
+        lv_obj_add_flag(view->music_ellipsis, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    char prefix[sizeof(view->music_title_text)];
+    int available = MUSIC_TITLE_WIDTH - text_width("...", dots_font);
+    size_t best = 0, used = 0;
+    while(shown[used]) {
+        size_t next = used + utf8_char_size(shown + used);
+        size_t length = next < sizeof(prefix) ? next : sizeof(prefix) - 1;
+        memcpy(prefix, shown, length);
+        prefix[length] = '\0';
+        if(text_width(prefix, title_font) > available) break;
+        best = length;
+        if(next >= sizeof(prefix) - 1) break;
+        used = next;
+    }
+    prefix[best] = '\0';
+    lv_label_set_text(view->music_title, prefix);
+    lv_obj_set_x(view->music_ellipsis, MUSIC_TITLE_X + text_width(prefix, title_font));
+    int baseline = MUSIC_TITLE_Y + title_font->line_height - title_font->base_line;
+    int dots_y = baseline - (dots_font->line_height - dots_font->base_line);
+    lv_obj_set_y(view->music_ellipsis, dots_y < MUSIC_TITLE_Y ? MUSIC_TITLE_Y : dots_y);
+    lv_label_set_text(view->music_ellipsis, "...");
+    lv_obj_clear_flag(view->music_ellipsis, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void set_music_label(lv_obj_t *obj, const char *value)
+{
     const char *shown = value && value[0] ? value : "--";
     if(strcmp(lv_label_get_text(obj), shown)) lv_label_set_text(obj, shown);
-    /* The dynamic CJK font is taller than the Latin default; keep the fixed
-     * viewport in sync or glyphs clip after a live update. */
-    if(lv_obj_get_style_text_font(obj, LV_PART_MAIN) != font) {
-        lv_obj_set_style_text_font(obj, font, 0);
-        lv_obj_set_height(obj, font->line_height);
-    }
 }
 
 
@@ -142,6 +196,25 @@ static void format_time(char *out, size_t size, int seconds)
 {
     if(seconds < 0) snprintf(out, size, "--:--");
     else snprintf(out, size, "%d:%02d", seconds / 60, seconds % 60);
+}
+
+/* Snapshots arrive every couple of seconds; advance locally so the clock
+ * ticks once per second instead of jumping with each snapshot. */
+static void music_tick(lv_timer_t *timer)
+{
+    activity_view_t *view = lv_timer_get_user_data(timer);
+    if(!view->music_live || !view->playback_available || !view->playback_playing ||
+       view->music_position_base < 0) return;
+    if(!lv_obj_is_visible(view->music_title)) return;
+    int pos = view->music_position_base + (int)((lv_tick_get() - view->music_anchor_tick) / 1000);
+    if(view->music_duration_seconds > 0 && pos > view->music_duration_seconds)
+        pos = view->music_duration_seconds;
+    char text[16];
+    format_time(text, sizeof(text), pos);
+    if(strcmp(lv_label_get_text(view->music_position), text))
+        lv_label_set_text(view->music_position, text);
+    if(view->music_duration_seconds > 0)
+        progress_apply(&view->music_bar, pos * 100 / view->music_duration_seconds);
 }
 
 static void usage_value_text(char *text, size_t size, int value)
@@ -247,7 +320,9 @@ static void clear_month_labels(lv_obj_t *root)
 
 static void delete_state(lv_event_t *event)
 {
-    lv_free(lv_event_get_user_data(event));
+    activity_view_t *view = lv_event_get_user_data(event);
+    if(view->music_timer) lv_timer_delete(view->music_timer);
+    lv_free(view);
 }
 
 monitor_activity_data_t monitor_activity_demo(void)
@@ -319,15 +394,25 @@ static void apply_music(activity_view_t *view, const monitor_activity_data_t *da
 {
     set_music_label(view->music_source,
                     data->music_available && data->music_source && data->music_source[0]
-                        ? data->music_source : "--",
-                    &monitor_misans_12);
-    set_music_label(view->music_title, data->music_title, &monitor_misans_20);
-    set_music_label(view->music_artist, data->music_artist, &monitor_misans_14);
+                        ? data->music_source : "--");
+    set_music_title(view, data->music_title);
+    set_music_label(view->music_artist, data->music_artist);
     if(view->playback_available != data->music_available ||
        view->playback_playing != data->music_playing) {
         view->playback_available = data->music_available;
         view->playback_playing = data->music_playing;
         draw_playback(view, data->music_available, data->music_playing);
+    }
+    view->music_position_base = data->music_available ? data->music_position_seconds : -1;
+    view->music_duration_seconds = data->music_available ? data->music_duration_seconds : -1;
+    view->music_live = data->music_live;
+    view->music_anchor_tick = lv_tick_get();
+    if(view->music_timer) {
+        if(view->music_live && data->music_available && data->music_playing &&
+           view->music_position_base >= 0)
+            lv_timer_resume(view->music_timer);
+        else
+            lv_timer_pause(view->music_timer);
     }
     int percent = -1;
     if(data->music_available && data->music_position_seconds >= 0 && data->music_duration_seconds > 0) {
@@ -429,27 +514,34 @@ lv_obj_t *monitor_activity_create(lv_obj_t *parent, const monitor_activity_data_
     box(agent, 1, 87, 178, 1, 0, true, false, inv);
     unsigned task = (unsigned)data->agent_state;
     if(task >= sizeof(TASK_STYLES) / sizeof(TASK_STYLES[0])) task = MONITOR_TASK_UNKNOWN;
-    view->task_icon = icon(agent, TASK_STYLES[task].icon, 10, 99, inv);
+    view->task_icon = icon(agent, TASK_STYLES[task].icon, 8, 97, inv);
     label(agent, "Current Task", 42, 92, 127, &monitor_misans_12, inv);
     const lv_font_t *task_font = task == MONITOR_TASK_WAITING_APPROVAL ? &monitor_misans_12 : &monitor_misans_14;
     view->task_name = label(agent, TASK_STYLES[task].name, 42, 109, 127, task_font, inv);
 
     lv_obj_t *music = box(root, 205, 150, 180, 134, 8, false, true, inv);
-    label(music, LV_SYMBOL_AUDIO, 12, 7, 18, &lv_font_montserrat_14, inv);
+    label(music, LV_SYMBOL_AUDIO, 9, 5, 24, &lv_font_montserrat_20, inv);
     label(music, "Music", 37, 4, 68, &monitor_misans_20, inv);
     const char *source = data->music_available && data->music_source && data->music_source[0]
         ? data->music_source : "--";
-    view->music_source = label(music, source, 105, 10, 63, music_font(source, &monitor_misans_12), inv);
+    const lv_font_t *artist_font = monitor_music_small_font();
+    view->music_source = label(music, source, 105, 10, 63,
+                               artist_font ? artist_font : &monitor_misans_12, inv);
     lv_obj_set_style_text_align(view->music_source, LV_TEXT_ALIGN_RIGHT, 0);
     /* Pixel-aligned symbols stay crisp after conversion to the 1-bit panel. */
     view->playback = box(music, 127, 35, 42, 42, 21, false, true, inv);
     lv_obj_set_style_border_width(view->playback, 2, 0);
     draw_playback(view, data->music_available, data->music_playing);
-    view->music_title = label(music, data->music_title, 10, 31, 115,
-                              music_font(data->music_title, &monitor_misans_20), inv);
+    view->music_title = label(music, data->music_title, MUSIC_TITLE_X, MUSIC_TITLE_Y,
+                              MUSIC_TITLE_WIDTH, music_font(), inv);
+    lv_label_set_long_mode(view->music_title, LV_LABEL_LONG_CLIP);
     lv_obj_set_name(view->music_title, "music_title");
+    view->music_ellipsis = label(music, "", MUSIC_TITLE_X, MUSIC_TITLE_Y, 30,
+                                 artist_font ? artist_font : &monitor_misans_12, inv);
+    lv_obj_add_flag(view->music_ellipsis, LV_OBJ_FLAG_HIDDEN);
+    set_music_title(view, data->music_title);
     view->music_artist = label(music, data->music_artist, 10, 58, 115,
-                               music_font(data->music_artist, &monitor_misans_14), inv);
+                               artist_font ? artist_font : &monitor_misans_12, inv);
     int percent = -1;
     if(data->music_available && data->music_position_seconds >= 0 && data->music_duration_seconds > 0) {
         int pos = data->music_position_seconds;
@@ -463,5 +555,7 @@ lv_obj_t *monitor_activity_create(lv_obj_t *parent, const monitor_activity_data_
     view->music_position = label(music, position, 10, 109, 60, &monitor_misans_12, inv);
     view->music_duration = label(music, duration, 108, 109, 60, &monitor_misans_12, inv);
     lv_obj_set_style_text_align(view->music_duration, LV_TEXT_ALIGN_RIGHT, 0);
+    view->music_timer = lv_timer_create(music_tick, 1000, view);
+    if(view->music_timer) lv_timer_pause(view->music_timer);
     return root;
 }

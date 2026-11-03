@@ -63,6 +63,9 @@ add_library(monitor_sim_core STATIC
     "${FIRMWARE_ROOT}/app/ui/monitor_pages.c"
     "${FIRMWARE_ROOT}/app/ui/activity_assets.c"
     "${FIRMWARE_ROOT}/app/ui/weather_assets.c"
+    "${FIRMWARE_ROOT}/app/ui/fonts/monitor_music_18.c"
+    "${FIRMWARE_ROOT}/app/ui/fonts/monitor_music_18_extra.c"
+    "${FIRMWARE_ROOT}/app/ui/fonts/monitor_music_12.c"
     "${FIRMWARE_ROOT}/app/ui/fonts/monitor_misans_8.c"
     "${FIRMWARE_ROOT}/app/ui/fonts/monitor_misans_12.c"
     "${FIRMWARE_ROOT}/app/ui/fonts/monitor_misans_14.c"
@@ -87,7 +90,6 @@ target_include_directories(monitor_sim_core PUBLIC
     "${CMAKE_CURRENT_LIST_DIR}/src"
 )
 target_link_libraries(monitor_sim_core PUBLIC lvgl)
-target_compile_definitions(monitor_sim_core PRIVATE MONITOR_MUSIC_FONT_PATH="${FIRMWARE_ROOT}/assets/fonts/music-cjk.bin")
 
 add_executable(monitor_simulator src/main.c)
 target_link_libraries(monitor_simulator PRIVATE monitor_sim_core)

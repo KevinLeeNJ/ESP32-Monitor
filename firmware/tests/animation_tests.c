@@ -541,13 +541,32 @@ static void test_music_font(void)
     monitor_renderer_t r;
     CHECK(monitor_renderer_init(&r, clock_factory), "initialize music font renderer");
     const lv_font_t *font = monitor_music_font();
-    CHECK(font != NULL, "load binary music font");
+    CHECK(font != NULL, "access static music font");
     if (font) {
         lv_font_glyph_dsc_t glyph;
         CHECK(lv_font_get_glyph_dsc(font, &glyph, 'A', 0), "music font contains English");
         CHECK(lv_font_get_glyph_dsc(font, &glyph, 0x661f, 0), "music font contains Chinese");
         CHECK(lv_font_get_glyph_dsc(font, &glyph, 0x3042, 0), "music font contains Japanese kana");
         CHECK(lv_font_get_glyph_dsc(font, &glyph, 0xd55c, 0), "music font contains Korean Hangul");
+        CHECK(glyph.resolved_font == font->fallback && glyph.box_w > 0 && glyph.box_h > 0,
+              "18px Korean glyph resolves to the additional font");
+        CHECK(glyph.gid.index != 0, "18px Korean glyph has a bitmap");
+        CHECK(lv_font_get_glyph_dsc(font, &glyph, 0xff21, 0) && glyph.resolved_font == font->fallback,
+              "18px fullwidth Latin resolves to the additional font");
+        CHECK(lv_font_get_glyph_dsc(font, &glyph, 0xd7, 0) && glyph.gid.index != 0,
+              "title font contains multiplication sign");
+    }
+    const lv_font_t *small = monitor_music_small_font();
+    CHECK(small != NULL, "access small static music font");
+    if (font && small) {
+        lv_font_glyph_dsc_t glyph;
+        CHECK(small->line_height < font->line_height, "artist font is smaller than title font");
+        CHECK(lv_font_get_glyph_dsc(small, &glyph, 'A', 0), "small music font contains English");
+        CHECK(lv_font_get_glyph_dsc(small, &glyph, 0x661f, 0), "small music font contains Chinese");
+        CHECK(lv_font_get_glyph_dsc(small, &glyph, 0x3042, 0), "small music font contains Japanese kana");
+        CHECK(lv_font_get_glyph_dsc(small, &glyph, 0xd55c, 0), "small music font contains Korean Hangul");
+        CHECK(lv_font_get_glyph_dsc(small, &glyph, 0xd7, 0) && glyph.gid.index != 0,
+              "small music font contains multiplication sign");
     }
     monitor_renderer_deinit(&r);
 }

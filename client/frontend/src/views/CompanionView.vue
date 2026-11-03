@@ -117,6 +117,8 @@ function fmtClock(seconds?: number | null): string {
 // so the text tracks playback between the 5s companion polls.
 const nowTick = ref(Date.now());
 let clockTimer: ReturnType<typeof setInterval> | undefined;
+let companionTimer: ReturnType<typeof setInterval> | undefined;
+let refreshing = false;
 const musicPosition = computed(() => {
   const current = music.value?.current;
   if (!current || current.position === null || current.position === undefined) return null;
@@ -127,10 +129,21 @@ const musicPosition = computed(() => {
   return current.duration != null ? Math.min(value, current.duration) : value;
 });
 
-onMounted(() => { clockTimer = setInterval(() => { nowTick.value = Date.now(); }, 1000); });
+onMounted(() => {
+  clockTimer = setInterval(() => { nowTick.value = Date.now(); }, 1000);
+  // The global store refreshes every five seconds, which lets a paused track
+  // keep advancing until the next poll. Refresh this page once per second so
+  // the paused position lands promptly.
+  companionTimer = setInterval(async () => {
+    if (document.hidden || refreshing) return;
+    refreshing = true;
+    try { await refreshCompanion(); } finally { refreshing = false; }
+  }, 1000);
+});
 onUnmounted(() => {
   clearTimeout(pollTimer);
   clearInterval(clockTimer);
+  clearInterval(companionTimer);
 });
 </script>
 

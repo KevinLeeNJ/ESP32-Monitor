@@ -44,39 +44,53 @@ try {
     Emit $null $code
     exit 1
 }
+$lastStatus = $null
+$lastError = $null
+$lastEmit = [DateTimeOffset]::MinValue
 while ($true) {
     try {
         $session = $manager.GetCurrentSession()
-        if ($null -eq $session) { Emit $null $null }
+        if ($null -eq $session) {
+            if ($lastStatus -ne 'none') { Emit $null $null; $lastStatus = 'none' }
+        }
         else {
-            $media = Await ($session.TryGetMediaPropertiesAsync()) $propertiesType
             $status = $session.GetPlaybackInfo().PlaybackStatus.ToString().ToLowerInvariant()
             # All explicit non-playing GSMTC statuses map to NotPlaying.
             if ($status -eq 'playing') { $status = 'playing' }
             elseif ($status -in @('closed','opened','changing','stopped','paused')) { $status = 'not_playing' }
             else { throw 'unknown_playback_status' }
-            $timeline = $session.GetTimelineProperties()
-            $duration = $null; $position = $null
-            if ($null -ne $timeline -and $timeline.EndTime -gt $timeline.StartTime) {
-                $duration = ($timeline.EndTime - $timeline.StartTime).TotalSeconds
-                $position = ($timeline.Position - $timeline.StartTime).TotalSeconds
-                # Most apps only refresh Position when the timeline changes, so
-                # playing progress must be extrapolated from LastUpdatedTime.
-                if ($status -eq 'playing' -and $null -ne $timeline.LastUpdatedTime -and $timeline.LastUpdatedTime.Year -gt 2000) {
-                    $position += ([DateTimeOffset]::UtcNow - $timeline.LastUpdatedTime).TotalSeconds
+            $now = [DateTimeOffset]::UtcNow
+            # Publish on every state change, and otherwise once per second so
+            # paused transitions are not missed between the slow samples.
+            if ($status -ne $lastStatus -or ($now - $lastEmit).TotalSeconds -ge 1) {
+                $media = Await ($session.TryGetMediaPropertiesAsync()) $propertiesType
+                $timeline = $session.GetTimelineProperties()
+                $duration = $null; $position = $null
+                if ($null -ne $timeline -and $timeline.EndTime -gt $timeline.StartTime) {
+                    $duration = ($timeline.EndTime - $timeline.StartTime).TotalSeconds
+                    $position = ($timeline.Position - $timeline.StartTime).TotalSeconds
+                    # Most apps only refresh Position when the timeline changes, so
+                    # playing progress must be extrapolated from LastUpdatedTime.
+                    if ($status -eq 'playing' -and $null -ne $timeline.LastUpdatedTime -and $timeline.LastUpdatedTime.Year -gt 2000) {
+                        $position += ([DateTimeOffset]::UtcNow - $timeline.LastUpdatedTime).TotalSeconds
+                    }
+                    if ($position -lt 0) { $position = 0 }
+                    if ($position -gt $duration) { $position = $duration }
                 }
-                if ($position -lt 0) { $position = 0 }
-                if ($position -gt $duration) { $position = $duration }
+                $source = Get-FriendlyAppName $session.SourceAppUserModelId
+                if (-not $source) { $source = $session.SourceAppUserModelId }
+                Emit @{title=$media.Title;artist=$media.Artist;source=$source;
+                       state=$status;duration=$duration;position=$position} $null
+                $lastStatus = $status
+                $lastError = $null
+                $lastEmit = $now
             }
-            $source = Get-FriendlyAppName $session.SourceAppUserModelId
-            if (-not $source) { $source = $session.SourceAppUserModelId }
-            Emit @{title=$media.Title;artist=$media.Artist;source=$source;
-                   state=$status;duration=$duration;position=$position} $null
         }
     } catch {
         $code = 'music_read_failed'
         if ($_.Exception.ToString() -match 'Access.*denied|0x80070005') { $code = 'music_permission_denied' }
-        Emit $null $code
+        if ($code -ne $lastError) { Emit $null $code; $lastError = $code }
+        $lastStatus = $null
     }
-    Start-Sleep -Seconds 2
+    Start-Sleep -Milliseconds 250
 }

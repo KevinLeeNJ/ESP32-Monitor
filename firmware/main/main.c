@@ -147,6 +147,7 @@ static bool apply_companion_if_changed(monitor_pages_t *pages)
     monitor_companion_view_build(connected ? &s_companion.snapshot : NULL,
                                  connected && s_companion.has_heartbeat ? &s_companion.heartbeat : NULL,
                                  elapsed, heartbeat_elapsed, &s_companion_view);
+    s_companion_view.activity.music_live = monitor_serial_active();
     if (s_companion_view.time_valid)
         monitor_clock_offer_client_time(s_companion_view.time_utc_ms / 1000);
     s_companion_overlay = connected && s_companion_view.proxy_owned;
