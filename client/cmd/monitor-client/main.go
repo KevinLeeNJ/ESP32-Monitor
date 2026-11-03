@@ -89,6 +89,7 @@ func main() {
 }
 
 func run(loginItem bool) error {
+	ensurePawnIO()
 	logging.L("gui").Info("client_start", "version", guibridge.AppVersion, "os", runtime.GOOS, "arch", runtime.GOARCH, "login_item", loginItem)
 	if err := guibridge.EnsureDesktopIntegration(); err != nil {
 		logging.L("gui").Warn("desktop_integration_failed", "error", err)

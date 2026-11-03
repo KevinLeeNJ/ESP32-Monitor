@@ -39,7 +39,7 @@ $windres = Resolve-Tool "windres" @(
 )
 if (-not $go) { throw "Go toolchain not found. Add Go to PATH." }
 if (-not $npm) { throw "npm not found. Install Node.js or add it to PATH." }
-if (-not $dotnet) { throw "A .NET SDK is required to build the net472 helper; the shipped helper only requires .NET Framework 4.7.2+." }
+if (-not $dotnet) { throw "A .NET 8 SDK is required to build the helper." }
 $env:PATH = "$(Split-Path $npm);$env:PATH"
 
 Push-Location $client
@@ -59,13 +59,11 @@ try {
   New-Item -ItemType Directory -Force $assets | Out-Null
   Copy-Item (Join-Path $frontend "dist-web\*") $assets -Recurse -Force
 
-  Write-Host "[2/6] Building LibreHardwareMonitor helper (net472)"
-  # This is a framework-dependent net472 executable. Do not replace it with
-  # dotnet publish or a self-contained modern .NET deployment.
-  & $dotnet restore $helperProject --use-lock-file
+  Write-Host "[2/6] Publishing LibreHardwareMonitor helper (net8.0)"
+  & $dotnet restore $helperProject --use-lock-file -r win-x64
   if ($LASTEXITCODE -ne 0) { throw "LHM helper restore failed" }
-  & $dotnet build $helperProject --no-restore "/p:Configuration=$Configuration" /p:RestoreLockedMode=true /p:DebugType=None /p:DebugSymbols=false
-  if ($LASTEXITCODE -ne 0) { throw "LHM helper build failed" }
+  & $dotnet publish $helperProject --no-restore -c $Configuration -r win-x64 --self-contained true /p:RestoreLockedMode=true /p:DebugType=None /p:DebugSymbols=false
+  if ($LASTEXITCODE -ne 0) { throw "LHM helper publish failed" }
 
   Write-Host "[3/6] Running Go tests and vet"
   if (-not $SkipTests) {
@@ -105,10 +103,14 @@ try {
   & $go build -trimpath -ldflags "-s -w" -o (Join-Path $package "monitor-agent.exe") ./cmd/monitor-agent
   if ($LASTEXITCODE -ne 0) { throw "monitor-agent build failed" }
 
-  $helperOut = Join-Path $client "tools\lhm-helper\bin\$Configuration\net472"
+  $helperOut = Join-Path $client "tools\lhm-helper\bin\$Configuration\net8.0\win-x64\publish"
   $helperDest = Join-Path $package "helpers\lhm-helper"
   New-Item -ItemType Directory -Force $helperDest | Out-Null
   Copy-Item (Join-Path $helperOut "*") $helperDest -Recurse -Force
+  # Use the installer distributed with this exact LHM release and verify it.
+  $pawnInstaller = Join-Path $package "PawnIO_setup.exe"
+  Invoke-WebRequest -Uri "https://raw.githubusercontent.com/LibreHardwareMonitor/LibreHardwareMonitor/v0.9.6/LibreHardwareMonitor/Resources/PawnIO_setup.exe" -OutFile $pawnInstaller
+  if ((Get-FileHash $pawnInstaller -Algorithm SHA256).Hash -ne "A3A46226C5E2824F4CDD42BE0EECBABFC672C86F7889710F5AB1E6AD385B47A0") { throw "PawnIO installer checksum mismatch" }
   Get-ChildItem $helperDest -Recurse -Include *.pdb | Remove-Item -Force
 
   Copy-Item (Join-Path $client "packaging\windows\README.txt") $package

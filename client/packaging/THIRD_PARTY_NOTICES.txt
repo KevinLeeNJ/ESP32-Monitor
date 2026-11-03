@@ -69,7 +69,7 @@ Bundled assets
 
 Windows-only components
 -----------------------
-- LibreHardwareMonitorLib 0.9.4 (MPL-2.0)
+- LibreHardwareMonitorLib 0.9.6 (MPL-2.0)
   https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
   Used by helpers/lhm-helper for read-only CPU/GPU/storage sensors. Source for
   the MPL-2.0 component is available at the URL above.

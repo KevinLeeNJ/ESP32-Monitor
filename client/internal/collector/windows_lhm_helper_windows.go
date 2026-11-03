@@ -11,16 +11,9 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
-
-	"golang.org/x/sys/windows/registry"
 )
 
-const dotNetFramework472Release = 461808
-
-var (
-	errDotNetFramework472Required = errors.New("dotnet_framework_472_required")
-	errLHMHelperMissing           = errors.New("lhm_helper_missing")
-)
+var errLHMHelperMissing = errors.New("lhm_helper_missing")
 
 type windowsLHMData struct {
 	OK       bool             `json:"ok"`
@@ -53,21 +46,6 @@ type windowsLHMCache struct {
 	err  error
 }
 
-func dotNetFramework472Installed() bool {
-	for _, view := range []uint32{0, registry.WOW64_32KEY} {
-		key, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full`, registry.QUERY_VALUE|view)
-		if err != nil {
-			continue
-		}
-		release, _, err := key.GetIntegerValue("Release")
-		key.Close()
-		if err == nil && release >= dotNetFramework472Release {
-			return true
-		}
-	}
-	return false
-}
-
 func windowsLHMHelperPath() (string, error) {
 	if value := os.Getenv("MONITOR_LHM_HELPER"); value != "" {
 		if info, err := os.Stat(value); err == nil && !info.IsDir() {
@@ -91,10 +69,6 @@ func (c *windowsLHMCache) read(ctx context.Context) (windowsLHMData, error) {
 	if c != nil && !c.at.IsZero() && time.Since(c.at) < 5*time.Second {
 		return c.data, c.err
 	}
-	if !dotNetFramework472Installed() {
-		c.err, c.at = errDotNetFramework472Required, time.Now()
-		return windowsLHMData{}, c.err
-	}
 	path, err := windowsLHMHelperPath()
 	if err != nil {
 		c.err, c.at = err, time.Now()
@@ -117,9 +91,6 @@ func (c *windowsLHMCache) read(ctx context.Context) (windowsLHMData, error) {
 }
 
 func lhmReason(err error) string {
-	if errors.Is(err, errDotNetFramework472Required) {
-		return "dotnet_framework_472_required"
-	}
 	if errors.Is(err, errLHMHelperMissing) {
 		return "lhm_helper_missing"
 	}
@@ -153,17 +124,15 @@ func lhmDataReason(data windowsLHMData, source string) string {
 }
 
 func hardwareMonitorStatus(reasons map[string]string) *HardwareMonitorStatus {
-	const backend = "LibreHardwareMonitor 0.9.4 (Ring0)"
+	const backend = "LibreHardwareMonitor 0.9.6 (PawnIO)"
 	// Check actionable prerequisite failures before the generic runtime states;
 	// map iteration order must not decide the GUI message.
-	for _, wanted := range []string{"dotnet_framework_472_required", "lhm_helper_missing", "lhm_permission_required"} {
+	for _, wanted := range []string{"lhm_helper_missing", "lhm_permission_required"} {
 		for _, reason := range reasons {
 			if reason != wanted {
 				continue
 			}
 			switch reason {
-			case "dotnet_framework_472_required":
-				return &HardwareMonitorStatus{Backend: backend, State: "missing_dependency", Code: reason, Message: "需要 .NET Framework 4.7.2 或更高版本才能读取 Windows 硬件传感器。请安装后重新检测。"}
 			case "lhm_helper_missing":
 				return &HardwareMonitorStatus{Backend: backend, State: "missing_dependency", Code: reason, Message: "Windows 硬件监控组件未随当前安装包提供；请重新安装 Windows 发行包。"}
 			case "lhm_permission_required":

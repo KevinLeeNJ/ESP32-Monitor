@@ -90,7 +90,7 @@ func capabilitiesFrom(batch Batch, reasons map[string]string) Capabilities {
 			}
 		} else if c.Reason == "permission_required" || c.Reason == "lhm_permission_required" {
 			c.State = "permission_required"
-		} else if c.Reason == "dotnet_framework_472_required" || c.Reason == "lhm_helper_missing" {
+		} else if c.Reason == "lhm_helper_missing" {
 			c.State = "missing_dependency"
 		} else if src.id == nativeSourceID("public_ip") {
 			// Scans never make the external request; selection is the trigger.

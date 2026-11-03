@@ -16,7 +16,7 @@ type windowsLMHSensor struct {
 
 // windowsLHMCPUTemperature retains the WMI reader for compatibility with
 // developer installations that explicitly enable LHM's WMI server. Production
-// packages use the bundled .NET Framework helper instead (see lhm-helper).
+// packages use the bundled self-contained helper instead (see lhm-helper).
 func windowsLHMCPUTemperature(ctx context.Context) (float64, bool, error) {
 	var sensors []windowsLMHSensor
 	if err := windowsQuery(ctx, `root\LibreHardwareMonitor`, `SELECT Identifier,Name,SensorType,Value FROM Sensor`, &sensors); err != nil {

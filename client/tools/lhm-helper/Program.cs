@@ -4,20 +4,20 @@ using System.Globalization;
 using System.Linq;
 using System.Security.Principal;
 using System.Text;
-using System.Web.Script.Serialization;
+using System.Text.Json;
 using LibreHardwareMonitor.Hardware;
 using LibreHardwareMonitor.Hardware.Storage;
 
 namespace ESP32Monitor.LhmHelper
 {
     // Windows-only, read-only hardware sensor bridge. It targets .NET Framework
-    // 4.7.2 and is launched by the agent as a short-lived child process. All
+    // 8 and is launched by the agent as a short-lived child process. All
     // values come from LibreHardwareMonitor's hardware graph; unsupported
     // readings are omitted instead of being replaced with zeroes.
     internal static class Program
     {
-        private const string Backend = "LibreHardwareMonitor 0.9.4 (Ring0)";
-        private static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 8 * 1024 * 1024 };
+        private const string Backend = "LibreHardwareMonitor 0.9.6 (PawnIO)";
+        private static readonly JsonSerializerOptions Json = new JsonSerializerOptions { IncludeFields = true };
 
         private static int Main(string[] args)
         {
@@ -47,7 +47,7 @@ namespace ESP32Monitor.LhmHelper
 
         private static void Write(object value)
         {
-            Console.Out.Write(Json.Serialize(value));
+            Console.Out.Write(JsonSerializer.Serialize(value, value.GetType(), Json));
             Console.Out.Flush();
         }
 
@@ -167,13 +167,13 @@ namespace ESP32Monitor.LhmHelper
 
             private static void AddDisk(IHardware hardware, Snapshot snapshot)
             {
-                var storage = hardware as AbstractStorage;
+                var storage = hardware as StorageDevice;
                 if (storage == null)
                     return;
                 var disk = new Disk
                 {
                     identifier = hardware.Identifier.ToString(),
-                    device = "PHYSICALDRIVE" + storage.Index.ToString(CultureInfo.InvariantCulture),
+                    device = "PHYSICALDRIVE" + storage.Storage.DriveNumber.ToString(CultureInfo.InvariantCulture),
                     model = hardware.Name ?? string.Empty
                 };
 

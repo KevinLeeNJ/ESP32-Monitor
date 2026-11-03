@@ -150,9 +150,9 @@ func TestWindowsLHMCPUTemperatureSelection(t *testing.T) {
 }
 
 func TestWindowsLHMStatusAndMappings(t *testing.T) {
-	status := hardwareMonitorStatus(map[string]string{"windows_cpu": "dotnet_framework_472_required"})
-	if status == nil || status.State != "missing_dependency" || status.Code != "dotnet_framework_472_required" {
-		t.Fatalf("runtime requirement was not exposed: %#v", status)
+	status := hardwareMonitorStatus(map[string]string{"windows_cpu": "lhm_helper_missing"})
+	if status == nil || status.State != "missing_dependency" || status.Code != "lhm_helper_missing" {
+		t.Fatalf("missing helper was not exposed: %#v", status)
 	}
 	if status := hardwareMonitorStatus(map[string]string{"windows_cpu": "unavailable"}); status != nil {
 		t.Fatalf("ordinary unavailable result became a dependency warning: %#v", status)

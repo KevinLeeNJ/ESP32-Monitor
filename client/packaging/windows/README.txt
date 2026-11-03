@@ -8,7 +8,8 @@ ESP32 Monitor — Windows x64 绿色包
 --------
 monitor-client.exe        图形界面（GUI），启动后由它在后台托管 Agent
 monitor-agent.exe         采集/上传/ESP32 连接进程，GUI 会以管理员权限启动它
-helpers\lhm-helper\       LibreHardwareMonitor .NET Framework 4.7.2 硬件传感器助手
+helpers\lhm-helper\       LibreHardwareMonitor PawnIO 硬件传感器助手（含 .NET 运行时）
+PawnIO_setup.exe          PawnIO 安装程序
 app-icon.ico              应用图标
 LICENSE.txt               项目 MIT 许可证
 LICENSE-*.txt/html         第三方组件与内置素材许可证全文
@@ -16,13 +17,14 @@ THIRD_PARTY_NOTICES.txt   第三方组件与许可证说明
 
 系统要求
 --------
-1. Microsoft Edge WebView2 Runtime（Windows 11 通常已内置）。
-   缺失时启动会弹出提示，请安装 Evergreen Runtime 后重试：
-   https://developer.microsoft.com/microsoft-edge/webview2/
-2. .NET Framework 4.7.2 或更高版本（读取 CPU/磁盘温度与 SMART 所需）。
-   Windows 10 1809+ / Windows 11 通常已包含；缺失时 GUI 会提示安装。
-3. 后台 Agent 需要管理员权限读取低层传感器。启动 GUI 时 Windows 会弹出一次 UAC，
+1. Microsoft Edge WebView2 Runtime（Windows 11 通常已内置）。缺失时可选择由
+   客户端联网下载安装；如安装失败，可访问 https://developer.microsoft.com/microsoft-edge/webview2/。
+2. PawnIO 用于读取部分硬件传感器。缺失时客户端会询问是否安装；安装需要管理员权限。
+   拒绝安装仍可使用客户端，但部分传感器不可用。
+3. 后台 Agent 需要管理员权限读取低层传感器。启动 GUI 时 Windows 会弹出 UAC，
    请选择“是”；GUI 本身仍以普通权限运行。
+
+硬件监控助手已自带 .NET 运行时，无需另行安装 .NET Framework。
 
 首次启动
 --------
@@ -48,8 +50,7 @@ THIRD_PARTY_NOTICES.txt   第三方组件与许可证说明
 
   .\monitor-agent.exe --collector-scan
 
-可查看本机实时采集能力；若缺少 .NET Framework 4.7.2 或未获管理员权限，输出会明确
-给出原因，不会伪造数值。
+可查看本机实时采集能力；缺少硬件监控助手或未获管理员权限时，输出会给出原因。
 
 数据位置与卸载
 --------------
@@ -66,7 +67,7 @@ THIRD_PARTY_NOTICES.txt   第三方组件与许可证说明
 
 常见问题
 --------
-* CPU 温度显示不可用：确认 UAC 已允许 Agent 提权，且系统已安装 .NET Framework
-  4.7.2+；部分虚拟机/旧硬件本身不暴露该传感器。
+* CPU 温度显示不可用：确认已安装 PawnIO 且 UAC 已允许 Agent 提权；部分虚拟机或
+  旧硬件本身不暴露该传感器。
 * 托盘图标不显示：Windows 11 默认把新图标收进“^”溢出区，可从那里拖到任务栏。
 * 上传失败：确认 Server 为 v2 协议；当前客户端不支持旧版 v1 摄取接口。
