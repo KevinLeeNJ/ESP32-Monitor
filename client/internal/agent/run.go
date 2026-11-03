@@ -41,8 +41,18 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		return err
 	}
 	defer func() {
-		if application != nil {
+		if application == nil {
+			return
+		}
+		closed := make(chan struct{})
+		go func() {
 			_ = application.Close()
+			close(closed)
+		}()
+		select {
+		case <-closed:
+		case <-time.After(5 * time.Second):
+			log.Warn("agent_close_timeout")
 		}
 	}()
 	if o.login {
@@ -183,7 +193,12 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 			}
 		}
 	}()
-	defer func() { cancel(); <-done; <-tasksDone; <-musicDone }()
+	defer func() {
+		cancel()
+		if !waitClosed(5*time.Second, done, tasksDone, musicDone) {
+			log.Warn("agent_teardown_timeout")
+		}
+	}()
 	if !o.watch && !c.Companion.Enabled && o.collectorAPI == "" && !c.Collector.Enabled && ipcServer == nil {
 		// A one-shot must wait for its requested reads rather than return starting.
 		service.Refresh(ctx)
@@ -213,4 +228,17 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 		default:
 		}
 	}
+}
+
+func waitClosed(timeout time.Duration, chans ...<-chan struct{}) bool {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	for _, ch := range chans {
+		select {
+		case <-ch:
+		case <-deadline.C:
+			return false
+		}
+	}
+	return true
 }

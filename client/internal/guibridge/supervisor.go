@@ -524,8 +524,13 @@ func (s *Supervisor) Stop() {
 	if external {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		if client, err := ipc.Dial(s.socket); err == nil {
-			_ = client.Quit(ctx)
+		client, err := ipc.Dial(s.socket)
+		if err != nil {
+			logging.L("supervisor").Warn("agent_quit_unreachable", "error", err)
+			return
+		}
+		if err := client.Quit(ctx); err != nil {
+			logging.L("supervisor").Warn("agent_quit_failed", "error", err)
 		}
 		return
 	}
