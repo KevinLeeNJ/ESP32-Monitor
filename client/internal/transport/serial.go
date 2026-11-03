@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"esp32-monitor/client/internal/transport/wire"
+	"fmt"
 	"io"
 	"time"
 )
@@ -164,7 +165,7 @@ func (b *Backend) attachSerial(ctx context.Context, stream io.ReadWriteCloser, s
 	}
 	if !valid {
 		if err != nil {
-			return err
+			return fmt.Errorf("serial_hello: %w", err)
 		}
 		return wire.ErrMessage
 	}
@@ -303,7 +304,7 @@ func (b *Backend) attachSerial(ctx context.Context, stream io.ReadWriteCloser, s
 	}
 	f, err = r.next(ctx, 2*time.Second)
 	if err != nil {
-		return err
+		return fmt.Errorf("serial_auth_response: %w", err)
 	}
 	plain, err = VerifySerial(f, nil, 2)
 	var response Auth
@@ -318,25 +319,6 @@ func (b *Backend) attachSerial(ctx context.Context, stream io.ReadWriteCloser, s
 	if subtle.ConstantTimeCompare(a, c) != 1 {
 		return errors.New("unauthorized")
 	}
-	// Only authenticated serial candidates may retire an active LAN session.
-	b.mu.Lock()
-	old := b.sessions[pair.DeviceID]
-	if old != nil && old.transport == "serial" {
-		b.mu.Unlock()
-		return errors.New("session_conflict")
-	}
-	if old != nil {
-		old.cancel()
-		if old.client != nil {
-			old.client.Stop(errors.New("mode_changed"))
-		}
-		delete(b.sessions, pair.DeviceID)
-	}
-	if len(b.sessions) >= 4 {
-		b.mu.Unlock()
-		return errors.New("capacity_exceeded")
-	}
-	b.mu.Unlock()
 	auth.Step = "result"
 	auth.Proof = &keys.HostProof
 	auth.Accepted = wire.Ptr(true)
@@ -346,7 +328,7 @@ func (b *Backend) attachSerial(ctx context.Context, stream io.ReadWriteCloser, s
 	resultSeq := seq
 	f, err = r.next(ctx, 2*time.Second)
 	if err != nil {
-		return err
+		return fmt.Errorf("serial_auth_ack: %w", err)
 	}
 	plain, err = VerifySerial(f, keys.Frame, 2)
 	var ack wire.Ack
@@ -361,13 +343,12 @@ func (b *Backend) attachSerial(ctx context.Context, stream io.ReadWriteCloser, s
 		sessionCancel()
 		return errors.New("device_disabled")
 	}
-	if b.sessions[pair.DeviceID] != nil || len(b.sessions) >= 4 {
+	old := b.sessions[pair.DeviceID]
+	if old != nil && old.transport == "serial" || old == nil && len(b.sessions) >= 4 {
 		b.mu.Unlock()
 		sessionCancel()
 		return errors.New("session_conflict")
 	}
-	b.sessions[pair.DeviceID] = s
-	b.serialSeen[pair.DeviceID] = time.Now()
 	b.mu.Unlock()
 	done := make(chan struct{})
 	b.wg.Add(1)

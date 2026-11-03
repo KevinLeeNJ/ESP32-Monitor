@@ -11,7 +11,7 @@ import (
 )
 
 func TestSerialEndToEndSimulatedMonitor(t *testing.T) {
-	b, e := New(Options{StoreDirectory: filepath.Join(t.TempDir(), "vault"), HostName: "serial-host", BindIP: "127.0.0.1", MQTTAddress: "127.0.0.1:0", HTTPAddress: "127.0.0.1:0"})
+	b, e := New(Options{StoreDirectory: filepath.Join(t.TempDir(), "vault"), HostName: "serial-host", BindIP: "127.0.0.1", MQTTAddress: "127.0.0.1:0", HTTPAddress: "127.0.0.1:0", EnumerateSerial: func() ([]DiscoveredDevice, error) { return nil, nil }})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -20,6 +20,12 @@ func TestSerialEndToEndSimulatedMonitor(t *testing.T) {
 	if e = b.store.put(pair); e != nil {
 		t.Fatal(e)
 	}
+	lanCtx, lanCancel := context.WithCancel(context.Background())
+	defer lanCancel()
+	lan := &session{pair: pair, transport: "lan", ctx: lanCtx, cancel: lanCancel}
+	b.mu.Lock()
+	b.sessions[pair.DeviceID] = lan
+	b.mu.Unlock()
 	host, device := net.Pipe()
 	defer device.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -87,6 +93,12 @@ func TestSerialEndToEndSimulatedMonitor(t *testing.T) {
 		t.Fatal("host auth failed")
 	}
 	send(SerialAck, wire.Ack{ProtocolVersion: 1, SessionID: auth.SessionID, AckSeq: f.Seq, Status: "accepted"}, keys.Frame)
+	b.mu.Lock()
+	stillLAN := b.sessions[pair.DeviceID] == lan
+	b.mu.Unlock()
+	if !stillLAN || lanCtx.Err() != nil {
+		t.Fatal("serial authentication interrupted the LAN session")
+	}
 	cfg := disabledConfig()
 	cfg.DeviceID = pair.DeviceID
 	cfg.SessionID = auth.SessionID
@@ -128,6 +140,13 @@ func TestSerialEndToEndSimulatedMonitor(t *testing.T) {
 		}
 		send(SerialHeartbeat, wire.Heartbeat{ProtocolVersion: 1, HostID: b.HostID(), DeviceID: pair.DeviceID, SessionID: auth.SessionID, Seq: seq + 1, SentAt: time.Now().Unix(), LastSnapshotSeq: &snapshot.Seq, Epoch: &cfg.Epoch, Revision: &cfg.Revision}, keys.Frame)
 		send(SerialAck, wire.Ack{ProtocolVersion: 1, SessionID: auth.SessionID, AckSeq: f.Seq, Status: "accepted"}, keys.Frame)
+	}
+	deadline := time.Now().Add(time.Second)
+	for lanCtx.Err() == nil && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if lanCtx.Err() == nil {
+		t.Fatal("proven serial session did not retire LAN")
 	}
 	device.Close()
 	select {

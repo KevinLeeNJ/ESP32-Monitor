@@ -63,6 +63,9 @@ typedef struct {
     uint64_t last_rx_ms;
     uint64_t last_heartbeat_ms;
     monitor_lan_session_t *lan;
+    bool committed;
+    esp32monitor_companion_Snapshot *pending_snapshot;
+    esp32monitor_companion_Heartbeat *pending_heartbeat;
     esp32monitor_companion_Config config;
     bool heap_monitor;
     uint32_t heap_start_free;
@@ -92,7 +95,7 @@ static void heap_sample(serial_ctx_t *ctx)
 }
 
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
-static bool s_started, s_stop, s_revoke, s_active, s_driver;
+static bool s_started, s_stop, s_revoke, s_active, s_committed, s_driver;
 static SemaphoreHandle_t s_tx_lock;
 static esp_pm_lock_handle_t s_pm_lock;
 
@@ -286,7 +289,9 @@ static void end_session(serial_ctx_t *ctx, const char *reason, bool goodbye, boo
         (void)monitor_lan_goodbye(ctx->lan, reason, time(NULL));
     if (ctx->lan) monitor_lan_destroy(ctx->lan);
     ctx->lan = NULL;
-    monitor_companion_sink_connection(false, true);
+    if (ctx->committed) monitor_companion_sink_connection(false, true);
+    free(ctx->pending_snapshot); ctx->pending_snapshot = NULL;
+    free(ctx->pending_heartbeat); ctx->pending_heartbeat = NULL;
     if (revoke) {
         esp_err_t error = monitor_pairing_store_revoke();
         if (error == ESP_OK) ESP_LOGI(TAG, "pairing record revoked by host");
@@ -299,11 +304,12 @@ static void end_session(serial_ctx_t *ctx, const char *reason, bool goodbye, boo
     ctx->authenticated = false;
     ctx->state = SERIAL_IDLE;
     ctx->session_id[0] = ctx->host_nonce[0] = ctx->device_nonce[0] = 0;
-    portENTER_CRITICAL(&s_lock); s_active = false; s_revoke = false; portEXIT_CRITICAL(&s_lock);
+    portENTER_CRITICAL(&s_lock); s_active = false; s_committed = false; s_revoke = false; portEXIT_CRITICAL(&s_lock);
     monitor_display_refresh_request_reason(MONITOR_REFRESH_RECOVER);
     /* The serial link no longer owns the monitor: bring Wi-Fi back and let
      * clock/weather/Devices producers and LAN discovery resume. */
-    (void)monitor_wifi_resume();
+    if (ctx->committed) (void)monitor_wifi_resume();
+    ctx->committed = false;
     ctx->heap_resume_free = internal_free();
     ctx->heap_resume_largest = internal_largest();
     if (was_authenticated) {
@@ -418,14 +424,28 @@ static bool serial_send(void *user, const char *suffix, const uint8_t *payload, 
     return false;
 }
 
+static bool serial_stage_apply(void *user, const esp32monitor_companion_Snapshot *snapshot,
+                               const esp32monitor_companion_Heartbeat *heartbeat)
+{
+    serial_ctx_t *ctx = user;
+    if (ctx->committed) return monitor_companion_sink_apply(user, snapshot, heartbeat);
+    if (snapshot) {
+        if (!ctx->pending_snapshot) ctx->pending_snapshot = heap_caps_malloc_prefer(sizeof *snapshot, 2,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (!ctx->pending_snapshot) return false;
+        *ctx->pending_snapshot = *snapshot;
+    }
+    if (heartbeat) {
+        if (!ctx->pending_heartbeat) ctx->pending_heartbeat = heap_caps_malloc_prefer(sizeof *heartbeat, 2,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (!ctx->pending_heartbeat) return false;
+        *ctx->pending_heartbeat = *heartbeat;
+    }
+    return true;
+}
+
 static bool start_application_session(serial_ctx_t *ctx, uint64_t now)
 {
-    if (monitor_companion_mqtt_running()) {
-        ESP_LOGI(TAG, "serial authenticated; stopping LAN session");
-        monitor_companion_mqtt_stop();
-    }
-    monitor_companion_sink_connection(false, true);
-
     memset(&ctx->config, 0, sizeof ctx->config);
     ctx->config.protocol_version = 1;
     strcpy(ctx->config.device_id, ctx->device_id);
@@ -438,7 +458,7 @@ static bool start_application_session(serial_ctx_t *ctx, uint64_t now)
         return false;
     }
     ctx->lan = monitor_lan_create_serial(ctx->host_id, ctx->device_id, ctx->pairing_id, ctx->session_id,
-                                         &ctx->config, serial_send, monitor_companion_sink_apply, ctx, now);
+                                         &ctx->config, serial_send, serial_stage_apply, ctx, now);
     if (!ctx->lan) {
         ESP_LOGE(TAG, "serial session create failed");
         return false;
@@ -551,14 +571,6 @@ static void handle_auth(serial_ctx_t *ctx, uint32_t seq, const uint8_t *payload,
             ESP_LOGW(TAG, "auth challenge rejected");
             return;
         }
-        /* A paired serial host takes priority over LAN. Stop the LAN session
-         * before key derivation: HKDF and the AES config need internal RAM
-         * that Wi-Fi/MQTT otherwise leave exhausted. */
-        if (monitor_companion_mqtt_running()) {
-            ESP_LOGI(TAG, "serial auth challenge; stopping LAN session");
-            monitor_companion_mqtt_stop();
-            if (!monitor_companion_mqtt_wait_stopped(2000)) ESP_LOGW(TAG, "LAN worker did not stop in time");
-        }
         if (!monitor_serial_derive_keys(auth.host_id, auth.device_id, auth.pairing_id, auth.session_id,
                                         auth.host_nonce, auth.device_nonce, ctx->pair.serial_key, &ctx->keys)) {
             ESP_LOGW(TAG, "auth key derivation failed");
@@ -586,7 +598,7 @@ static void handle_auth(serial_ctx_t *ctx, uint32_t seq, const uint8_t *payload,
             return;
         }
         ctx->state = SERIAL_AUTH_SENT;
-        ctx->last_rx_ms = now;
+        ctx->last_rx_ms = monotonic_ms();
         return;
     }
 
@@ -706,13 +718,7 @@ static void handle_config_ack(serial_ctx_t *ctx, const uint8_t *payload, size_t 
         end_session(ctx, "heartbeat", true, false);
         return;
     }
-    /* The radio is stopped only after the encrypted config handshake completed:
-     * tearing Wi-Fi down before the large frame made USB CDC transfer losses
-     * indistinguishable from protocol errors. */
-    ctx->heap_suspend_free = internal_free();
-    ctx->heap_suspend_largest = internal_largest();
-    if (monitor_wifi_suspend() != ESP_OK) ESP_LOGW(TAG, "Wi-Fi suspend failed");
-    ESP_LOGI(TAG, "serial session running");
+    ESP_LOGI(TAG, "serial session proving");
 }
 
 static void handle_data(serial_ctx_t *ctx, const char *suffix, const uint8_t *payload, size_t length, uint64_t now)
@@ -724,7 +730,25 @@ static void handle_data(serial_ctx_t *ctx, const char *suffix, const uint8_t *pa
         return;
     }
     ctx->last_rx_ms = now;
-    if (monitor_lan_state(ctx->lan) == MONITOR_LAN_CONNECTED)
+    if (!ctx->committed && monitor_lan_state(ctx->lan) == MONITOR_LAN_CONNECTED) {
+        portENTER_CRITICAL(&s_lock); s_committed = true; portEXIT_CRITICAL(&s_lock);
+        if (monitor_companion_mqtt_running()) {
+            monitor_companion_mqtt_stop();
+            if (!monitor_companion_mqtt_wait_stopped(2000)) {
+                end_session(ctx, "lan_stop", true, false);
+                return;
+            }
+        }
+        ctx->committed = true;
+        (void)monitor_companion_sink_apply(ctx, ctx->pending_snapshot, ctx->pending_heartbeat);
+        free(ctx->pending_snapshot); ctx->pending_snapshot = NULL;
+        free(ctx->pending_heartbeat); ctx->pending_heartbeat = NULL;
+        ctx->heap_suspend_free = internal_free();
+        ctx->heap_suspend_largest = internal_largest();
+        if (monitor_wifi_suspend() != ESP_OK) ESP_LOGW(TAG, "Wi-Fi suspend failed");
+        ESP_LOGI(TAG, "serial session running");
+    }
+    if (ctx->committed && monitor_lan_state(ctx->lan) == MONITOR_LAN_CONNECTED)
         monitor_companion_sink_connection(true, false);
     heap_sample(ctx);
 }
@@ -861,7 +885,7 @@ static void tick(serial_ctx_t *ctx, uint64_t now)
         end_session(ctx, "heartbeat", true, false);
         return;
     }
-    if (ctx->lan && monitor_lan_state(ctx->lan) == MONITOR_LAN_CONNECTED)
+    if (ctx->committed && ctx->lan && monitor_lan_state(ctx->lan) == MONITOR_LAN_CONNECTED)
         monitor_companion_sink_connection(true, false);
     if (ctx->lan && monitor_lan_state(ctx->lan) == MONITOR_LAN_CLOSED)
         end_session(ctx, "closed", false, false);
@@ -878,8 +902,18 @@ static int serial_log_vprintf(const char *format, va_list args)
     size_t used = (size_t)length < sizeof buffer ? (size_t)length : sizeof buffer - 1;
     portENTER_CRITICAL(&s_lock); bool active = s_active; portEXIT_CRITICAL(&s_lock);
     if (s_tx_lock) xSemaphoreTake(s_tx_lock, portMAX_DELAY);
-    if (s_driver && !active) (void)usb_serial_jtag_write_bytes(buffer, used, pdMS_TO_TICKS(50));
-    esp_rom_printf("%.*s", (int)used, buffer);
+    if (s_driver && !active) {
+        /* The driver write alone covers USB monitoring. esp_rom_printf is
+         * deliberately not called here: its ROM formatter rejects precision
+         * specs, and on ESP32-S3 every ROM console write also reaches the
+         * USB Serial/JTAG secondary console (ESP_ROM_CONSOLE_OUTPUT_SECONDARY),
+         * which would duplicate every line on USB. */
+        (void)usb_serial_jtag_write_bytes(buffer, used, pdMS_TO_TICKS(50));
+    } else {
+        /* No driver path (install failed or a session owns the port): the ROM
+         * console keeps UART0 alive, at the cost of the secondary USJ copy. */
+        esp_rom_printf("%s", buffer);
+    }
     if (s_tx_lock) xSemaphoreGive(s_tx_lock);
     return length;
 }
@@ -962,6 +996,6 @@ void monitor_serial_stop(void)
 
 bool monitor_serial_active(void)
 {
-    portENTER_CRITICAL(&s_lock); bool active = s_active; portEXIT_CRITICAL(&s_lock);
+    portENTER_CRITICAL(&s_lock); bool active = s_committed; portEXIT_CRITICAL(&s_lock);
     return active;
 }

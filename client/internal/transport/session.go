@@ -67,7 +67,30 @@ func (s *session) setState(b *Backend, state string) {
 	b.mu.Lock()
 	changed := s.state != state
 	s.state = state
+	var old *session
+	reject := false
+	if state == "connected" && s.transport == "serial" && b.sessions[s.pair.DeviceID] != s {
+		old = b.sessions[s.pair.DeviceID]
+		if b.disabled[s.pair.DeviceID] || s.ctx.Err() != nil ||
+			(old != nil && old.transport == "serial") || (old == nil && len(b.sessions) >= 4) {
+			reject = true
+			old = nil
+		} else {
+			b.sessions[s.pair.DeviceID] = s
+			b.serialSeen[s.pair.DeviceID] = time.Now()
+		}
+	}
 	b.mu.Unlock()
+	if reject {
+		s.cancel()
+		return
+	}
+	if old != nil {
+		old.cancel()
+		if old.client != nil {
+			old.client.Stop(errors.New("mode_changed"))
+		}
+	}
 	if changed {
 		logging.L("transport").Info("device_session_state", "device", logging.Ref(s.pair.DeviceID), "state", state)
 	}
