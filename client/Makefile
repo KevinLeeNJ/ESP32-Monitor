@@ -30,6 +30,20 @@ test-collector-e2e:
 build-appimage-linux:
 	./scripts/build-linux-appimage.sh
 
+# Release path: builds inside the pinned Ubuntu 24.04 environment so the
+# artifact keeps the documented glibc/GTK/WebKit baseline.
+.PHONY: build-appimage-linux-repro
+build-appimage-linux-repro:
+	./scripts/build-linux-appimage-repro.sh
+
+.PHONY: check-linux-baseline
+check-linux-baseline:
+	./scripts/check-linux-baseline.sh build/linux/ESP32-Monitor-$$(uname -m).AppImage
+
 .PHONY: test-appimage-linux
 test-appimage-linux:
 	python3 tests/test_appimage_layout.py build/linux/ESP32-Monitor-$$(uname -m).AppImage
+
+.PHONY: ci-linux
+ci-linux:
+	./scripts/ci-linux.sh
