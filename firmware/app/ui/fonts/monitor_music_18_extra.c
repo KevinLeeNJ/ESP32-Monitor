@@ -1,3 +1,7 @@
+/* Hangul and music-note glyphs use Fusion Pixel (SIL OFL 1.1).
+ * Source: client/frontend/public/fonts/.
+ * Regenerate with firmware/assets/fonts/generate_music_font.py.
+ */
 /*******************************************************************************
  * Size: 18 px
  * Bpp: 1
@@ -40,197 +44,190 @@ static const uint8_t glyph_dsc_bin[] __attribute__((aligned(4))) = {
  *  CHARACTER MAPPING
  *--------------------*/
 
-static const uint8_t glyph_id_ofs_list_45[] = {
-    0, 1, 2, 3, 4, 5, 6, 0,
-    7, 8, 9, 10, 11, 12, 13
-};
+
 
 /*Collect the unicode lists and glyph_id offsets*/
 static const lv_font_fmt_txt_cmap_t cmaps[] =
 {
     {
-        .range_start = 44032, .range_length = 164, .glyph_id_start = 1,
+        .range_start = 9834, .range_length = 2, .glyph_id_start = 1,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 44196, .range_length = 256, .glyph_id_start = 165,
+        .range_start = 44032, .range_length = 164, .glyph_id_start = 3,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 44452, .range_length = 256, .glyph_id_start = 421,
+        .range_start = 44196, .range_length = 256, .glyph_id_start = 167,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 44708, .range_length = 256, .glyph_id_start = 677,
+        .range_start = 44452, .range_length = 256, .glyph_id_start = 423,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 44964, .range_length = 256, .glyph_id_start = 933,
+        .range_start = 44708, .range_length = 256, .glyph_id_start = 679,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 45220, .range_length = 256, .glyph_id_start = 1189,
+        .range_start = 44964, .range_length = 256, .glyph_id_start = 935,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 45476, .range_length = 256, .glyph_id_start = 1445,
+        .range_start = 45220, .range_length = 256, .glyph_id_start = 1191,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 45732, .range_length = 256, .glyph_id_start = 1701,
+        .range_start = 45476, .range_length = 256, .glyph_id_start = 1447,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 45988, .range_length = 256, .glyph_id_start = 1957,
+        .range_start = 45732, .range_length = 256, .glyph_id_start = 1703,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 46244, .range_length = 256, .glyph_id_start = 2213,
+        .range_start = 45988, .range_length = 256, .glyph_id_start = 1959,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 46500, .range_length = 256, .glyph_id_start = 2469,
+        .range_start = 46244, .range_length = 256, .glyph_id_start = 2215,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 46756, .range_length = 256, .glyph_id_start = 2725,
+        .range_start = 46500, .range_length = 256, .glyph_id_start = 2471,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 47012, .range_length = 256, .glyph_id_start = 2981,
+        .range_start = 46756, .range_length = 256, .glyph_id_start = 2727,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 47268, .range_length = 256, .glyph_id_start = 3237,
+        .range_start = 47012, .range_length = 256, .glyph_id_start = 2983,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 47524, .range_length = 256, .glyph_id_start = 3493,
+        .range_start = 47268, .range_length = 256, .glyph_id_start = 3239,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 47780, .range_length = 256, .glyph_id_start = 3749,
+        .range_start = 47524, .range_length = 256, .glyph_id_start = 3495,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 48036, .range_length = 256, .glyph_id_start = 4005,
+        .range_start = 47780, .range_length = 256, .glyph_id_start = 3751,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 48292, .range_length = 256, .glyph_id_start = 4261,
+        .range_start = 48036, .range_length = 256, .glyph_id_start = 4007,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 48548, .range_length = 256, .glyph_id_start = 4517,
+        .range_start = 48292, .range_length = 256, .glyph_id_start = 4263,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 48804, .range_length = 256, .glyph_id_start = 4773,
+        .range_start = 48548, .range_length = 256, .glyph_id_start = 4519,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 49060, .range_length = 256, .glyph_id_start = 5029,
+        .range_start = 48804, .range_length = 256, .glyph_id_start = 4775,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 49316, .range_length = 256, .glyph_id_start = 5285,
+        .range_start = 49060, .range_length = 256, .glyph_id_start = 5031,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 49572, .range_length = 256, .glyph_id_start = 5541,
+        .range_start = 49316, .range_length = 256, .glyph_id_start = 5287,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 49828, .range_length = 256, .glyph_id_start = 5797,
+        .range_start = 49572, .range_length = 256, .glyph_id_start = 5543,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 50084, .range_length = 256, .glyph_id_start = 6053,
+        .range_start = 49828, .range_length = 256, .glyph_id_start = 5799,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 50340, .range_length = 256, .glyph_id_start = 6309,
+        .range_start = 50084, .range_length = 256, .glyph_id_start = 6055,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 50596, .range_length = 256, .glyph_id_start = 6565,
+        .range_start = 50340, .range_length = 256, .glyph_id_start = 6311,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 50852, .range_length = 256, .glyph_id_start = 6821,
+        .range_start = 50596, .range_length = 256, .glyph_id_start = 6567,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 51108, .range_length = 256, .glyph_id_start = 7077,
+        .range_start = 50852, .range_length = 256, .glyph_id_start = 6823,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 51364, .range_length = 256, .glyph_id_start = 7333,
+        .range_start = 51108, .range_length = 256, .glyph_id_start = 7079,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 51620, .range_length = 256, .glyph_id_start = 7589,
+        .range_start = 51364, .range_length = 256, .glyph_id_start = 7335,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 51876, .range_length = 256, .glyph_id_start = 7845,
+        .range_start = 51620, .range_length = 256, .glyph_id_start = 7591,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 52132, .range_length = 256, .glyph_id_start = 8101,
+        .range_start = 51876, .range_length = 256, .glyph_id_start = 7847,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 52388, .range_length = 256, .glyph_id_start = 8357,
+        .range_start = 52132, .range_length = 256, .glyph_id_start = 8103,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 52644, .range_length = 256, .glyph_id_start = 8613,
+        .range_start = 52388, .range_length = 256, .glyph_id_start = 8359,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 52900, .range_length = 256, .glyph_id_start = 8869,
+        .range_start = 52644, .range_length = 256, .glyph_id_start = 8615,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 53156, .range_length = 256, .glyph_id_start = 9125,
+        .range_start = 52900, .range_length = 256, .glyph_id_start = 8871,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 53412, .range_length = 256, .glyph_id_start = 9381,
+        .range_start = 53156, .range_length = 256, .glyph_id_start = 9127,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 53668, .range_length = 256, .glyph_id_start = 9637,
+        .range_start = 53412, .range_length = 256, .glyph_id_start = 9383,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 53924, .range_length = 256, .glyph_id_start = 9893,
+        .range_start = 53668, .range_length = 256, .glyph_id_start = 9639,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 54180, .range_length = 256, .glyph_id_start = 10149,
+        .range_start = 53924, .range_length = 256, .glyph_id_start = 9895,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 54436, .range_length = 256, .glyph_id_start = 10405,
+        .range_start = 54180, .range_length = 256, .glyph_id_start = 10151,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 54692, .range_length = 256, .glyph_id_start = 10661,
+        .range_start = 54436, .range_length = 256, .glyph_id_start = 10407,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 54948, .range_length = 256, .glyph_id_start = 10917,
+        .range_start = 54692, .range_length = 256, .glyph_id_start = 10663,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     },
     {
-        .range_start = 65281, .range_length = 159, .glyph_id_start = 11173,
+        .range_start = 54948, .range_length = 256, .glyph_id_start = 10919,
         .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
-    },
-    {
-        .range_start = 65504, .range_length = 15, .glyph_id_start = 11332,
-        .unicode_list = NULL, .glyph_id_ofs_list = glyph_id_ofs_list_45, .list_length = 15, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_FULL
     }
 };
 
@@ -255,7 +252,7 @@ static lv_font_fmt_txt_dsc_t font_dsc = {
     .cmaps = cmaps,
     .kern_dsc = NULL,
     .kern_scale = 0,
-    .cmap_num = 46,
+    .cmap_num = 45,
     .bpp = 1,
     .kern_classes = 0,
     .bitmap_format = 0,

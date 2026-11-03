@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Generate uncompressed LVGL music fonts.
 
-Requires fonttools[woff] and lv_font_conv 1.5.3. The source font and its
-SIL OFL 1.1 license are in client/frontend/public/fonts/. Building the
+Requires fonttools[woff], brotli and lv_font_conv 1.5.3. Music metadata
+uses MiSans Regular (supplied separately by Xiaomi); Hangul and music-note
+glyphs missing from MiSans fall back to Fusion Pixel, whose source and SIL
+OFL 1.1 license are in client/frontend/public/fonts/. Building the
 generated C sources requires a compiler with #embed support.
 
 Glyph bitmaps and glyph descriptors are kept as .bin resources and
@@ -22,29 +24,50 @@ from fontTools.ttLib import TTFont
 root = Path(__file__).resolve().parents[3]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--converter', required=True, type=Path)
+parser.add_argument('--misans', required=True, type=Path,
+                    help='MiSans-Regular.otf from https://hyperos.mi.com/font/')
 args = parser.parse_args()
-source = root / 'client/frontend/public/fonts/fusion-pixel-zh-hans-12px.woff2'
+fusion_source = root / 'client/frontend/public/fonts/fusion-pixel-zh-hans-12px.woff2'
+misans_source = args.misans.resolve(strict=True)
 output = root / 'firmware/app/ui/fonts'
-common = '0x20-0x7e,0xa0-0xff,0x2000-0x206f,0x2605-0x2606,0x266a-0x266b,0x3000-0x30ff,0x3130-0x318f,0x3400-0x9fff'
-extra = '0xac00-0xd7a3,0xff00-0xffef'
-# Split the 18px bitmap below LVGL's 20-bit bitmap-index limit.
-fonts = [(18, 'monitor_music_18', common),
-         (18, 'monitor_music_18_extra', extra),
-         (12, 'monitor_music_12', common + ',' + extra)]
+# MiSans covers Latin, punctuation, symbols, kana, fullwidth forms and CJK.
+misans = '0x20-0x7e,0xa0-0xff,0x2000-0x206f,0x2605-0x2606,0x3000-0x30ff,0xff00-0xffef,0x3400-0x9fff'
+# Fallback only for glyphs MiSans lacks. Split the 18px bitmap below
+# LVGL's 20-bit bitmap-index limit.
+fallback = '0xac00-0xd7a3,0x266a-0x266b'
 with tempfile.TemporaryDirectory() as tmp:
-    font = TTFont(source)
+    font = TTFont(fusion_source)
     font.flavor = None
     ttf = Path(tmp) / 'fusion-pixel.ttf'
     font.save(ttf)
-    for size, name, ranges in fonts:
+    fonts = [(18, 'monitor_music_18', [(misans_source, misans)]),
+             (18, 'monitor_music_18_extra', [(ttf, fallback)]),
+             (12, 'monitor_music_12', [(misans_source, misans), (ttf, fallback)])]
+    for size, name, sources in fonts:
         target = output / (name + '.c')
-        subprocess.run(['node', str(args.converter.resolve(strict=True)), '--size', str(size),
-            '--bpp', '1', '--format', 'lvgl', '--no-compress', '--no-kerning',
-            '--font', str(ttf), '--range', ranges, '--lv-font-name', name,
-            '--output', str(target)], check=True)
+        command = ['node', str(args.converter.resolve(strict=True)), '--size', str(size),
+                   '--bpp', '1', '--format', 'lvgl', '--no-compress', '--no-kerning']
+        for path, ranges in sources:
+            command += ['--font', str(path), '--range', ranges]
+        command += ['--lv-font-name', name, '--output', str(target)]
+        subprocess.run(command, check=True)
         text = target.read_text(encoding='utf-8')
         # Converter options contain temporary absolute paths; keep output reproducible.
         text = '\n'.join(line for line in text.split('\n') if not line.startswith(' * Opts:'))
+        if name == 'monitor_music_18_extra':
+            attribution = (
+                '/* Hangul and music-note glyphs use Fusion Pixel (SIL OFL 1.1).\n'
+                ' * Source: client/frontend/public/fonts/.\n'
+            )
+        else:
+            attribution = (
+                '/* Music metadata uses MiSans Regular.\n'
+                ' * Copyright 2020-2023 Beijing Xiaomi Mobile Software Co.,Ltd.\n'
+                ' * Hangul and music-note glyphs fall back to Fusion Pixel (SIL OFL 1.1);\n'
+                ' * see client/frontend/public/fonts/.\n'
+            )
+        attribution += ' * Regenerate with firmware/assets/fonts/generate_music_font.py.\n */\n'
+        text = attribution + text
         if name == 'monitor_music_18':
             text = text.replace('#ifndef MONITOR_MUSIC_18',
                                 'LV_FONT_DECLARE(monitor_music_18_extra);\n\n#ifndef MONITOR_MUSIC_18', 1)

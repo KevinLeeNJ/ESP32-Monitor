@@ -10,7 +10,8 @@ LV_FONT_DECLARE(monitor_misans_12);
 LV_FONT_DECLARE(monitor_misans_14);
 LV_FONT_DECLARE(monitor_misans_20);
 LV_FONT_DECLARE(monitor_misans_30);
-/* Uncompressed Fusion Pixel fonts for music metadata. */
+/* Music metadata: MiSans Regular, with Fusion Pixel fallback for Hangul
+ * and music-note glyphs. */
 LV_FONT_DECLARE(monitor_music_18);
 LV_FONT_DECLARE(monitor_music_12);
 const lv_font_t *monitor_music_font(void);

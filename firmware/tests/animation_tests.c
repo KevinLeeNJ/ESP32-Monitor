@@ -551,8 +551,11 @@ static void test_music_font(void)
         CHECK(glyph.resolved_font == font->fallback && glyph.box_w > 0 && glyph.box_h > 0,
               "18px Korean glyph resolves to the additional font");
         CHECK(glyph.gid.index != 0, "18px Korean glyph has a bitmap");
-        CHECK(lv_font_get_glyph_dsc(font, &glyph, 0xff21, 0) && glyph.resolved_font == font->fallback,
-              "18px fullwidth Latin resolves to the additional font");
+        CHECK(lv_font_get_glyph_dsc(font, &glyph, 0xff21, 0) && glyph.gid.index != 0,
+              "18px fullwidth Latin has a bitmap");
+        CHECK(lv_font_get_glyph_dsc(font, &glyph, 0x266a, 0) &&
+                  glyph.resolved_font == font->fallback && glyph.gid.index != 0,
+              "18px music note resolves to the additional font");
         CHECK(lv_font_get_glyph_dsc(font, &glyph, 0xd7, 0) && glyph.gid.index != 0,
               "title font contains multiplication sign");
     }
@@ -565,6 +568,8 @@ static void test_music_font(void)
         CHECK(lv_font_get_glyph_dsc(small, &glyph, 0x661f, 0), "small music font contains Chinese");
         CHECK(lv_font_get_glyph_dsc(small, &glyph, 0x3042, 0), "small music font contains Japanese kana");
         CHECK(lv_font_get_glyph_dsc(small, &glyph, 0xd55c, 0), "small music font contains Korean Hangul");
+        CHECK(lv_font_get_glyph_dsc(small, &glyph, 0x266a, 0) && glyph.gid.index != 0,
+              "small music font contains music note");
         CHECK(lv_font_get_glyph_dsc(small, &glyph, 0xd7, 0) && glyph.gid.index != 0,
               "small music font contains multiplication sign");
     }
