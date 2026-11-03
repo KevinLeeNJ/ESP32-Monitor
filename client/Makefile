@@ -1,7 +1,11 @@
-.PHONY: test check build build-app
+.PHONY: test test-fast check build build-app
 
 test:
 	go test -race ./...
+
+# Skips simulator/pipe-backed LAN and serial integration tests.
+test-fast:
+	go test -short ./...
 
 check:
 	go vet ./...

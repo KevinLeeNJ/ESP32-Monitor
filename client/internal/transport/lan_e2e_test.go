@@ -29,7 +29,15 @@ func waitFor(t *testing.T, timeout time.Duration, f func() bool) {
 	t.Fatal("condition timed out")
 }
 
+func requireLANIntegration(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("LAN integration test")
+	}
+}
+
 func TestDiscoverDevicesWithSimulator(t *testing.T) {
+	requireLANIntegration(t)
 	m, err := simesp32.New("test monitor", "127.0.0.1:0")
 	if err != nil {
 		t.Skipf("discovery port unavailable: %v", err)
@@ -73,6 +81,7 @@ func pairSimulatedMonitor(t *testing.T, b *transport.Backend, m *simesp32.Monito
 }
 
 func TestLANPairingNeedsOnlyDeviceConfirmation(t *testing.T) {
+	requireLANIntegration(t)
 	m, err := simesp32.New("device-confirm monitor", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -101,6 +110,7 @@ func TestLANPairingNeedsOnlyDeviceConfirmation(t *testing.T) {
 }
 
 func TestLANKeepsHeartbeatsWithoutSnapshotRefresh(t *testing.T) {
+	requireLANIntegration(t)
 	m, err := simesp32.New("snapshot monitor", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -191,6 +201,7 @@ func lanBindCandidates() []string {
 // through that interface. A LAN-bound socket cannot reach loopback on Windows,
 // so the simulator cannot live on 127.0.0.1 there.
 func TestLANPairingWithLANBind(t *testing.T) {
+	requireLANIntegration(t)
 	var m *simesp32.Monitor
 	var b *transport.Backend
 	var attempts []string
@@ -226,6 +237,7 @@ func TestLANPairingWithLANBind(t *testing.T) {
 }
 
 func TestLANEndToEndSimulatedESP32(t *testing.T) {
+	requireLANIntegration(t)
 	m, e := simesp32.New("客厅 Monitor", "127.0.0.1:0")
 	if e != nil {
 		t.Fatal(e)
@@ -333,6 +345,7 @@ func TestLANEndToEndSimulatedESP32(t *testing.T) {
 }
 
 func TestLANRevokeSendsGoodbye(t *testing.T) {
+	requireLANIntegration(t)
 	m, e := simesp32.New("revoke target", "127.0.0.1:0")
 	if e != nil {
 		t.Fatal(e)
@@ -379,6 +392,7 @@ func TestLANRevokeSendsGoodbye(t *testing.T) {
 }
 
 func TestLANResyncRespondsWithSnapshot(t *testing.T) {
+	requireLANIntegration(t)
 	m, e := simesp32.New("resync monitor", "127.0.0.1:0")
 	if e != nil {
 		t.Fatal(e)
@@ -410,6 +424,7 @@ func TestLANResyncRespondsWithSnapshot(t *testing.T) {
 }
 
 func TestLANPairingRevokedByDevice(t *testing.T) {
+	requireLANIntegration(t)
 	m, e := simesp32.New("revoked monitor", "127.0.0.1:0")
 	if e != nil {
 		t.Fatal(e)

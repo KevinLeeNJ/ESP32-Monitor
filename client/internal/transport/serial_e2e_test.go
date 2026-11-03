@@ -11,6 +11,7 @@ import (
 )
 
 func TestSerialEndToEndSimulatedMonitor(t *testing.T) {
+	requireSerialIntegration(t)
 	b, e := New(Options{StoreDirectory: filepath.Join(t.TempDir(), "vault"), HostName: "serial-host", BindIP: "127.0.0.1", MQTTAddress: "127.0.0.1:0", HTTPAddress: "127.0.0.1:0", EnumerateSerial: func() ([]DiscoveredDevice, error) { return nil, nil }})
 	if e != nil {
 		t.Fatal(e)

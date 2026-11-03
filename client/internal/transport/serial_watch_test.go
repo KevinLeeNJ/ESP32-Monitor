@@ -63,7 +63,15 @@ func waitSerialConnected(t *testing.T, b *Backend, device string) {
 	t.Fatalf("serial session for %s did not connect", device)
 }
 
+func requireSerialIntegration(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("serial integration test")
+	}
+}
+
 func TestSerialSupervisorConnectsStoredPort(t *testing.T) {
+	requireSerialIntegration(t)
 	h := &serialPipeHarness{opened: make(chan net.Conn, 8)}
 	b := newSupervisorBackend(t, h)
 	pair := Pairing{DeviceID: wire.NewID(), DeviceName: "USB Monitor", PairingID: wire.NewID(), DeviceToken: wire.Nonce(), SerialKey: wire.Nonce(), ConsentAt: time.Now().Unix(), WarningVersion: 1, LANConsent: true, SerialPort: "/dev/esp32-watch"}
@@ -85,6 +93,7 @@ func TestSerialSupervisorConnectsStoredPort(t *testing.T) {
 }
 
 func TestSerialSupervisorProbesRenamedPort(t *testing.T) {
+	requireSerialIntegration(t)
 	h := &serialPipeHarness{opened: make(chan net.Conn, 8)}
 	b := newSupervisorBackend(t, h)
 	pair := Pairing{DeviceID: wire.NewID(), DeviceName: "USB Monitor", PairingID: wire.NewID(), DeviceToken: wire.Nonce(), SerialKey: wire.Nonce(), ConsentAt: time.Now().Unix(), WarningVersion: 1, LANConsent: true}
@@ -125,6 +134,7 @@ func TestSerialPendingBlocksLANInvite(t *testing.T) {
 }
 
 func TestSerialReenablePrefersKnownPort(t *testing.T) {
+	requireSerialIntegration(t)
 	h := &serialPipeHarness{opened: make(chan net.Conn, 8)}
 	b := newSupervisorBackend(t, h)
 	pair := Pairing{DeviceID: wire.NewID(), DeviceName: "USB Monitor", PairingID: wire.NewID(), DeviceToken: wire.Nonce(), SerialKey: wire.Nonce(), ConsentAt: time.Now().Unix(), WarningVersion: 1, LANConsent: true, SerialPort: "/dev/esp32-watch"}
