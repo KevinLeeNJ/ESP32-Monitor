@@ -26,14 +26,13 @@ import (
 // trayController owns the optional status bar item. Settings changes are
 // applied immediately so the icon appears or disappears without a restart.
 type trayController struct {
-	app    *application.App
-	window *application.WebviewWindow
-	mu     sync.Mutex
-	tray   *application.SystemTray
+	app  *application.App
+	mu   sync.Mutex
+	tray *application.SystemTray
 }
 
-func newTrayController(app *application.App, window *application.WebviewWindow) *trayController {
-	return &trayController{app: app, window: window}
+func newTrayController(app *application.App) *trayController {
+	return &trayController{app: app}
 }
 
 func (t *trayController) Apply(settings guibridge.Settings) {
@@ -52,22 +51,36 @@ func (t *trayController) Apply(settings guibridge.Settings) {
 	tray := t.app.SystemTray.New()
 	if runtime.GOOS == "windows" {
 		tray.SetIcon(guibridge.TrayAppIcon())
-		tray.OnClick(t.showWindow)
 	} else {
 		tray.SetTemplateIcon(guibridge.MenuBarIcon())
 	}
+	if runtime.GOOS != "darwin" {
+		// On macOS the left click opens the status menu; Windows and Linux
+		// hand it to OnClick, and Linux hosts report it as Activate.
+		tray.OnClick(revealMainWindow)
+	}
 	tray.SetTooltip("ESP32 Monitor")
 	menu := application.NewMenu()
-	menu.Add("打开主窗口").OnClick(func(*application.Context) { t.showWindow() })
+	menu.Add("打开主窗口").OnClick(func(*application.Context) { revealMainWindow() })
 	menu.AddSeparator()
 	menu.Add("退出 ESP32 Monitor").OnClick(func(*application.Context) { t.app.Quit() })
 	tray.SetMenu(menu)
 	t.tray = tray
 }
 
-func (t *trayController) showWindow() {
-	t.app.Show()
-	t.window.Show().Focus()
+const mainWindowName = "main"
+
+// revealMainWindow brings the primary window to the front. Tray callbacks run
+// on D-Bus goroutines and the second-instance callback on its own goroutine,
+// so the GTK work is dispatched to the main loop.
+func revealMainWindow() {
+	app := application.Get()
+	application.InvokeSync(func() {
+		app.Show()
+		if window, ok := app.Window.GetByName(mainWindowName); ok {
+			window.Show().Focus()
+		}
+	})
 }
 
 func main() {
@@ -116,6 +129,14 @@ func run(loginItem bool) error {
 	}
 	app := application.New(application.Options{Name: "ESP32-Monitor",
 		Icon: guibridge.AppIcon(),
+		SingleInstance: &application.SingleInstanceOptions{
+			UniqueID: "com.esp32monitor.client",
+			// A second launch reveals the running instance instead of creating
+			// another window and tray icon on top of the shared Agent.
+			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
+				revealMainWindow()
+			},
+		},
 		Services: []application.Service{
 			application.NewService(appService),
 			application.NewService(guibridge.NewCollectorService(supervisor)),
@@ -132,6 +153,7 @@ func run(loginItem bool) error {
 	})
 
 	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Name:            mainWindowName,
 		Title:           "ESP32-Monitor",
 		Width:           1280,
 		Height:          800,
@@ -153,7 +175,7 @@ func run(loginItem bool) error {
 		}
 	})
 
-	tray := newTrayController(app, window)
+	tray := newTrayController(app)
 	appService.SetSettingsListener(tray.Apply)
 	tray.Apply(settings)
 
