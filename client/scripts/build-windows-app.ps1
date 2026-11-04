@@ -42,6 +42,7 @@ if (-not $npm) { throw "npm not found. Install Node.js or add it to PATH." }
 if (-not $dotnet) { throw "A .NET 8 SDK is required to build the helper." }
 $env:PATH = "$(Split-Path $npm);$env:PATH"
 
+$nodeModulesCreated = -not (Test-Path (Join-Path $frontend "node_modules"))
 Push-Location $client
 try {
   Write-Host "[1/6] Building frontend"
@@ -145,4 +146,11 @@ try {
   }
 
   Write-Host "Built $package"
-} finally { Pop-Location }
+} finally {
+  Pop-Location
+  Remove-Item (Join-Path $frontend "dist-web"), $assets -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force $assets | Out-Null
+  Set-Content -Path (Join-Path $assets "index.html") -Value "Frontend has not been built."
+  Remove-Item (Join-Path $client "tools\lhm-helper\bin"), (Join-Path $client "tools\lhm-helper\obj") -Recurse -Force -ErrorAction SilentlyContinue
+  if ($nodeModulesCreated) { Remove-Item (Join-Path $frontend "node_modules") -Recurse -Force -ErrorAction SilentlyContinue }
+}

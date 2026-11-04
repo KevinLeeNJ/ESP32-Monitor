@@ -19,10 +19,11 @@ fi
 
 # Caches and outputs live in the bind mount, so they must be owned by the
 # caller. The container runs as the caller's UID to keep it that way.
-cache="$client_dir/build/cache"
+cache=$(mktemp -d "${TMPDIR:-/tmp}/esp32-appimage-cache.XXXXXXXX")
+trap 'rm -rf "$cache"' EXIT HUP INT TERM
 mkdir -p "$cache/go-mod" "$cache/go-build" "$cache/npm" "$client_dir/build/linux"
 
-exec docker run --rm \
+docker run --rm \
   --user "$(id -u):$(id -g)" \
   --env HOME=/tmp \
   --env GOCACHE=/cache/go-build \

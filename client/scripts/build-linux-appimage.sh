@@ -14,7 +14,13 @@ case $(uname -m) in
 esac
 pkg-config --exists gtk4 webkitgtk-6.0
 stage=$(mktemp -d "${TMPDIR:-/tmp}/esp32-appimage.XXXXXXXX")
-trap 'rm -rf "$stage"' EXIT HUP INT TERM
+node_modules_created=0
+[ -d "$client_dir/frontend/node_modules" ] || node_modules_created=1
+cleanup() {
+  rm -rf "$stage" "$client_dir/frontend/dist-web" "$client_dir/internal/guiassets/assets"
+  if [ "$node_modules_created" = 1 ]; then rm -rf "$client_dir/frontend/node_modules"; fi
+}
+trap cleanup EXIT HUP INT TERM
 appdir="$stage/ESP32-Monitor.AppDir"
 mkdir -p "$appdir/usr/bin" "$appdir/usr/share/doc/esp32-monitor" "$client_dir/build/linux"
 cd "$client_dir/frontend"

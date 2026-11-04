@@ -45,6 +45,18 @@ if [ -n "$go_floor" ] && version_gt "$go_floor" "$macos_target"; then
   printf 'warning: the app may not launch on macOS %s; use an upstream Go toolchain via GO=/path/to/go.\n' "$macos_target" >&2
 fi
 
+node_modules_created=0
+[ -d "$client_dir/frontend/node_modules" ] || node_modules_created=1
+stage=""
+cleanup() {
+  [ -z "$stage" ] || rm -rf "$stage"
+  rm -rf "$client_dir/frontend/dist-web" "$client_dir/internal/guiassets/assets"
+  mkdir -p "$client_dir/internal/guiassets/assets"
+  printf '%s\n' 'Frontend has not been built.' > "$client_dir/internal/guiassets/assets/index.html"
+  rm -f "$build_dir/monitor-client" "$build_dir/monitor-agent" "$client_dir/bin/libmonitor-media.dylib"
+  if [ "$node_modules_created" = 1 ]; then rm -rf "$client_dir/frontend/node_modules"; fi
+}
+trap cleanup EXIT HUP INT TERM
 mkdir -p "$build_dir"
 
 cd "$client_dir/frontend"
