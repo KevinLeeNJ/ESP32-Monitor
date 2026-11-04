@@ -330,6 +330,7 @@ function metricRows(data) {
     Object.keys(data.latest).forEach(key => keys.add(key));
     for (const key of keys) {
         const [metric, id] = key.split('/');
+        if (metric === 'network.public_ipv4') continue;
         const kind = metric.split('.')[0];
         let group;
         let label = labels[metric] || metric;
@@ -350,6 +351,16 @@ function metricRows(data) {
         const kind = selection.metric.split('.')[0];
         if (['drive.model', 'drive.total', 'interface.medium'].includes(selection.metric)) continue;
         for (const id of selection.objects || []) selectedObjects.add(kind + '/' + id);
+    }
+    if (keys.has('network.public_ipv4')) {
+        const entry = data.latest['network.public_ipv4'];
+        const interfaces = [...groups.values()].filter(group => group.kind === 'interface' && selectedObjects.has(group.kind + '/' + group.id));
+        for (const group of interfaces.length ? interfaces : [ensure('network', '网络')]) {
+            group.dynamic.push(el('div', { class: 'row' }, [
+                el('div', {}, [el('strong', { text: '公网 IPv4（设备）' }), el('small', { text: entry ? date(entry.sampled_at) : '尚无有效观测' })]),
+                el('div', { class: 'value', text: format('network.public_ipv4', entry?.value) })
+            ]));
+        }
     }
     return [...groups.values()].filter(group => !group.kind || selectedObjects.has(group.kind + '/' + group.id)).map(group => {
         const header = el('div', { class: 'card-title' }, [el('h2', { text: group.title })]);
