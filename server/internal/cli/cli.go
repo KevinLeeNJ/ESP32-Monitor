@@ -55,6 +55,9 @@ func Run(args []string, in io.Reader, out, errOut io.Writer, interactive bool, s
 	if err != nil {
 		return err
 	}
+	if err = c.ApplyEnvironment(); err != nil {
+		return err
+	}
 	if action == "check-config" {
 		_, err = fmt.Fprintln(out, "配置校验通过")
 		return err

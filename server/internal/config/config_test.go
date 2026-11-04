@@ -125,6 +125,16 @@ func TestSaveAtomicPermissionsConflict(t *testing.T) {
 		}
 	}
 }
+func TestSaveReportsLockErrorsSeparately(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "monitor.yaml")
+	if err := os.Mkdir(path+".lock", 0700); err != nil {
+		t.Fatal(err)
+	}
+	err := Save(path, validConfig(), nil)
+	if err == nil || !strings.Contains(err.Error(), "cannot lock configuration") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
 func TestReadMissingAndSymlink(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing")
 	b, err := Read(path)
@@ -143,5 +153,20 @@ func TestReadMissingAndSymlink(t *testing.T) {
 	}
 	if _, err = Read(path); err == nil {
 		t.Fatal("symlink accepted")
+	}
+}
+
+func TestEnvironmentOverrides(t *testing.T) {
+	c := Defaults()
+	c.ReadToken = strings.Repeat("1", 64)
+	t.Setenv("MONITOR_LISTEN", "0.0.0.0:8080")
+	t.Setenv("MONITOR_DATABASE", "/state/data/monitor.db")
+	t.Setenv("MONITOR_HISTORY_RETENTION_HOURS", "48")
+	if err := c.ApplyEnvironment(); err != nil || c.HistoryRetentionHours != 48 {
+		t.Fatalf("config: %+v, %v", c, err)
+	}
+	t.Setenv("MONITOR_HISTORY_RETENTION_HOURS", "invalid")
+	if c.ApplyEnvironment() == nil {
+		t.Fatal("invalid retention accepted")
 	}
 }

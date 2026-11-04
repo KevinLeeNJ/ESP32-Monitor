@@ -204,7 +204,10 @@ func Save(path string, c Config, original []byte) error {
 	}
 	lock := flock.New(path+".lock", flock.SetPermissions(0600))
 	ok, err := lock.TryLock()
-	if err != nil || !ok {
+	if err != nil {
+		return fmt.Errorf("cannot lock configuration; check data directory and lock file permissions: %w", err)
+	}
+	if !ok {
 		return errors.New("configuration is being edited")
 	}
 	defer lock.Close()
@@ -254,4 +257,22 @@ func Save(path string, c Config, original []byte) error {
 		}
 	}
 	return nil
+}
+
+// ApplyEnvironment lets container deployments configure runtime settings without changing credentials.
+func (c *Config) ApplyEnvironment() error {
+	if v, ok := os.LookupEnv("MONITOR_LISTEN"); ok {
+		c.Listen = v
+	}
+	if v, ok := os.LookupEnv("MONITOR_DATABASE"); ok {
+		c.Database = v
+	}
+	if v, ok := os.LookupEnv("MONITOR_HISTORY_RETENTION_HOURS"); ok {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return errors.New("invalid history retention")
+		}
+		c.HistoryRetentionHours = n
+	}
+	return c.Validate()
 }
