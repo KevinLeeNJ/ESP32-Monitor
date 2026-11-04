@@ -228,6 +228,8 @@ async function probeAndConnect(port: DiscoveredDevice) {
     const message = String(error);
     if (serialCancelRequested.value) {
       toast("已取消串口配对");
+    } else if (message.includes("serial_permission_denied")) {
+      toast(`无权访问串口 ${port.port}。请检查串口设备权限（如 dialout 用户组或 udev 规则），调整后重新登录并重试。`);
     } else if (message.includes("serial_port_busy")) {
       toast("串口正在连接，请稍候");
     } else if (serialPairing && handoffErrors.some(reason => message.includes(reason)) && await serialReconnected(deviceID, 12000)) {

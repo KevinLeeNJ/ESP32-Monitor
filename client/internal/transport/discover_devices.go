@@ -6,6 +6,7 @@ import (
 	"esp32-monitor/client/internal/logging"
 	"go.bug.st/serial"
 	"go.bug.st/serial/enumerator"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -219,6 +220,10 @@ func (b *Backend) probeSerialCandidates(ctx context.Context, ports []DiscoveredD
 func OpenSerialPort(name string) (serial.Port, error) {
 	p, e := serial.Open(name, &serial.Mode{BaudRate: 115200, DataBits: 8, Parity: serial.NoParity, StopBits: serial.OneStopBit, InitialStatusBits: &serial.ModemOutputBits{DTR: false, RTS: false}})
 	if e != nil {
+		var portErr *serial.PortError
+		if runtime.GOOS == "linux" && errors.As(e, &portErr) && portErr.Code() == serial.PermissionDenied {
+			return nil, errors.New("serial_permission_denied")
+		}
 		return nil, errors.New("serial_unavailable_or_busy")
 	}
 	if e = p.SetReadTimeout(100 * time.Millisecond); e != nil {
