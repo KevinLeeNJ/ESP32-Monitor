@@ -18,6 +18,7 @@ import (
 
 	"esp32-monitor/server/internal/config"
 	"esp32-monitor/server/internal/storage"
+	v2 "esp32-monitor/server/internal/uploadv2"
 )
 
 const testNow int64 = 1793232000
@@ -569,6 +570,48 @@ func TestObjectDirectoryValidation(t *testing.T) {
 	_, token := x.device()
 	body := `{"version":2,"interval_seconds":10,"enabled":[{"metric":"gpu.usage","objects":[1]}],"inventory":{"gpus":[{"id":1}],"objects":[{"id":1,"kind":"interface","name":"en0"}]}}`
 	requireStatus(t, x.req("PUT", "/v2/collector/profile", token, body, "If-None-Match", "*"), 422)
+}
+
+func TestDevicePriorityAndOnlineSummary(t *testing.T) {
+	x := setup(t)
+	x.ready()
+	profile := &v2.Profile{IntervalSeconds: 10}
+	ids := []string{"one", "two", "three", "four", "five", "offline"}
+	for _, id := range ids {
+		last := testNow
+		if id == "offline" {
+			last -= 100
+		}
+		d := Device{ID: id, Name: id, DisplayName: id, Profile: profile, LastSeen: last, Registered: true}
+		raw, err := json.Marshal(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = x.store.Database().Exec("INSERT INTO v2_devices(id,state) VALUES(?,?)", id, raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	requireStatus(t, x.req("PUT", "/api/devices/order", "", `{"ids":["five","offline","one","two","three","four"]}`), 204)
+	requireStatus(t, x.req("PUT", "/api/devices/order", "", `{"ids":["five","five","one","two","three","four"]}`), 409)
+	x.restart()
+	w := x.req("GET", "/v2/devices/summary", x.cfg.ReadToken, "")
+	requireStatus(t, w, 200)
+	var summary struct {
+		Devices []struct {
+			Name string `json:"name"`
+		} `json:"devices"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.Devices) != 4 {
+		t.Fatalf("unexpected summary: %s", w.Body.String())
+	}
+	for i, want := range []string{"five", "one", "two", "three"} {
+		if summary.Devices[i].Name != want {
+			t.Fatalf("unexpected order: %s", w.Body.String())
+		}
+	}
 }
 
 func TestInitialPasswordChangeDoesNotRequireTemporaryPassword(t *testing.T) {

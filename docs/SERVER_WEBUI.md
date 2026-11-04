@@ -69,7 +69,7 @@ Server 根据配置的公网地址与保留的 Host 判断外部 HTTPS，校验 
 1. WebUI 添加名称，生成有效 10 分钟、单次使用的六位验证码；Client 的“Server 连接”页填写基地址与验证码，兑换专属上传 Token。
 2. Client 首次连接时先同步包含 `inventory.objects` 的 Profile，即使尚未启用样本上传或没有采样配置，也上传全部启动时可识别对象的 `{id,kind,name,model?}`。该目录随固定信息同步、名称变化使用 PATCH，样本不重复携带名称；关闭样本时的唯一当前档案任务在长时间离线后仍会退避重试；停用样本时保留目录。动态指标仍遵守用户选择。重新发码使旧码失效；新码兑换成功时才轮换原上传 Token。设备 Token 不在 WebUI 列表和指标接口返回，数据库仅保存其验证哈希。
 3. 指标每 5 秒顺序轮询，隐藏标签页暂停；最近 100 轮图表从最近 100 批中读取。缺失/过期观测显示 `—`，真实 0、false 和空地址数组保留。固定信息与动态值按对象 ID 合并到对应卡片；未选择动态指标的对象不显示；已选择动态指标的对象即使暂无有效观测，仍显示名称/型号和占位。
-4. 面板最多 4 台设备，名称为 1–8 个非空格可打印 ASCII 字符。DISK 显式选择 Profile 的物理磁盘 ID，根据该盘总容量/已用量投影，不沿用挂载点推断。
+4. 拖动设备卡片（或使用上移、下移按钮）设置优先级；面板按此顺序显示最多 4 台在线设备，离线设备自动跳过。名称为 1–8 个非空格可打印 ASCII 字符。DISK 显式选择 Profile 的物理磁盘 ID，根据该盘总容量/已用量投影，不沿用挂载点推断。
 5. 删除设备同时删除档案、历史与凭据，WebUI 有确认对话框。
 
 单批 256 KiB、1–30 轮；PATCH 最多 2048 操作，重建档案也限 256 KiB。拒绝未知字段、重复 key/对象 ID、null、非法整数/IP。兼容 Client 用 replace 补入缺失的 inventory 标量，以及逐字段删除 CPU/OS 后移除空组的行为。
@@ -93,7 +93,8 @@ Profile/revision、原始批次、去重哈希和有效值在 SQLite WAL 中原�
 | `GET /api/devices/{id}/profile` | 管理员；档案与 revision |
 | `GET /api/devices/{id}/metrics` | 管理员；当前有效值、观测时间与档案 |
 | `GET /api/devices/{id}/history` | 管理员；最多 100 个历史批次及原 revision |
-| `PUT /api/devices/{id}/panel` | 管理员；`{enabled,name,disk_id}` |
+| `PUT /api/devices/order` | 管理员；`{ids:[...]}`，包含所有设备 ID，按优先级从高到低排列 |
+| `PUT /api/devices/{id}/panel` | 管理员；`{name,disk_id}` |
 | `POST /v2/collector/register` | `{code}`；返回 `{device_id,name,token}` |
 | `GET/PUT/PATCH /v2/collector/profile` | 设备 Bearer；Client 条件更新、revision/ETag |
 | `POST /v2/collector/samples` | 设备 Bearer；整批成功 204 |

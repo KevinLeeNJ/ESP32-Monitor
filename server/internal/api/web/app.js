@@ -7,12 +7,13 @@ const messages = {
     password_requires_12_characters: '新密码至少 12 个字符，不能包含控制字符。', new_password_must_differ: '新密码必须与当前密码不同。',
     csrf_rejected: '页面验证已过期，请刷新后重试。', origin_rejected: '访问地址与服务器配置不一致。',
     rate_limited: '操作过于频繁，请稍后重试。', password_change_required: '请先修改临时密码。',
-    invalid_name: '请输入 1–64 个字符的设备名称。', panel_full: '面板最多展示 4 台设备，请先取消其他设备。',
+    invalid_name: '请输入 1–64 个字符的设备名称。', device_order_changed: '设备列表已变化，请重试排序。',
     invalid_display_name: '面板名称需要 1–8 个 ASCII 字符，不含空格。', unknown_disk: '该磁盘已不在当前设备档案中。'
 };
 function el(tag, attrs = {}, children = []) {
     const e = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs)) {
+        if (v == null) continue;
         if (k === 'text')
             e.textContent = v;
         else if (k.startsWith('on'))
@@ -149,7 +150,7 @@ function renderDevices() {
     name.placeholder = '例如 My Mac';
     const form = el('form', {}, [nameField, el('button', { class: 'btn primary', type: 'submit', text: '添加设备并生成验证码' })]);
     busyForm(form, async () => { await api('/api/devices', 'POST', { name: name.value }); name.value = ''; await refreshDevices(); notice('设备已创建，验证码 10 分钟内有效'); });
-    content.append(card('添加设备', [form, el('p', { class: 'hint', text: '验证码单次使用。重新注册后，设备的旧上传凭据立即失效。' })]), el('div', { id: 'device-list', class: 'device-list' }));
+    content.append(card('添加设备', [form, el('p', { class: 'hint', text: '验证码单次使用。重新注册后，设备的旧上传凭据立即失效。' })]), el('p', { class: 'hint', text: '拖动设备卡片调整优先级；面板显示优先级最高的最多 4 台在线设备。也可使用上移、下移按钮排序。' }), el('div', { id: 'device-list', class: 'device-list' }));
     drawDevices();
 }
 function captureFocus(container) {
@@ -165,6 +166,16 @@ function restoreFocus(container, focus) {
     const target = focus.action && card ? card.querySelector('[data-action="' + focus.action + '"]') : null;
     (target || container.querySelector('button') || container).focus();
 }
+let draggedDevice = '';
+async function moveDevice(id, target, after = false) {
+    const ids = devices.map(d => d.id);
+    const from = ids.indexOf(id), to = ids.indexOf(target);
+    if (from < 0 || to < 0 || from === to) return;
+    ids.splice(from, 1);
+    ids.splice(ids.indexOf(target) + (after ? 1 : 0), 0, id);
+    try { await api('/api/devices/order', 'PUT', { ids }); await refreshDevices(); notice('设备优先级已更新'); }
+    catch (e) { notice(e.message); await refreshDevices(); }
+}
 function drawDevices() {
     const list = $('#device-list');
     if (!list)
@@ -177,8 +188,8 @@ function drawDevices() {
         restoreFocus(list, focus);
         return;
     }
-    devices.forEach(d => {
-        const actions = el('div', { class: 'actions' }, [button('查看指标', () => { selected = d.id; page = 'metrics'; render(); }, false, { 'data-action': 'metrics' }), button(d.code ? '重新生成验证码' : '生成注册码', async () => { try {
+    devices.forEach((d, index) => {
+        const actions = el('div', { class: 'actions' }, [button('上移', () => moveDevice(d.id, devices[index - 1].id), false, { disabled: index === 0 ? '' : null, 'data-action': 'up' }), button('下移', () => moveDevice(d.id, devices[index + 1].id, true), false, { disabled: index === devices.length - 1 ? '' : null, 'data-action': 'down' }), button('查看指标', () => { selected = d.id; page = 'metrics'; render(); }, false, { 'data-action': 'metrics' }), button(d.code ? '重新生成验证码' : '生成注册码', async () => { try {
                 if (d.code && !await confirmAction('重新生成验证码', '现有验证码将失效。已注册设备的上传凭据会在再次注册成功后轮换。'))
                     return;
                 await api('/api/devices/' + d.id + '/code', 'POST', {});
@@ -206,11 +217,16 @@ function drawDevices() {
                     notice('请手动选择并复制验证码');
                 } }, false, { 'data-action': 'copy' })]));
         children.push(actions);
-        list.append(el('section', { class: 'card', 'data-device-id': d.id }, children));
+        const item = el('section', { class: 'card device-card', draggable: 'true', 'data-device-id': d.id }, children);
+        item.addEventListener('dragstart', e => { draggedDevice = d.id; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', d.id); item.classList.add('dragging'); });
+        item.addEventListener('dragend', () => { draggedDevice = ''; item.classList.remove('dragging'); drawDevices(); });
+        item.addEventListener('dragover', e => { if (draggedDevice && draggedDevice !== d.id) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; } });
+        item.addEventListener('drop', e => { e.preventDefault(); const id = draggedDevice; draggedDevice = ''; void moveDevice(id, d.id, e.clientY > item.getBoundingClientRect().top + item.offsetHeight / 2); });
+        list.append(item);
     });
     restoreFocus(list, focus);
 }
-async function refreshDevices() { const data = await api('/api/devices'); devices = data.devices; if (page === 'devices')
+async function refreshDevices() { const data = await api('/api/devices'); devices = data.devices; if (page === 'devices' && !draggedDevice)
     drawDevices(); if (page === 'metrics')
     drawSelector(); }
 function renderMetrics() { shell(true, '指标查看'); content.replaceChildren(heading('指标查看', '查看 Client 已上传的档案和指标。缺失或过期的值显示为 —。', 'DEVICE METRICS'), el('div', { id: 'device-selector', class: 'device-selector' }), el('div', { id: 'metric-detail' })); drawSelector(); }
@@ -383,8 +399,6 @@ function pixelSelect(id, options, initial) {
 }
 function panelForm(data) {
     const d = data.device;
-    const checkbox = el('input', { type: 'checkbox', id: 'panel-enabled' });
-    checkbox.checked = d.panel_enabled;
     const [nameField, name] = field('面板名称（1–8 ASCII 字符）', 'text', 'panel-name', 'off', d.display_name);
     name.maxLength = 8;
     name.required = true;
@@ -395,8 +409,8 @@ function panelForm(data) {
     for (const disk of disks.values())
         options.push({ value: disk.id, label: objectTitle(inv,'drive',disk.id) });
     const select = pixelSelect('panel-disk', options, d.disk_id);
-    const form = el('form', { class: 'panel-form' }, [el('label', { class: 'checkbox-label' }, [checkbox, '在 ESP32 面板展示']), el('p', { class: 'hint', text: '最多 4 台设备。磁盘必须明确选择物理磁盘。' }), nameField, el('div', { class: 'field' }, [el('label', { for: 'panel-disk', text: 'DISK 指标来源' }), select.root]), el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'submit', text: '保存面板设置' }))]);
-    busyForm(form, async () => { await api('/api/devices/' + selected + '/panel', 'PUT', { enabled: checkbox.checked, name: name.value, disk_id: Number(select.value) }); form.closest('section').dataset.dirty = 'false'; await refreshDevices(); notice('面板设置已保存'); });
+    const form = el('form', { class: 'panel-form' }, [el('p', { class: 'hint', text: '磁盘必须明确选择物理磁盘。' }), nameField, el('div', { class: 'field' }, [el('label', { for: 'panel-disk', text: 'DISK 指标来源' }), select.root]), el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'submit', text: '保存面板设置' }))]);
+    busyForm(form, async () => { await api('/api/devices/' + selected + '/panel', 'PUT', { name: name.value, disk_id: Number(select.value) }); form.closest('section').dataset.dirty = 'false'; await refreshDevices(); notice('面板设置已保存'); });
     return form;
 }
 function chart(samples, field, label) {

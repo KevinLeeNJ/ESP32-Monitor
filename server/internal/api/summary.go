@@ -16,7 +16,7 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) error {
 	if subtle.ConstantTimeCompare([]byte(digest(bearer(r))), []byte(digest(h.cfg.ReadToken))) != 1 || bearer(r) == "" {
 		return errf(401, "unauthorized")
 	}
-	rows, err := h.db.QueryContext(r.Context(), "SELECT state FROM v2_devices ORDER BY rowid")
+	rows, err := h.db.QueryContext(r.Context(), "SELECT state FROM v2_devices ORDER BY coalesce(json_extract(state,'$.priority'),rowid),rowid")
 	if err != nil {
 		return err
 	}
@@ -31,7 +31,7 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) error {
 		if err = json.Unmarshal(raw, &d); err != nil {
 			return err
 		}
-		if !d.Panel || d.Profile == nil || d.LastSeen == 0 || h.now().Unix()-d.LastSeen > maxStalenessSeconds(d.Profile) || len(out.Devices) >= 4 {
+		if d.Profile == nil || d.LastSeen == 0 || h.now().Unix()-d.LastSeen > maxStalenessSeconds(d.Profile) || len(out.Devices) >= 4 {
 			continue
 		}
 		value := func(key string) (float64, bool) {

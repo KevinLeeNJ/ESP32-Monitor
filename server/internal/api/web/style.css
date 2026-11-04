@@ -218,3 +218,5 @@ button,button:hover,button:active,button:focus,button:focus-visible{box-shadow:n
 .hardware-card .card-title{align-items:flex-start}.hardware-card .card-title h2{min-width:0;overflow-wrap:anywhere}.hardware-card .card-title small{white-space:nowrap}.fixed-metric .value{max-width:65%;overflow-wrap:anywhere}.hardware-card .fixed-metric{background:transparent}.hardware-card .card-title small{font-size:11px}#panel-settings{margin-top:28px}
 
 .mobile-only{display:none}.signed-out .mobile-only{display:none!important}@media(max-width:650px){.mobile-only{display:inline-block;font-size:12px;padding:6px 10px}}
+
+.device-card[draggable=true]{cursor:grab}.device-card.dragging{opacity:.5;cursor:grabbing}

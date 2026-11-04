@@ -33,6 +33,7 @@ type Device struct {
 	Revision    uint64                 `json:"revision"`
 	Latest      map[string]latestValue `json:"latest"`
 	Panel       bool                   `json:"panel_enabled"`
+	Priority    *int64                 `json:"priority,omitempty"`
 	DisplayName string                 `json:"display_name"`
 	DriveID     uint16                 `json:"disk_id"`
 }
@@ -115,7 +116,7 @@ func (h *Handler) deviceView(d *Device) map[string]any {
 			status = "online"
 		}
 	}
-	v := map[string]any{"id": d.ID, "name": d.Name, "registered": d.Registered, "created_at": d.Created, "last_seen_at": d.LastSeen, "status": status, "revision": d.Revision, "panel_enabled": d.Panel, "display_name": d.DisplayName, "disk_id": d.DriveID}
+	v := map[string]any{"id": d.ID, "name": d.Name, "registered": d.Registered, "created_at": d.Created, "last_seen_at": d.LastSeen, "status": status, "revision": d.Revision, "display_name": d.DisplayName, "disk_id": d.DriveID}
 	if d.Code != "" && d.CodeExpiry > h.now().Unix() {
 		v["code"] = d.Code
 		v["code_expires_at"] = d.CodeExpiry
@@ -130,10 +131,51 @@ func (h *Handler) adminDevices(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	defer tx.Rollback()
+	if r.URL.Path == "/api/devices/order" && r.Method == "PUT" {
+		var req struct {
+			IDs []string `json:"ids"`
+		}
+		if _, err = decodeBody(w, r, &req); err != nil {
+			return err
+		}
+		var count int
+		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM v2_devices").Scan(&count); err != nil {
+			return err
+		}
+		if len(req.IDs) != count {
+			return errf(409, "device_order_changed")
+		}
+		seen := make(map[string]bool, count)
+		for i, id := range req.IDs {
+			if seen[id] {
+				return errf(409, "device_order_changed")
+			}
+			seen[id] = true
+			res, err := tx.ExecContext(ctx, "UPDATE v2_devices SET state=json_set(state,'$.priority',?) WHERE id=?", i+1, id)
+			if err != nil {
+				return err
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if n != 1 {
+				return errf(409, "device_order_changed")
+			}
+		}
+		if err = h.audit(ctx, tx, "devices_reordered", ""); err != nil {
+			return err
+		}
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		w.WriteHeader(204)
+		return nil
+	}
 	if r.URL.Path == "/api/devices" {
 		switch r.Method {
 		case "GET":
-			rows, err := tx.QueryContext(ctx, "SELECT state FROM v2_devices ORDER BY rowid")
+			rows, err := tx.QueryContext(ctx, "SELECT state FROM v2_devices ORDER BY coalesce(json_extract(state,'$.priority'),rowid),rowid")
 			if err != nil {
 				return err
 			}
@@ -169,8 +211,9 @@ func (h *Handler) adminDevices(w http.ResponseWriter, r *http.Request) error {
 			if !validDeviceName(req.Name) {
 				return errf(422, "invalid_name")
 			}
-			var count, panels int
-			if err = tx.QueryRowContext(ctx, "SELECT count(*),coalesce(sum(json_extract(state,'$.panel_enabled')),0) FROM v2_devices").Scan(&count, &panels); err != nil {
+			var count int
+			var priority int64
+			if err = tx.QueryRowContext(ctx, "SELECT count(*),coalesce(max(coalesce(json_extract(state,'$.priority'),rowid)),0)+1 FROM v2_devices").Scan(&count, &priority); err != nil {
 				return err
 			}
 			if count >= 256 {
@@ -180,7 +223,7 @@ func (h *Handler) adminDevices(w http.ResponseWriter, r *http.Request) error {
 			if !validDisplayName(name) {
 				name = "DEVICE"
 			}
-			d := &Device{ID: randomHex(8), Name: req.Name, Created: h.now().Unix(), Latest: map[string]latestValue{}, Panel: panels < 4, DisplayName: name}
+			d := &Device{ID: randomHex(8), Name: req.Name, Created: h.now().Unix(), Latest: map[string]latestValue{}, Priority: &priority, DisplayName: name}
 			if _, err = tx.ExecContext(ctx, "INSERT INTO v2_devices(id,state) VALUES(?,?)", d.ID, []byte(`{}`)); err != nil {
 				return err
 			}
@@ -302,16 +345,6 @@ func (h *Handler) adminDevices(w http.ResponseWriter, r *http.Request) error {
 				return errf(422, "unknown_disk")
 			}
 		}
-		if req.Enabled && !d.Panel {
-			var n int
-			if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM v2_devices WHERE json_extract(state,'$.panel_enabled')=1").Scan(&n); err != nil {
-				return err
-			}
-			if n >= 4 {
-				return errf(409, "panel_full")
-			}
-		}
-		d.Panel = req.Enabled
 		d.DisplayName = req.Name
 		d.DriveID = req.Disk
 		if err = saveDevice(ctx, tx, d); err != nil {
