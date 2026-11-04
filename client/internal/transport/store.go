@@ -22,6 +22,9 @@ type Pairing struct {
 	// and serial routes; there is no separate per-transport enable step.
 	LANConsent bool   `json:"lan_consent"`
 	SerialPort string `json:"serial_port,omitempty"`
+	// LastSeen is the Unix time of the last live session, persisted so the
+	// device list keeps the previous value across Client restarts.
+	LastSeen int64 `json:"last_seen,omitempty"`
 }
 type storeData struct {
 	HostID string             `json:"host_id"`
@@ -73,7 +76,7 @@ func OpenStore(dir string) (*Store, error) {
 		for id, p := range s.data.Pairs {
 			_, a := wire.RawNonce(p.DeviceToken)
 			_, b := wire.RawNonce(p.SerialKey)
-			if id != p.DeviceID || !wire.UUID(id) || !wire.UUID(p.PairingID) || a != nil || b != nil || p.ConsentAt <= 0 || p.WarningVersion != 1 {
+			if id != p.DeviceID || !wire.UUID(id) || !wire.UUID(p.PairingID) || a != nil || b != nil || p.ConsentAt <= 0 || p.WarningVersion != 1 || p.LastSeen < 0 {
 				e = errors.New("invalid_credential_store")
 			}
 		}
@@ -168,6 +171,34 @@ type DeviceStatus struct {
 	PairingLost      bool      `json:"pairing_lost"`
 	SessionID        string    `json:"session_id"`
 	LastSeen         time.Time `json:"last_seen"`
+}
+
+// lastSeenWriteInterval throttles persisted updates: an active serial session
+// reports every second, and rewriting the vault that often serves no purpose.
+const lastSeenWriteInterval = time.Minute
+
+// markLastSeen records the last time the device was connected. Callers on a
+// live session use force=false so writes are throttled; disconnect and
+// shutdown paths use force=true to keep the final time accurate.
+func (s *Store) markLastSeen(id string, at time.Time, force bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.data.Pairs[id]
+	if !ok {
+		return nil
+	}
+	unix := at.Unix()
+	if unix <= p.LastSeen || (!force && unix-p.LastSeen < int64(lastSeenWriteInterval/time.Second)) {
+		return nil
+	}
+	old := p
+	p.LastSeen = unix
+	s.data.Pairs[id] = p
+	if e := s.save(); e != nil {
+		s.data.Pairs[id] = old
+		return e
+	}
+	return nil
 }
 
 func (s *Store) setSerialPort(id, port string) error {

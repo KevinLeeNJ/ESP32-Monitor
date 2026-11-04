@@ -3,7 +3,8 @@ export function fmtTime(value?: string | null): string {
 }
 
 export function fmtClockTime(value?: string | null): string {
-  return value ? new Date(value).toLocaleTimeString("zh-CN") : "—";
+  if (!value || value.startsWith("0001-01-01")) return "—";
+  return new Date(value).toLocaleTimeString("zh-CN");
 }
 
 export function fmtClockFromSeconds(seconds?: number | null): string {

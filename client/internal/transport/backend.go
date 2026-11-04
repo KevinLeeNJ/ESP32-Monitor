@@ -167,13 +167,23 @@ func (b *Backend) Close() error {
 		b.mu.Lock()
 		/* Cancel under mu so track/attach cannot add to wg after Wait starts. */
 		b.cancel()
-		for _, s := range b.sessions {
+		var active []string
+		for id, s := range b.sessions {
+			active = append(active, id)
 			s.cancel()
 			if s.client != nil {
 				s.client.Stop(errors.New("host_exit"))
 			}
 		}
 		b.mu.Unlock()
+		if b.store != nil {
+			now := time.Now()
+			for _, id := range active {
+				if e := b.store.markLastSeen(id, now, true); e != nil {
+					logging.L("transport").Warn("last_seen_save_failed", "device", logging.Ref(id), "error", e.Error())
+				}
+			}
+		}
 		_ = b.broker.Close()
 		b.networkChangeMu.Unlock()
 		b.wg.Wait()
@@ -279,11 +289,14 @@ func (b *Backend) maintain() {
 		b.pairing.expire()
 		now := time.Now()
 		b.mu.Lock()
+		var active []string
 		for id, s := range b.sessions {
 			if s.client == nil && s.transport == "lan" && now.After(s.expires) {
 				s.cancel()
 				delete(b.sessions, id)
+				continue
 			}
+			active = append(active, id)
 		}
 		var jobs []Pairing
 		for _, p := range b.store.pairs() {
@@ -307,6 +320,11 @@ func (b *Backend) maintain() {
 			jobs = append(jobs, p)
 		}
 		b.mu.Unlock()
+		for _, id := range active {
+			if e := b.store.markLastSeen(id, now, false); e != nil {
+				logging.L("transport").Warn("last_seen_save_failed", "device", logging.Ref(id), "error", e.Error())
+			}
+		}
 		for _, p := range jobs {
 			if b.ctx.Err() != nil {
 				return
@@ -326,6 +344,11 @@ func (b *Backend) release(s *session) {
 		b.serialSeen[s.pair.DeviceID] = time.Now()
 	}
 	b.mu.Unlock()
+	if b.store != nil {
+		if e := b.store.markLastSeen(s.pair.DeviceID, time.Now(), true); e != nil {
+			logging.L("transport").Warn("last_seen_save_failed", "device", logging.Ref(s.pair.DeviceID), "error", e.Error())
+		}
+	}
 	if s.proxy != nil {
 		s.proxy.stop()
 		s.proxy = nil

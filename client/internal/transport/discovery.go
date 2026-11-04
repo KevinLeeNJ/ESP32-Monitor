@@ -402,7 +402,14 @@ func (b *Backend) Devices() ([]DeviceStatus, bool) {
 	seen := map[string]bool{}
 	for _, p := range b.store.pairs() {
 		c := b.candidates[p.DeviceID]
-		s := DeviceStatus{DeviceID: p.DeviceID, Name: p.DeviceName, Paired: true, Enabled: !b.disabled[p.DeviceID], ConnectionState: "disconnected", LastSeen: c.Seen}
+		var lastSeen time.Time
+		if p.LastSeen > 0 {
+			lastSeen = time.Unix(p.LastSeen, 0)
+		}
+		s := DeviceStatus{DeviceID: p.DeviceID, Name: p.DeviceName, Paired: true, Enabled: !b.disabled[p.DeviceID], ConnectionState: "disconnected", LastSeen: lastSeen}
+		if c.Seen.After(s.LastSeen) {
+			s.LastSeen = c.Seen
+		}
 		s.ConfigError = b.configErrors[p.DeviceID]
 		if c.Addr != nil {
 			s.Address = c.Addr.IP.String()
