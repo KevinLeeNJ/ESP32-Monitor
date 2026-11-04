@@ -331,19 +331,8 @@ func (h *Handler) adminDevices(w http.ResponseWriter, r *http.Request) error {
 		if !validDisplayName(req.Name) {
 			return errf(422, "invalid_display_name")
 		}
-		if req.Disk != 0 {
-			found := false
-			if d.Profile != nil {
-				for _, o := range d.Profile.Inventory.Objects {
-					found = found || (o.Kind == "drive" && o.ID == req.Disk)
-				}
-				for _, dr := range d.Profile.Inventory.Drives {
-					found = found || dr.ID == req.Disk
-				}
-			}
-			if !found {
-				return errf(422, "unknown_disk")
-			}
+		if req.Disk != 0 && !panelDiskAvailable(d.Profile, req.Disk) {
+			return errf(422, "unknown_disk")
 		}
 		d.DisplayName = req.Name
 		d.DriveID = req.Disk
@@ -416,3 +405,20 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 func maxStalenessSeconds(p *v2.Profile) int64 { return max(30, int64(p.IntervalSeconds)*3) }
+
+// A panel percentage needs both a selected used value and a nonzero total.
+func panelDiskAvailable(profile *v2.Profile, id uint16) bool {
+	if profile == nil {
+		return false
+	}
+	selected := selectionsOf(profile)
+	if !selectedFor(selected, "drive.used", id) || !selectedFor(selected, "drive.total", id) {
+		return false
+	}
+	for _, drive := range profile.Inventory.Drives {
+		if drive.ID == id && drive.TotalBytes != nil && *drive.TotalBytes > 0 {
+			return true
+		}
+	}
+	return false
+}

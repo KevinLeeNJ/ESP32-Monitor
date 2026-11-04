@@ -8,7 +8,7 @@ const messages = {
     csrf_rejected: '页面验证已过期，请刷新后重试。', origin_rejected: '访问地址与服务器配置不一致。',
     rate_limited: '操作过于频繁，请稍后重试。', password_change_required: '请先修改临时密码。',
     invalid_name: '请输入 1–64 个字符的设备名称。', device_order_changed: '设备列表已变化，请重试排序。',
-    invalid_display_name: '面板名称需要 1–8 个 ASCII 字符，不含空格。', unknown_disk: '该磁盘已不在当前设备档案中。'
+    invalid_display_name: '面板名称需要 1–8 个 ASCII 字符，不含空格。', unknown_disk: '该磁盘没有启用容量和已用量上报，请重新选择。'
 };
 function el(tag, attrs = {}, children = []) {
     const e = document.createElement(tag);
@@ -415,13 +415,17 @@ function panelForm(data) {
     name.required = true;
     const options = [{ value: 0, label: '不展示磁盘容量' }];
     const inv=data.profile?.inventory||{};
-    const disks=new Map((inv.drives||[]).map(d=>[d.id,d]));
-    for(const object of inv.objects||[])if(object.kind==='drive'&&!disks.has(object.id))disks.set(object.id,object);
-    for (const disk of disks.values())
-        options.push({ value: disk.id, label: objectTitle(inv,'drive',disk.id) });
+    const used = new Set((data.profile?.enabled || []).filter(item => item.metric === 'drive.used').flatMap(item => item.objects || []));
+    const total = new Set((data.profile?.enabled || []).filter(item => item.metric === 'drive.total').flatMap(item => item.objects || []));
+    for (const disk of inv.drives || []) {
+        if (used.has(disk.id) && total.has(disk.id) && disk.total !== undefined && BigInt(disk.total) > 0n)
+            options.push({ value: disk.id, label: objectTitle(inv,'drive',disk.id) });
+    }
+    const stale = d.disk_id && !options.some(option => option.value === d.disk_id);
+    if (stale) options.push({ value: d.disk_id, label: '原选择不可用，请重新选择' });
     const select = pixelSelect('panel-disk', options, d.disk_id);
-    const form = el('form', { class: 'panel-form' }, [el('p', { class: 'hint', text: '磁盘必须明确选择物理磁盘。' }), nameField, el('div', { class: 'field' }, [el('label', { for: 'panel-disk', text: 'DISK 指标来源' }), select.root]), el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'submit', text: '保存面板设置' }))]);
-    busyForm(form, async () => { await api('/api/devices/' + selected + '/panel', 'PUT', { name: name.value, disk_id: Number(select.value) }); form.closest('section').dataset.dirty = 'false'; await refreshDevices(); notice('面板设置已保存'); });
+    const form = el('form', { class: 'panel-form' }, [el('p', { class: 'hint', text: '仅显示已上报总容量和已用量的磁盘或 RAID 阵列。' }), nameField, el('div', { class: 'field' }, [el('label', { for: 'panel-disk', text: 'DISK 指标来源' }), select.root]), el('div', { class: 'actions' }, el('button', { class: 'btn primary', type: 'submit', text: '保存面板设置' }))]);
+    busyForm(form, async () => { if (stale && Number(select.value) === d.disk_id) throw new Error('原选择不可用，请重新选择磁盘或选择不展示。'); await api('/api/devices/' + selected + '/panel', 'PUT', { name: name.value, disk_id: Number(select.value) }); form.closest('section').dataset.dirty = 'false'; await refreshDevices(); notice('面板设置已保存'); });
     return form;
 }
 function chart(samples, field, label) {

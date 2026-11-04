@@ -624,3 +624,16 @@ func TestInitialPasswordChangeDoesNotRequireTemporaryPassword(t *testing.T) {
 	x.state(x.req("POST", "/api/auth/password", "", fmt.Sprintf(`{"new_password":%q}`, permanentPassword)))
 	requireStatus(t, x.req("POST", "/api/auth/password", "", `{"new_password":"another secure password"}`), 401)
 }
+
+func TestPanelDiskRequiresUploadedCapacity(t *testing.T) {
+	x := setup(t)
+	x.ready()
+	id, token := x.device()
+	profile := `{"version":2,"interval_seconds":10,"enabled":[{"metric":"drive.total","objects":[3,5,7]},{"metric":"drive.used","objects":[3,6,7]}],"inventory":{"objects":[{"id":3,"kind":"drive","name":"md127 RAID5"},{"id":4,"kind":"drive","name":"unselected"},{"id":5,"kind":"drive","name":"total only"},{"id":6,"kind":"drive","name":"used only"},{"id":7,"kind":"drive","name":"zero total"}],"drives":[{"id":3,"total":"1000"},{"id":5,"total":"1000"},{"id":6},{"id":7,"total":"0"}]}}`
+	requireStatus(t, x.req("PUT", "/v2/collector/profile", token, profile, "If-None-Match", "*"), 200)
+	for _, tc := range []struct{ id, want int }{{3, 200}, {4, 422}, {5, 422}, {6, 422}, {7, 422}, {0, 200}} {
+		t.Run(fmt.Sprint(tc.id), func(t *testing.T) {
+			requireStatus(t, x.req("PUT", "/api/devices/"+id+"/panel", "", fmt.Sprintf(`{"name":"NAS","disk_id":%d}`, tc.id)), tc.want)
+		})
+	}
+}
