@@ -398,6 +398,8 @@ static void test_devices_ui_replacement(void)
     CHECK(lv_obj_get_child_by_name(root, "device_1") == NULL, "remove extra old device cards");
     lv_obj_t *card = lv_obj_get_child_by_name(root, "device_0");
     CHECK(card != NULL, "create only the new snapshot card");
+    lv_obj_t *track = lv_obj_find_by_name(card, "track");
+    CHECK(track != NULL && lv_obj_get_child_count(track) == 0, "device progress bar has no segment objects");
     CHECK(lv_obj_get_y(lv_obj_get_child(card, 2)) >= lv_obj_get_y(lv_obj_get_child(card, 3)) &&
           lv_obj_get_y(lv_obj_get_child(card, 2)) < lv_obj_get_y(lv_obj_get_child(card, 3)) + lv_obj_get_height(lv_obj_get_child(card, 3)),
           "metric label and value share the same horizontal row");
@@ -409,6 +411,29 @@ static void test_devices_ui_replacement(void)
     monitor_ui_apply_devices_snapshot(root, &snapshot);
     CHECK(lv_obj_get_child_by_name(root, "device_0") == NULL, "empty online list removes final device card");
     CHECK(lv_obj_get_child_by_name(root, "empty_devices") != NULL, "empty online list displays message");
+    monitor_renderer_deinit(&renderer);
+}
+
+static lv_obj_t *activity_factory(lv_obj_t *parent)
+{
+    monitor_activity_data_t data = monitor_activity_demo();
+    data.usage_5h_percent = 0;
+    return monitor_activity_create(parent, &data, MONITOR_FRAME_NORMAL);
+}
+
+static void test_activity_progress_update(void)
+{
+    monitor_renderer_t renderer;
+    CHECK(monitor_renderer_init(&renderer, activity_factory), "create activity UI");
+    CHECK(monitor_renderer_render(&renderer), "render initial activity");
+    uint8_t before[MONITOR_FRAME_BYTES];
+    memcpy(before, monitor_renderer_packed(&renderer), sizeof(before));
+    monitor_activity_data_t data = monitor_activity_demo();
+    data.usage_5h_percent = 100;
+    monitor_activity_apply(monitor_renderer_root(&renderer), &data);
+    CHECK(monitor_renderer_render(&renderer), "render updated activity");
+    CHECK(memcmp(before, monitor_renderer_packed(&renderer), sizeof(before)) != 0,
+          "activity progress change updates the frame");
     monitor_renderer_deinit(&renderer);
 }
 
@@ -461,6 +486,7 @@ int main(void)
     test_devices_url();
     test_devices_parser();
     test_devices_ui_replacement();
+    test_activity_progress_update();
     test_sha256_vectors();
     test_pack_round_trip();
     test_pack_layout();

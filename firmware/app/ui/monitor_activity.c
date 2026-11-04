@@ -1,5 +1,6 @@
 #include "monitor_ui.h"
 #include "monitor_fonts.h"
+#include "monitor_progress.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -42,25 +43,18 @@ typedef struct {
 } activity_state_t;
 
 typedef struct {
-    lv_obj_t *segments[10];
-    lv_obj_t *separators[9];
-    int filled;
-    bool inverted;
-} activity_bar_t;
-
-typedef struct {
     activity_state_t wall;
     bool github_available;
     int github_start_year, github_start_month, github_start_day;
     bool playback_available, playback_playing;
     lv_obj_t *wall_obj, *wall_unavailable, *weekday[3];
     lv_obj_t *usage_value[2];
-    activity_bar_t usage_bar[2];
+    lv_obj_t *usage_bar[2];
     lv_obj_t *task_icon, *task_name;
     lv_obj_t *music_source, *music_title, *music_artist, *music_ellipsis;
     char music_title_text[160];
     lv_obj_t *playback;
-    activity_bar_t music_bar;
+    lv_obj_t *music_bar;
     int music_position_base, music_duration_seconds;
     bool music_live;
     uint32_t music_anchor_tick;
@@ -167,38 +161,12 @@ static void set_music_label(lv_obj_t *obj, const char *value)
 }
 
 
-static activity_bar_t progress_create(lv_obj_t *parent, int x, int y, int width, int percent, bool inv)
+static lv_obj_t *progress_create(lv_obj_t *parent, int x, int y, int width, int percent, bool inv)
 {
-    activity_bar_t bar = {.inverted = inv};
-    if(percent > 100) percent = 100;
-    bar.filled = percent > 0 ? (percent + 9) / 10 : 0;
     lv_obj_t *track = box(parent, x, y, width, 9, 0, false, true, inv);
-    for(int i = 0; i < 10; i++) {
-        int left = i * (width - 2) / 10;
-        int right = (i + 1) * (width - 2) / 10;
-        bar.segments[i] = box(track, left, 0, right - left, 7, 0,
-                              i < bar.filled, false, inv);
-        if(i < 9)
-            bar.separators[i] = box(track, right - 1, 0, 1, 7, 0,
-                                    i >= bar.filled, false, inv);
-    }
-    return bar;
-}
-
-static void progress_apply(activity_bar_t *bar, int percent)
-{
-    if(percent > 100) percent = 100;
-    int filled = percent > 0 ? (percent + 9) / 10 : 0;
-    if(filled == bar->filled) return;
-    for(int i = 0; i < 10; i++) {
-        if((i < filled) != (i < bar->filled))
-            lv_obj_set_style_bg_color(bar->segments[i],
-                lv_color_hex(((i < filled) != bar->inverted) ? BLACK : WHITE), 0);
-        if(i < 9 && (i < filled) != (i < bar->filled))
-            lv_obj_set_style_bg_color(bar->separators[i],
-                lv_color_hex(((i >= filled) != bar->inverted) ? BLACK : WHITE), 0);
-    }
-    bar->filled = filled;
+    lv_obj_add_event_cb(track, monitor_progress_draw, LV_EVENT_DRAW_MAIN, NULL);
+    monitor_progress_set(track, percent);
+    return track;
 }
 
 static void format_time(char *out, size_t size, int seconds)
@@ -223,7 +191,7 @@ static void music_tick(lv_timer_t *timer)
     if(strcmp(lv_label_get_text(view->music_position), text))
         lv_label_set_text(view->music_position, text);
     if(view->music_duration_seconds > 0)
-        progress_apply(&view->music_bar, pos * 100 / view->music_duration_seconds);
+        monitor_progress_set(view->music_bar, pos * 100 / view->music_duration_seconds);
 }
 
 static void usage_value_text(char *text, size_t size, int value)
@@ -238,7 +206,7 @@ static void usage_apply(activity_view_t *view, int index, int value)
     usage_value_text(text, sizeof(text), value);
     if(strcmp(lv_label_get_text(view->usage_value[index]), text))
         lv_label_set_text(view->usage_value[index], text);
-    progress_apply(&view->usage_bar[index], value);
+    monitor_progress_set(view->usage_bar[index], value);
 }
 
 static void draw_wall(lv_event_t *event)
@@ -429,7 +397,7 @@ static void apply_music(activity_view_t *view, const monitor_activity_data_t *da
         if(pos > data->music_duration_seconds) pos = data->music_duration_seconds;
         percent = (int)((int64_t)pos * 100 / data->music_duration_seconds);
     }
-    progress_apply(&view->music_bar, percent);
+    monitor_progress_set(view->music_bar, percent);
     char position[16], duration[16];
     format_time(position, sizeof(position), data->music_available ? data->music_position_seconds : -1);
     format_time(duration, sizeof(duration), data->music_available ? data->music_duration_seconds : -1);

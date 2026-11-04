@@ -1,5 +1,6 @@
 #include "monitor_ui.h"
 #include "monitor_fonts.h"
+#include "monitor_progress.h"
 /* LVGL 9.4 exposes UTF-8 glyph iteration only in this private header.
  * Recheck the decoder contract when upgrading the pinned LVGL version. */
 #include "src/misc/lv_text_private.h"
@@ -267,35 +268,15 @@ static void resize_bar(lv_obj_t *track, int32_t width)
         return;
     }
     lv_obj_clear_flag(track, LV_OBJ_FLAG_HIDDEN);
-    int32_t inner_width = width - 2;
-    for(int i = 0; i < 10; ++i) {
-        int32_t left = i * inner_width / 10;
-        int32_t right = (i + 1) * inner_width / 10;
-        lv_obj_t *segment = lv_obj_get_child(track, i * 2);
-        lv_obj_set_x(segment, left);
-        lv_obj_set_width(segment, right - left);
-        if(i < 9) lv_obj_set_x(lv_obj_get_child(track, i * 2 + 1), right - 1);
-    }
 }
 
 static lv_obj_t *make_bar(lv_obj_t *parent, int32_t x, int32_t y, int32_t width,
                           int32_t value)
 {
-    if(value < 0) value = 0;
-    if(value > 100) value = 100;
-
     lv_obj_t *track = make_box(parent, x, y, width, 7, 0, COLOR_WHITE, 1, COLOR_BLACK);
     set_name(track, "track");
-    int filled = (value + 9) / 10;
-    for(int i = 0; i < 10; ++i) {
-        make_box(track, 0, 0, 1, 5, 0, i < filled ? COLOR_BLACK : COLOR_WHITE, 0, COLOR_BLACK);
-        if(i < filled) set_name(lv_obj_get_child(track, i * 2), "ink");
-        if(i < 9) {
-            lv_obj_t *separator = make_box(track, 0, 0, 1, 5, 0,
-                                           i < filled ? COLOR_WHITE : COLOR_BLACK, 0, COLOR_BLACK);
-            if(i >= filled) set_name(separator, "ink");
-        }
-    }
+    lv_obj_add_event_cb(track, monitor_progress_draw, LV_EVENT_DRAW_MAIN, NULL);
+    monitor_progress_set(track, value);
     resize_bar(track, width);
     return track;
 }
