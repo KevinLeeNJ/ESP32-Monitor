@@ -15,6 +15,18 @@ make build
 
 根页面 `/` 提供设备注册、指标查看和改密页。视觉复用 Client 黑白灰像素样式、FusionPixel/Unscii 字体及 Pixelarticons，全部嵌入 Go 二进制。CPU 型号/核心数、内存总量、磁盘型号/容量显示在对应指标卡片；磁盘按 Profile 对象 ID 关联型号和观测，有型号时用型号作标题。缺少名称时提示未上传，不虚构 Client 没有上传的硬件信息。网卡、GPU、电池和核心同样通过 `inventory.objects` 的 ID 对照表优先显示名称/型号，编号仅作辅助。旧版 Client 没有目录时保留介质类型等降级显示。
 
+## Docker Compose 本地部署
+
+```sh
+cd server
+docker compose up -d --build
+docker compose logs server
+```
+
+首次启动的日志包含 WebUI 临时密码；登录后须立即修改。访问 `http://<服务器局域网IP>:8080`，在 WebUI 创建设备，再把地址和验证码填入 Client。服务器只读 Token 可在 WebUI 查看，用于 Firmware 的 Devices 设置。配置和 SQLite 数据保存在 Docker 卷 `server_monitor-data`；`docker compose down` 保留数据，`docker compose down -v` 会删除数据。升级时重新运行 `docker compose up -d --build`。首次改密前重启会生成新的临时密码，请重新查看日志。
+
+镜像通过 Go 构建阶段生成静态程序，运行阶段使用 scratch、非 root 用户和只读根文件系统。默认构建需要访问 Go 镜像仓库及模块代理；可用 `GO_IMAGE` 指定兼容的本地 Go 构建镜像。该配置适合本机及可信局域网测试；HTTP 未加密凭据和指标，公网使用前应配置 HTTPS 反向代理。
+
 ## HTTP 后端与 HTTPS 反代
 
 ```yaml
@@ -37,7 +49,7 @@ location / {
 
 Server 根据配置的公网地址与保留的 Host 判断外部 HTTPS，校验 Origin 并设置 Secure Cookie；不直接信任 `X-Forwarded-Proto/For`。反代必须保留原始 Host，从域名根路径转发，不加路径前缀。仅将反代 HTTPS 端口暴露公网，认证响应不缓存。
 
-本机和局域网可通过 `http://<服务器局域网IP>:8080` 直接访问；`public_base_url` 用于指定公网反向代理域名。默认允许本机或私网来源使用回环、私网及链路本地 IP 字面地址，其他域名仍须与 `public_base_url` 一致；不信任转发头。Docker 桥接模式下可发布 `8080:8080`，通过宿主机局域网 IP 访问，容器内通常只能看到桥接网络地址。HTTP 不加密验证码、令牌、密码和指标，建议使用 HTTPS。未来容器化时需持久化配置和 SQLite 目录；stderr 输出自然进入 Docker 日志。
+本机和局域网可通过 `http://<服务器局域网IP>:8080` 直接访问；`public_base_url` 用于指定公网反向代理域名。默认允许本机或私网来源使用回环、私网及链路本地 IP 字面地址，其他域名仍须与 `public_base_url` 一致；不信任转发头。Docker 桥接模式下可发布 `8080:8080`，通过宿主机局域网 IP 访问，容器内通常只能看到桥接网络地址。HTTP 不加密验证码、令牌、密码和指标，建议使用 HTTPS。Compose 使用持久卷保存配置和 SQLite；stderr 输出进入 Docker 日志。
 
 ## 密码与 Cookie
 

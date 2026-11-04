@@ -1,0 +1,19 @@
+services:
+  server:
+    build:
+      context: .
+      args:
+        GO_IMAGE: ${GO_IMAGE:-golang:1.26}
+    ports:
+      - "8080:8080"
+    volumes:
+      - monitor-data:/state
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  monitor-data:
