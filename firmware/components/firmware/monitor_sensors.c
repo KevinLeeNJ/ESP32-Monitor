@@ -142,11 +142,11 @@ esp_err_t monitor_sensors_start(void)
 {
     adc_oneshot_unit_init_cfg_t adc_config = {.unit_id = ADC_UNIT_1, .ulp_mode = ADC_ULP_MODE_DISABLE};
     ESP_RETURN_ON_ERROR(adc_oneshot_new_unit(&adc_config, &s_adc), TAG, "ADC init failed");
-    adc_oneshot_chan_cfg_t channel_config = {.atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_12};
+    adc_oneshot_chan_cfg_t channel_config = {.atten = ADC_ATTEN_DB_6, .bitwidth = ADC_BITWIDTH_12};
     ESP_RETURN_ON_ERROR(adc_oneshot_config_channel(s_adc, BATTERY_ADC_CHANNEL, &channel_config), TAG, "ADC channel failed");
     adc_cali_curve_fitting_config_t cali_config = {
         .unit_id = ADC_UNIT_1, .chan = BATTERY_ADC_CHANNEL,
-        .atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_12,
+        .atten = ADC_ATTEN_DB_6, .bitwidth = ADC_BITWIDTH_12,
     };
     if (adc_cali_create_scheme_curve_fitting(&cali_config, &s_adc_cali) != ESP_OK) {
         ESP_LOGW(TAG, "ADC calibration unavailable");
