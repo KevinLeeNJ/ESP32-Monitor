@@ -47,3 +47,7 @@ test-appimage-linux:
 .PHONY: ci-linux
 ci-linux:
 	./scripts/ci-linux.sh
+
+.PHONY: build-headless-linux
+build-headless-linux:
+	./scripts/build-linux-headless.sh

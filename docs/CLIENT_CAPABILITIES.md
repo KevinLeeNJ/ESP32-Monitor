@@ -181,7 +181,7 @@ make build
 ./bin/monitor-agent --collector-scan
 ```
 
-macOS 应用构建入口为 `cd client && make build-app-darwin`，生成 `client/build/ESP32 Monitor.app`；脚本构建并嵌入前端、Agent与播放桥接库，执行本地签名。该入口不等于已有公证安装包。Linux 发布构建入口为 `cd client && make build-appimage-linux-repro`，在固定的 Ubuntu 24.04 容器内生成 AppImage，并用 `make check-linux-baseline` 校验 glibc/GTK/WebKit 基线；`make build-appimage-linux` 仅用于宿主快速迭代；`make ci-linux` 在同一容器内执行 vet、短测试、前端测试、打包、基线/布局检查和 Xvfb 冒烟（目前未接 GitHub Actions，可在本机或任意 runner 上运行）。Windows 构建入口为 `cd client && powershell -ExecutionPolicy Bypass -File scripts/build-windows-app.ps1`，生成 `client/build/windows/ESP32-Monitor/` 与 `ESP32-Monitor-<version>-windows-amd64.zip`；需 Go、Node.js、.NET SDK 与 windres（无 windres 时使用已生成的 `.syso`），未安装 Inno Setup 时跳过安装器。纯Agent可通过 `--collector` 及私有状态目录运行；真实上传需先得到v2 Server签发的Token，GUI优先走验证码注册。
+macOS 应用构建入口为 `cd client && make build-app-darwin`，生成 `client/build/ESP32 Monitor.app`；脚本构建并嵌入前端、Agent与播放桥接库，执行本地签名。该入口不等于已有公证安装包。Linux 发布构建入口为 `cd client && make build-appimage-linux-repro`，在固定的 Ubuntu 24.04 容器内生成 AppImage，并用 `make check-linux-baseline` 校验 glibc/GTK/WebKit 基线；`make build-appimage-linux` 仅用于宿主快速迭代；`make ci-linux` 在同一容器内执行 vet、短测试、前端测试、打包、基线/布局检查和 Xvfb 冒烟（目前未接 GitHub Actions，可在本机或任意 runner 上运行）。Windows 构建入口为 `cd client && powershell -ExecutionPolicy Bypass -File scripts/build-windows-app.ps1`，生成 `client/build/windows/ESP32-Monitor/` 与 `ESP32-Monitor-<version>-windows-amd64.zip`；需 Go、Node.js、.NET SDK 与 windres（无 windres 时使用已生成的 `.syso`），未安装 Inno Setup 时跳过安装器。独立无头 Linux 版本使用 `make build-headless-linux`，产物位于 `client/build/linux-headless/`。桌面构建脚本和无头脚本会清理其生成的中间文件；已经存在的前端依赖和全局缓存保留。
 
 可选模块参数：GitHub使用 `--github-login --github-client-id <public-id>` 或 `--github-user <login>`；额度用 `--codex`，任务用 `--codex-task-adapter auto`，可通过 `--codex-thread <id>` 指定会话；GUI启用Codex时自动传入任务观察参数。自动模式优先只读本地桌面状态库中的未归档用户会话ID，排除内部审查和子任务，不读取任务正文；没有状态库时回退会话索引，桌面状态不可用时不推断任务空闲。Windows 使用同用户校验的命名管道；本次状态库筛选改动仍需真实 Windows 桌面端验收。播放用 `--music`；LAN上位机用 `--companion --companion-ip <local-ip>`。完整参数以 [Agent参数表](../client/internal/agent/options.go) 为准。
 
@@ -211,19 +211,17 @@ Linux GPU 使用 [nvtop](https://github.com/Syllo/nvtop) 的 snapshot 输出；�
 
 ### Linux 无头部署
 
-NAS 等无桌面环境只运行 Agent，不安装 Wails GUI。Agent 必须用普通用户运行，禁止 `sudo`/root：它不需要也不应获得写块设备或刷新 SMART 的权限。
-
-- 依赖均为可选，由管理员按需安装：`udisks2`（物理盘 SMART 缓存）、`nvtop`（GPU）、`upower`（电池）。未安装时对应指标省略，不影响上传。Go 静态二进制本身不依赖系统库。
-- 上传 Token 文件权限建议 `0600`，状态目录 `0700`，放在运行用户自己的目录下。
-- 示例（路径按实际部署调整）：
+NAS 等无桌面环境可运行独立的 `monitor-headless`，它只包含采集器、上传和终端配置，不启动桌面 Agent 的其他服务。用普通用户运行，禁止 `sudo`/root。
 
 ```sh
-monitor-agent --collector \
-  --collector-state-dir ~/.local/state/esp32-monitor/collector \
-  --collector-upload-url https://server.example/v2/collector/samples \
-  --collector-upload-token-file ~/.config/esp32-monitor/collector-token \
-  --collector-config ~/.config/esp32-monitor/collector.json
+cd client
+make build-headless-linux
+./build/linux-headless/monitor-headless-linux-amd64 --setup
+./build/linux-headless/monitor-headless-linux-amd64
 ```
 
-- `--collector-config` 只在尚无持久化配置（revision 为 0）时首次应用，之后以 GUI/本地 API 应用的配置为准；无 GUI 时用它完成首次配置。
-- 磁盘休眠：采集路径只读 sysfs/proc、对已挂载文件系统执行 `statfs`，并读取 UDisks2 已缓存属性；不执行 `smartctl`、不发起 SMART 刷新、不读取块设备内容，因此不会因监控唤醒休眠磁盘。内核/UDisks2 自身策略性轮询除外。
+构建脚本支持 `GOARCH=amd64` 或 `GOARCH=arm64`；运行时架构应与产物匹配。首次配置时输入 Server 基地址和 Server WebUI 生成的六位验证码，然后在 Bubble Tea 的分类与指标菜单中选择一次上传指标（左右切换分类，上下移动，空格选择，Enter 保存，Esc 取消）。指标组合和设备依赖与 GUI 一致；Linux md RAID 阵列以磁盘对象显示，可以按阵列选择上传。协议要求的 CPU、内存和运行时间自动上传；采集器自动采集所选上传指标。重新运行 `--setup`，服务器地址留空可保留现有凭据并修改指标。状态与令牌默认保存在 `~/.config/ESP32-Monitor/headless/`（目录 0700、文件 0600）；`--state-dir` 可指定独立的私有目录。运行时每 10 秒输出采集状态 JSON；修改配置前须停止正在运行的无头程序。配置完成后可选择启用 systemd 用户服务；退出配置后用 `systemctl --user start monitor-headless.service` 启动，日志通过 `journalctl --user -u monitor-headless.service` 查看。用户未登录时要随系统启动，需管理员执行 `loginctl enable-linger <user>`。服务使用配置时的二进制绝对路径，移动二进制后需重新配置服务。
+
+依赖均为可选，由管理员按需安装：`udisks2`（物理盘 SMART 缓存）、`nvtop`（GPU）、`upower`（电池）。未安装时对应指标省略。磁盘采集只读 sysfs/proc、已挂载文件系统和 UDisks2 缓存，不主动刷新 SMART 或读取块设备；内核和 UDisks2 自身的轮询除外。
+
+原有 `monitor-agent --collector` 命令行部署仍可使用，适合已有自动化配置；其 `--collector-config` 仅在尚无持久化配置时首次应用。
