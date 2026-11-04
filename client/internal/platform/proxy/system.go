@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -31,6 +33,20 @@ func readSystem(ctx context.Context) (Settings, error) {
 		}
 		return parseWindows(data)
 	case "linux":
+		if strings.Contains(strings.ToLower(os.Getenv("XDG_CURRENT_DESKTOP")), "kde") {
+			config, err := os.UserConfigDir()
+			if err != nil {
+				return Settings{}, ErrDetection
+			}
+			data, err := os.ReadFile(filepath.Join(config, "kioslaverc"))
+			if os.IsNotExist(err) {
+				return Settings{}, nil
+			}
+			if err != nil {
+				return Settings{}, ErrDetection
+			}
+			return parseKDE(string(data))
+		}
 		// Headless Linux uses the environment. GNOME desktops also expose per-user settings.
 		if _, err := exec.LookPath("gsettings"); err != nil {
 			return Settings{}, nil
@@ -185,6 +201,59 @@ func parseGnome(text string) (Settings, error) {
 	}
 	if !s.enabled() {
 		return Settings{}, ErrInvalid
+	}
+	return s, nil
+}
+
+func parseKDE(text string) (Settings, error) {
+	values := map[string]string{}
+	inGroup := false
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") {
+			inGroup = line == "[Proxy Settings]"
+			continue
+		}
+		if inGroup {
+			if key, value, ok := strings.Cut(line, "="); ok {
+				values[strings.TrimSpace(key)] = strings.TrimSpace(value)
+			}
+		}
+	}
+	switch values["ProxyType"] {
+	case "", "0", "4":
+		return Settings{}, nil
+	case "2", "3":
+		return Settings{Automatic: true}, nil
+	case "1":
+	default:
+		return Settings{}, ErrDetection
+	}
+	if values["ReversedException"] == "true" {
+		return Settings{}, ErrInvalid
+	}
+	s := Settings{Bypass: strings.FieldsFunc(values["NoProxyFor"], func(r rune) bool { return r == ',' || r == ' ' || r == ';' })}
+	for _, entry := range []struct {
+		key string
+		dst *string
+	}{{"httpProxy", &s.HTTP}, {"httpsProxy", &s.HTTPS}, {"socksProxy", &s.SOCKS}} {
+		value := values[entry.key]
+		if value == "" {
+			continue
+		}
+		parts := strings.Fields(value)
+		if len(parts) == 2 {
+			value = strings.TrimRight(parts[0], "/") + ":" + strings.TrimSuffix(parts[1], "/")
+		} else if len(parts) != 1 {
+			return Settings{}, ErrInvalid
+		}
+		if strings.HasPrefix(value, "socks://") {
+			value = "socks5h://" + strings.TrimPrefix(value, "socks://")
+		}
+		if _, err := proxyURL(value); err != nil {
+			return Settings{}, err
+		}
+		*entry.dst = value
 	}
 	return s, nil
 }

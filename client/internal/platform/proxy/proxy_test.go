@@ -194,3 +194,19 @@ func TestHTTPSTransportUsesConnectProxy(t *testing.T) {
 		t.Fatal("HTTPS request did not use CONNECT proxy")
 	}
 }
+
+func TestKDEProxy(t *testing.T) {
+	settings, err := parseKDE("[Other]\nProxyType=0\n[Proxy Settings]\nProxyType=1\nhttpProxy=http://127.0.0.1 7890\nhttpsProxy=http://proxy:8080\nsocksProxy=socks://localhost 1080\nNoProxyFor=localhost,.example.com\n")
+	if err != nil || settings.HTTP != "http://127.0.0.1:7890" || settings.HTTPS != "http://proxy:8080" || settings.SOCKS != "socks5h://localhost:1080" || len(settings.Bypass) != 2 {
+		t.Fatalf("KDE proxy: %+v %v", settings, err)
+	}
+	for _, mode := range []string{"2", "3"} {
+		s, err := parseKDE("[Proxy Settings]\nProxyType=" + mode)
+		if err != nil || !s.Automatic {
+			t.Fatalf("automatic mode %s: %+v %v", mode, s, err)
+		}
+	}
+	if _, err := parseKDE("[Proxy Settings]\nProxyType=1\nReversedException=true"); err == nil {
+		t.Fatal("reversed bypass accepted")
+	}
+}
