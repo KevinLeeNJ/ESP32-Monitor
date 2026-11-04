@@ -17,7 +17,6 @@ import (
 	"mime"
 	"net"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -236,25 +235,6 @@ func peer(r *http.Request) string {
 	return host
 }
 
-// Accept literal local addresses without resolving arbitrary hostnames. Docker
-// port publishing can forward a host LAN address to a different container IP.
-func localHostRequest(r *http.Request) bool {
-	remote := net.ParseIP(peer(r))
-	if remote == nil || !(remote.IsLoopback() || remote.IsPrivate() || remote.IsLinkLocalUnicast()) {
-		return false
-	}
-	host := r.Host
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	} else {
-		host = strings.Trim(host, "[]")
-	}
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast())
-}
 func (h *Handler) audit(ctx context.Context, tx *sql.Tx, event, id string) error {
 	_, err := tx.ExecContext(ctx, "INSERT INTO web_audit(at,event,device_id) VALUES(?,?,?)", h.now().Unix(), event, id)
 	return err
@@ -278,12 +258,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			failure(w, 500, "internal_error")
 		}
 	}()
-	// Host allowlist also protects local HTTP against DNS rebinding. Forwarded headers are ignored.
-	u, _ := url.Parse(h.cfg.PublicBaseURL)
-	if !strings.EqualFold(r.Host, u.Host) && !localHostRequest(r) {
-		failure(w, 403, "invalid_host")
-		return
-	}
 	if strings.HasPrefix(r.URL.Path, "/fonts/") || strings.HasPrefix(r.URL.Path, "/icons/") || r.URL.Path == "/app-icon.png" {
 		if r.Method != "GET" {
 			failure(w, 405, "method_not_allowed")

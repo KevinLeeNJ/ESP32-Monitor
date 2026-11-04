@@ -108,8 +108,8 @@ func TestLocalHostAccess(t *testing.T) {
 		{"192.168.110.2:8080", "192.168.110.3:1234", 200},
 		{"192.168.110.2:8080", "172.18.0.1:1234", 200},
 		{"[::1]:8080", "[::1]:1234", 200},
-		{"evil.example:8080", "192.168.110.3:1234", 403},
-		{"192.168.110.2:8080", "8.8.8.8:1234", 403},
+		{"evil.example:8080", "192.168.110.3:1234", 200},
+		{"192.168.110.2:8080", "8.8.8.8:1234", 200},
 	} {
 		t.Run(tc.host+"/"+tc.remote, func(t *testing.T) {
 			r := httptest.NewRequest("GET", "http://"+tc.host+"/healthz", nil)
@@ -264,26 +264,29 @@ func TestBootstrapRestartAndRateLimits(t *testing.T) {
 }
 func TestReverseProxyCookieAndOrigin(t *testing.T) {
 	x := setup(t)
-	request := func(origin, host string) *httptest.ResponseRecorder {
+	request := func(origin, host, remote, proto string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("POST", "http://"+host+"/api/auth/login", strings.NewReader(fmt.Sprintf(`{"password":%q}`, x.password)))
-		r.RemoteAddr = "127.0.0.1:1234"
+		r.RemoteAddr = remote
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set("Origin", origin)
-		r.Header.Set("X-Forwarded-Proto", "http")
-		r.Header.Set("X-Forwarded-For", "203.0.113.1")
+		r.Header.Set("X-Forwarded-Proto", proto)
 		w := httptest.NewRecorder()
 		x.h.ServeHTTP(w, r)
 		return w
 	}
-	w := request("https://monitor.example.com", "monitor.example.com")
+	w := request("https://other.example", "other.example", "127.0.0.1:1234", "https")
 	requireStatus(t, w, 200)
 	c := w.Result().Cookies()[0]
 	if !c.Secure || !c.HttpOnly || c.Name != "__Host-monitor_session" || c.Domain != "" {
 		t.Fatal("unsafe proxy cookie")
 	}
-	requireStatus(t, request("http://monitor.example.com", "monitor.example.com"), 403)
-	requireStatus(t, request("http://evil.test", "evil.test"), 403)
-	requireStatus(t, x.req("POST", "/api/auth/login", "", fmt.Sprintf(`{"password":%q}`, x.password), "X-Forwarded-Proto", "https"), 200)
+	requireStatus(t, request("https://evil.test", "other.example", "127.0.0.1:1234", "https"), 403)
+	requireStatus(t, request("https://other.example", "other.example", "192.0.2.1:1234", "https"), 200)
+	w = request("http://other.example", "other.example", "192.0.2.1:1234", "http")
+	requireStatus(t, w, 200)
+	if w.Result().Cookies()[0].Secure {
+		t.Fatal("HTTP response must not use Secure cookie")
+	}
 }
 func TestRegistrationExpiryRotationDeletion(t *testing.T) {
 	x := setup(t)

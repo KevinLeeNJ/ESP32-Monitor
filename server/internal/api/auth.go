@@ -10,8 +10,6 @@ import (
 	"golang.org/x/crypto/argon2"
 	"io"
 	"net/http"
-	"net/url"
-	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -71,8 +69,7 @@ func (h *Handler) bootstrap(out io.Writer) error {
 	return err
 }
 func (h *Handler) secureCookie(r *http.Request) bool {
-	u, _ := url.Parse(h.cfg.PublicBaseURL)
-	return r.TLS != nil || u.Scheme == "https" && strings.EqualFold(r.Host, u.Host)
+	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 }
 func (h *Handler) cookieName(r *http.Request) string {
 	if h.secureCookie(r) {
