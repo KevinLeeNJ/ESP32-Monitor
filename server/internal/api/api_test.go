@@ -570,3 +570,11 @@ func TestObjectDirectoryValidation(t *testing.T) {
 	body := `{"version":2,"interval_seconds":10,"enabled":[{"metric":"gpu.usage","objects":[1]}],"inventory":{"gpus":[{"id":1}],"objects":[{"id":1,"kind":"interface","name":"en0"}]}}`
 	requireStatus(t, x.req("PUT", "/v2/collector/profile", token, body, "If-None-Match", "*"), 422)
 }
+
+func TestInitialPasswordChangeDoesNotRequireTemporaryPassword(t *testing.T) {
+	x := setup(t)
+	x.login()
+	requireStatus(t, x.req("POST", "/api/auth/password", "", fmt.Sprintf(`{"new_password":%q}`, x.password)), 422)
+	x.state(x.req("POST", "/api/auth/password", "", fmt.Sprintf(`{"new_password":%q}`, permanentPassword)))
+	requireStatus(t, x.req("POST", "/api/auth/password", "", `{"new_password":"another secure password"}`), 401)
+}

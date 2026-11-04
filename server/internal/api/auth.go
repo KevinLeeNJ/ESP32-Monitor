@@ -209,15 +209,18 @@ func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request, s sessi
 	if !passwordValid(req.Password) {
 		return errf(422, "password_requires_12_characters")
 	}
-	if len(req.Current) > 256 || req.Current == req.Password {
+	if len(req.Current) > 256 {
 		return errf(422, "new_password_must_differ")
 	}
 	var salt, hash []byte
 	if err := h.db.QueryRowContext(r.Context(), "SELECT salt,hash FROM web_credentials WHERE id=1").Scan(&salt, &hash); err != nil {
 		return err
 	}
-	if subtle.ConstantTimeCompare(passwordHash(req.Current, salt), hash) != 1 {
+	if !s.MustChange && subtle.ConstantTimeCompare(passwordHash(req.Current, salt), hash) != 1 {
 		return errf(401, "invalid_password")
+	}
+	if subtle.ConstantTimeCompare(passwordHash(req.Password, salt), hash) == 1 {
+		return errf(422, "new_password_must_differ")
 	}
 	salt = newSalt()
 	hash = passwordHash(req.Password, salt)

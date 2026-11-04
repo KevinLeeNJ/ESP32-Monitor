@@ -96,7 +96,7 @@ function passwordPage() {
     shell(!forced, '修改密码');
     content.replaceChildren();
     const [oldField, old] = field(forced ? '临时密码' : '当前密码', 'password', 'current-password', 'current-password');
-    old.required = true;
+    old.required = !forced;
     old.maxLength = 256;
     const [newField, next] = field('新密码', 'password', 'new-password', 'new-password');
     next.required = true;
@@ -104,9 +104,9 @@ function passwordPage() {
     next.maxLength = 256;
     const [repeatField, repeat] = field('确认新密码', 'password', 'repeat-password', 'new-password');
     repeat.required = true;
-    const form = el('form', {}, [heading(forced ? '设置你的登录密码' : '修改登录密码', forced ? '首次登录，请先修改临时密码，再进入控制台。' : '保存后，其他浏览器的登录会话会失效。', 'ACCOUNT SECURITY'), oldField, newField, el('p', { class: 'hint', text: '至少 12 个字符，建议使用密码管理器生成的随机密码。' }), repeatField, el('button', { class: 'btn primary', type: 'submit', text: '保存新密码' })]);
+    const form = el('form', {}, [heading(forced ? '设置你的登录密码' : '修改登录密码', forced ? '首次登录，请先修改临时密码，再进入控制台。' : '保存后，其他浏览器的登录会话会失效。', 'ACCOUNT SECURITY'), forced ? null : oldField, newField, el('p', { class: 'hint', text: '至少 12 个字符，建议使用密码管理器生成的随机密码。' }), repeatField, el('button', { class: 'btn primary', type: 'submit', text: '保存新密码' })]);
     busyForm(form, async () => { if (next.value !== repeat.value)
-        throw new Error('两次输入的新密码不一致。'); const state = await api('/api/auth/password', 'POST', { current_password: old.value, new_password: next.value }); old.value = next.value = repeat.value = ''; acceptState(state); page = 'devices'; notice('密码已更新'); render(); });
+        throw new Error('两次输入的新密码不一致。'); const state = await api('/api/auth/password', 'POST', { ...(forced ? {} : { current_password: old.value }), new_password: next.value }); old.value = next.value = repeat.value = ''; acceptState(state); page = 'devices'; notice('密码已更新'); render(); });
     content.append(el('section', { class: 'card auth-card' }, form));
 }
 async function confirmAction(title, text) { const d = $('#confirm'); $('#confirm-title').textContent = title; $('#confirm-text').textContent = text; d.returnValue = 'cancel'; d.showModal(); return new Promise(resolve => d.addEventListener('close', () => resolve(d.returnValue === 'ok'), { once: true })); }

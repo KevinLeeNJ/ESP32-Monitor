@@ -29,7 +29,7 @@ const crypto = require('node:crypto');
  await page.goto(base);await page.getByRole('heading',{name:'登录控制台'}).waitFor();await page.screenshot({path:path.join(output,'login.png')});
  await page.locator('#login-password').fill(bootstrap);await page.getByRole('button',{name:'登录',exact:true}).click();await page.getByRole('heading',{name:'设置你的登录密码'}).waitFor();
  assert.equal(await page.locator('#sidebar').isVisible(),false);
- await page.locator('#current-password').fill(bootstrap);await page.locator('#new-password').fill('browser permanent passphrase');await page.locator('#repeat-password').fill('browser permanent passphrase');await page.getByRole('button',{name:'保存新密码'}).click();
+ assert.equal(await page.locator('#current-password').count(),0);await page.locator('#new-password').fill('browser permanent passphrase');await page.locator('#repeat-password').fill('browser permanent passphrase');await page.getByRole('button',{name:'保存新密码'}).click();
  await page.getByRole('heading',{name:'设备注册',exact:true}).waitFor();
  await page.locator('[data-page=token]').click();assert.equal(await page.locator('#read-token').inputValue(),'');await page.getByRole('button',{name:'显示 Token'}).click();await page.waitForFunction(t=>document.querySelector('#read-token').value===t,readToken);assert.equal(await page.locator('#read-token').getAttribute('type'),'text');await page.getByRole('button',{name:'隐藏 Token'}).click();assert.equal(await page.locator('#read-token').getAttribute('type'),'password');await page.locator('[data-page=devices]').click();
  await page.locator('#device-name').fill('测试工作站');await page.getByRole('button',{name:'添加设备并生成验证码'}).click();await page.locator('.code-value').waitFor();

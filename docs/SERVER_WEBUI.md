@@ -54,7 +54,7 @@ Server 根据配置的公网地址与保留的 Host 判断外部 HTTPS，校验 
 ## 密码与 Cookie
 
 - 无用户名。首次没有密码时生成随机 128 位临时密码，向 stderr 打印一次；SQLite 仅存随机 salt 和 Argon2id 哈希（64 MiB、3 次、4 并行度、32 字节输出）。
-- 首次登录后，后端只允许状态、改密和退出；修改临时密码才能管理设备。新密码至少 12 字符、最多 256 UTF-8 字节，不含控制字符，不能与旧密码相同；普通改密也验证当前密码。
+- 首次登录后，后端只允许状态、改密和退出；修改临时密码才能管理设备。新密码至少 12 字符、最多 256 UTF-8 字节，不含控制字符，不能与旧密码相同；首次改密依靠已认证会话，无需再次输入临时密码，普通改密仍验证当前密码。
 - 参考 [SnowLuma 认证流程](https://github.com/SnowLuma/SnowLuma/blob/main/packages/core/src/webui/auth.ts)：上次未完成首次改密时，重启重新生成临时密码并撤销旧会话；改密完成后重启不再打印密码。已存凭据损坏则启动失败，保留数据库。
 - Cookie 为随机 256 位会话，SQLite 只存其 SHA-256 验证值；最长 7 天、闲置 24 小时后失效，最多 16 个会话。刷新和 Server 重启保留有效登录；退出撤销当前会话，改密撤销全部旧会话并轮换当前 Cookie。
 - Cookie 带 HttpOnly、SameSite=Strict、Path=/。公网使用 Secure 与 `__Host-monitor_session`，直接数字回环 HTTP 使用独立 `monitor_session`。前端仅在内存保存 CSRF Token，不把凭据存入 localStorage/sessionStorage。
@@ -86,7 +86,7 @@ Profile/revision、原始批次、去重哈希和有效值在 SQLite WAL 中原�
 | --- | --- |
 | `POST /api/auth/login` | `{password}`；设置 Cookie，返回 `must_change_password,csrf_token` |
 | `GET /api/auth/state` | Cookie；会话状态与 CSRF Token |
-| `POST /api/auth/password` | Cookie + CSRF + Origin；`{current_password,new_password}` |
+| `POST /api/auth/password` | Cookie + CSRF + Origin；首次改密仅需 `{new_password}`，普通改密需 `{current_password,new_password}` |
 | `POST /api/auth/logout` | Cookie + CSRF + Origin；撤销会话 |
 | `GET/POST /api/devices` | 管理员；列表 / `{name}` 创建并取码 |
 | `POST /api/devices/{id}/code` / `DELETE /api/devices/{id}` | 管理员；重新发码 / 删除 |
