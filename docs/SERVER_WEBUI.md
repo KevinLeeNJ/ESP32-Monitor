@@ -11,7 +11,7 @@ make build
 ./bin/monitor-server serve --config ./config/monitor.yaml
 ```
 
-也可以直接 `serve`：配置不存在时自动创建 `0600` 配置和随机只读 Token。新配置默认监听 `0.0.0.0:8080`，允许本机和局域网通过 IP 地址直接访问；已有配置不会自动覆盖。公网部署前将 `public_base_url` 改成自己的 HTTPS 域名；`configure` 可编辑监听地址、SQLite 路径、公网地址，查看或轮换只读 Token。设备在 WebUI 注册。
+也可以直接 `serve`：配置不存在时自动创建 `0600` 配置和随机只读 Token。新配置默认监听 `0.0.0.0:8080`，允许本机和局域网通过 IP 地址直接访问；已有配置不会自动覆盖。`configure` 可编辑监听地址、SQLite 路径及旧版公网地址，查看或轮换只读 Token。设备在 WebUI 注册。
 
 根页面 `/` 提供设备注册、指标查看和改密页。视觉复用 Client 黑白灰像素样式、FusionPixel/Unscii 字体及 Pixelarticons，全部嵌入 Go 二进制。CPU 型号/核心数、内存总量、磁盘型号/容量显示在对应指标卡片；磁盘按 Profile 对象 ID 关联型号和观测，有型号时用型号作标题。缺少名称时提示未上传，不虚构 Client 没有上传的硬件信息。网卡、GPU、电池和核心同样通过 `inventory.objects` 的 ID 对照表优先显示名称/型号，编号仅作辅助。旧版 Client 没有目录时保留介质类型等降级显示。
 
@@ -23,33 +23,39 @@ docker compose up -d --build
 docker compose logs server
 ```
 
-首次启动的日志包含 WebUI 临时密码；登录后须立即修改。访问 `http://<服务器局域网IP>:8080`，在 WebUI 创建设备，再把地址和验证码填入 Client。服务器只读 Token 可在 WebUI 查看，用于 Firmware 的 Devices 设置。配置和 SQLite 数据保存在 Docker 卷 `server_monitor-data`；`docker compose down` 保留数据，`docker compose down -v` 会删除数据。升级时重新运行 `docker compose up -d --build`。首次改密前重启会生成新的临时密码，请重新查看日志。
+Compose 环境变量可写在 `server/.env` 中，例如：
 
-镜像通过 Go 构建阶段生成静态程序，运行阶段使用 scratch、非 root 用户和只读根文件系统。默认构建需要访问 Go 镜像仓库及模块代理；可用 `GO_IMAGE` 指定兼容的本地 Go 构建镜像。该配置适合本机及可信局域网测试；HTTP 未加密凭据和指标，公网使用前应配置 HTTPS 反向代理。
+```env
+SERVER_BIND_IP=0.0.0.0
+MONITOR_HISTORY_RETENTION_HOURS=24
+```
+
+`SERVER_BIND_IP` 是宿主机绑定地址，默认全部 IPv4，端口固定 8080；`MONITOR_HISTORY_RETENTION_HOURS` 是历史保留时间。修改后运行 `docker compose up -d` 应用。
+
+容器内部监听地址和 SQLite 路径在 Compose 的 `MONITOR_LISTEN`、`MONITOR_DATABASE` 中设置。自动生成的只读 Token 仍保存在 `data/monitor.yaml`，设备凭据和 WebUI 密码保存在 SQLite，避免重启丢失。旧配置文件中的 `public_base_url` 保留用于非容器 CLI 兼容，不再限制请求域名或识别 HTTPS。
+
+首次启动的日志包含 WebUI 临时密码；登录后须立即修改。访问 `http://<服务器局域网IP>:8080`，在 WebUI 创建设备，再把地址和验证码填入 Client。服务器只读 Token 可在 WebUI 查看，用于 Firmware 的 Devices 设置。配置和 SQLite 数据保存在 Compose 同目录的 `data/` 中；`docker compose down` 和 `docker compose down -v` 均保留该目录。首次启动时 Docker 自动创建 `data`；容器以 root 运行，该目录及新建文件通常属于 root。使用 rootless Docker 或用户命名空间时，UID 映射可能影响权限。旧版 Docker 卷 `server_monitor-data` 不会自动迁移或删除，迁移前应停止 Server 并备份该卷。升级时重新运行 `docker compose up -d --build`。首次改密前重启会生成新的临时密码，请重新查看日志。
+
+若启动时报告无法设置目录所有权或加锁失败，请检查 NAS 用户、Docker 用户命名空间映射及文件系统是否支持更改所有权和文件锁。不要通过删除配置、数据库或锁文件来排错。
+
+镜像通过 Go 构建阶段生成静态程序，运行阶段使用 scratch 和只读根文件系统，容器以 root 运行。默认构建需要访问 Go 镜像仓库和 Go 模块代理，`GOPROXY` 默认使用 `https://goproxy.cn,direct`；可在 `server/.env` 覆盖 `GOPROXY`，并用 `GO_IMAGE` 指定兼容的本地 Go 构建镜像。该配置适合本机及可信局域网测试；HTTP 未加密凭据和指标，公网使用前应配置 HTTPS 反向代理。
 
 ## HTTP 后端与 HTTPS 反代
 
-```yaml
-listen: "127.0.0.1:8080"
-public_base_url: "https://monitor.example.com"
-database: "./data/monitor.db"
-read_token: "<configure 生成的 64 位小写十六进制随机值>"
-history_retention_hours: 24
-```
-
-在已有 Nginx HTTPS 虚拟主机中配置：
+Nginx 与 Server 在同一主机时，可在 HTTPS 虚拟主机中配置：
 
 ```nginx
 location / {
     proxy_pass http://127.0.0.1:8080;
     proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
     client_max_body_size 256k;
 }
 ```
 
-Server 根据配置的公网地址与保留的 Host 判断外部 HTTPS，校验 Origin 并设置 Secure Cookie；不直接信任 `X-Forwarded-Proto/For`。反代必须保留原始 Host，从域名根路径转发，不加路径前缀。仅将反代 HTTPS 端口暴露公网，认证响应不缓存。
+Nginx 必须覆盖客户端传来的 `X-Forwarded-Proto`。Server 直接信任该请求头，以识别 HTTPS 并设置 Secure Cookie 和 HSTS；Origin 和 CSRF 校验仍然生效。此配置假定局域网可信，Docker 端口不会直接暴露公网；无域名白名单后，Server 不再提供 Host 白名单抵御 DNS rebinding。
 
-本机和局域网可通过 `http://<服务器局域网IP>:8080` 直接访问；`public_base_url` 用于指定公网反向代理域名。默认允许本机或私网来源使用回环、私网及链路本地 IP 字面地址，其他域名仍须与 `public_base_url` 一致；不信任转发头。Docker 桥接模式下可发布 `8080:8080`，通过宿主机局域网 IP 访问，容器内通常只能看到桥接网络地址。HTTP 不加密验证码、令牌、密码和指标，建议使用 HTTPS。Compose 使用持久卷保存配置和 SQLite；stderr 输出进入 Docker 日志。
+本机和局域网仍可使用 `http://<服务器局域网IP>:8080`；HTTP 不加密凭据和指标。Server 不信任 `X-Forwarded-For`，同一反代后的用户共享来源限流。反代从域名根路径转发，stderr 输出进入 Docker 日志。
 
 ## 密码与 Cookie
 
@@ -57,8 +63,8 @@ Server 根据配置的公网地址与保留的 Host 判断外部 HTTPS，校验 
 - 首次登录后，后端只允许状态、改密和退出；修改临时密码才能管理设备。新密码至少 12 字符、最多 256 UTF-8 字节，不含控制字符，不能与旧密码相同；首次改密依靠已认证会话，无需再次输入临时密码，普通改密仍验证当前密码。
 - 参考 [SnowLuma 认证流程](https://github.com/SnowLuma/SnowLuma/blob/main/packages/core/src/webui/auth.ts)：上次未完成首次改密时，重启重新生成临时密码并撤销旧会话；改密完成后重启不再打印密码。已存凭据损坏则启动失败，保留数据库。
 - Cookie 为随机 256 位会话，SQLite 只存其 SHA-256 验证值；最长 7 天、闲置 24 小时后失效，最多 16 个会话。刷新和 Server 重启保留有效登录；退出撤销当前会话，改密撤销全部旧会话并轮换当前 Cookie。
-- Cookie 带 HttpOnly、SameSite=Strict、Path=/。公网使用 Secure 与 `__Host-monitor_session`，直接数字回环 HTTP 使用独立 `monitor_session`。前端仅在内存保存 CSRF Token，不把凭据存入 localStorage/sessionStorage。
-- 所有管理写请求同时校验 Origin 和会话绑定的 `X-CSRF-Token`；登录也校验 Origin。Host 白名单阻止 DNS rebinding；CSP、禁止嵌入/嗅探/缓存和公网 HSTS 加固浏览器响应。
+- Cookie 带 HttpOnly、SameSite=Strict、Path=/。HTTPS 使用 Secure 与 `__Host-monitor_session`，HTTP 使用独立 `monitor_session`。前端仅在内存保存 CSRF Token，不把凭据存入 localStorage/sessionStorage。
+- 所有管理写请求同时校验 Origin 和会话绑定的 `X-CSRF-Token`；登录也校验 Origin。CSP、禁止嵌入/嗅探/缓存和 HTTPS HSTS 加固浏览器响应。
 - 登录/改密：全局突发 10 次，之后每 6 秒一次；来源突发 5 次，之后每 12 秒一次。注册码兑换：全局及来源突发 5 次，每 12 秒恢复一次。429 带 Retry-After。同一反代后的用户共享来源限流，不信任任意 X-Forwarded-For。
 - 目前无在线忘记密码入口；需恢复受控的一致性备份，勿删除整个数据库重置密码。
 

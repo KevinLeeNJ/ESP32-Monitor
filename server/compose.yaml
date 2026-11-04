@@ -4,16 +4,20 @@ services:
       context: .
       args:
         GO_IMAGE: ${GO_IMAGE:-golang:1.26}
+        GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
+    environment:
+      MONITOR_LISTEN: "0.0.0.0:8080"
+      MONITOR_DATABASE: "/state/data/monitor.db"
+      MONITOR_HISTORY_RETENTION_HOURS: ${MONITOR_HISTORY_RETENTION_HOURS:-24}
     ports:
-      - "8080:8080"
+      - "${SERVER_BIND_IP:-0.0.0.0}:8080:8080"
     volumes:
-      - monitor-data:/state
+      - ./data:/state
     read_only: true
     cap_drop:
       - ALL
+    cap_add:
+      - DAC_OVERRIDE
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped
-
-volumes:
-  monitor-data:
