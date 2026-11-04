@@ -12,7 +12,6 @@
 #include "monitor_wifi_manager.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "esp_pm.h"
 #include "esp_random.h"
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
@@ -31,6 +30,12 @@
 #define SERIAL_PAIR_OFFER_MS 5000u
 #define SERIAL_PAIR_RESULT_MS 5000u
 #define HEARTBEAT_MS 1000u
+#define SERIAL_POLL_MS 20u
+/* With no USB host the listener has nothing to time out, so the read wait
+ * only paces host-attach detection. One-second chunks keep tickless idle in
+ * Light Sleep instead of waking on the 20 ms companion cadence; received
+ * bytes still wake the read immediately. */
+#define SERIAL_DETACHED_POLL_MS 1000u
 #define SERIAL_TASK_STACK 16384u
 #define COMPANION_DEVICE_NAME "ESP32 Monitor"
 
@@ -97,7 +102,6 @@ static void heap_sample(serial_ctx_t *ctx)
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_started, s_stop, s_revoke, s_active, s_committed, s_driver;
 static SemaphoreHandle_t s_tx_lock;
-static esp_pm_lock_handle_t s_pm_lock;
 
 static uint64_t monotonic_ms(void) { return (uint64_t)esp_timer_get_time() / 1000u; }
 
@@ -934,7 +938,11 @@ static void serial_task(void *argument)
         portENTER_CRITICAL(&s_lock); bool stop = s_stop; portEXIT_CRITICAL(&s_lock);
         if (stop) break;
         uint8_t buffer[512];
-        int received = usb_serial_jtag_read_bytes(buffer, sizeof buffer, pdMS_TO_TICKS(20));
+        TickType_t wait = pdMS_TO_TICKS(SERIAL_POLL_MS);
+#if CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION || CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED
+        if (!usb_serial_jtag_is_connected()) wait = pdMS_TO_TICKS(SERIAL_DETACHED_POLL_MS);
+#endif
+        int received = usb_serial_jtag_read_bytes(buffer, sizeof buffer, wait);
         uint64_t now = monotonic_ms();
         ctx->frame_authenticated = ctx->authenticated;
         const uint8_t *key = ctx->authenticated ? ctx->keys.frame : NULL;
@@ -959,10 +967,6 @@ esp_err_t monitor_serial_start(void)
     if (started) return ESP_OK;
     if (!s_tx_lock) s_tx_lock = xSemaphoreCreateMutex();
     if (!s_tx_lock) return ESP_ERR_NO_MEM;
-    /* The USB Serial/JTAG peripheral is lost in Light Sleep, which also makes
-     * the port disappear for the host. Serial companion mode stays awake. */
-    if (esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "companion_serial", &s_pm_lock) == ESP_OK)
-        (void)esp_pm_lock_acquire(s_pm_lock);
     usb_serial_jtag_driver_config_t config = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
     config.rx_buffer_size = 4096;
     config.tx_buffer_size = 4096;

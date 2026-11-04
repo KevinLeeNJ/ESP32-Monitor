@@ -9,9 +9,8 @@ CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_PM_ENABLE=y
 # Keep the Light Sleep entry/exit path in IRAM to reduce per-wakeup overhead.
 CONFIG_PM_SLP_IRAM_OPT=y
-# The USB Serial/JTAG driver owns the port for the Serial Companion; the ROM
-# secondary console would interleave and corrupt its frames.
-CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+# Enable the IDF USB connection monitor and its automatic sleep lock.
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
 # CONFIG_MONITOR_PM_PROFILE is not set
 # CONFIG_PM_PROFILING is not set
 CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
