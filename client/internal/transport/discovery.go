@@ -22,6 +22,19 @@ func lp(s string) []byte {
 	copy(b[2:], s)
 	return b
 }
+
+const (
+	discoveryPort = "18444"
+	// A modem-sleeping monitor only listens on some DTIM wakeups. The AP
+	// buffers group traffic for one DTIM period, so a single broadcast can be
+	// lost; repeat it within the same discovery round.
+	discoveryResendInterval = 300 * time.Millisecond
+	// Unicast frames are buffered per station until the client wakes; one
+	// datagram is enough, but a stale address should not consume the full
+	// broadcast budget.
+	lanRecoveryUnicastWait = 3 * time.Second
+)
+
 func DiscoveryMAC(m wire.Discovery, key string) string {
 	raw, _ := wire.RawNonce(key)
 	salt := sha256.Sum256(append(append(lp(m.HostID), lp(value(m.DeviceID))...), lp(value(m.PairingID))...))
@@ -77,7 +90,7 @@ func (b *Backend) discoveryTarget() string {
 				for j := range v {
 					v[j] = ip[j] | ^n.Mask[j]
 				}
-				return net.JoinHostPort(v.String(), "18444")
+				return net.JoinHostPort(v.String(), discoveryPort)
 			}
 		}
 	}
@@ -113,21 +126,31 @@ func (b *Backend) query(ctx context.Context, target string, pair *Pairing, durat
 	if encodeErr != nil {
 		return nil, encodeErr
 	}
-	if _, e = conn.WriteToUDP(data, a); e != nil {
+	broadcast := b.opts.DiscoveryTarget == "" && !a.IP.IsLoopback() && target == b.discoveryTarget()
+	send := func() error {
+		if _, e := conn.WriteToUDP(data, a); e != nil {
+			return e
+		}
+		// Some Wi-Fi networks discard subnet-directed broadcasts but deliver the
+		// IPv4 local broadcast. Use the same bound interface, request ID and nonce
+		// for both; replies are still validated against this discovery round.
+		if broadcast {
+			_, _ = conn.WriteToUDP(data, &net.UDPAddr{IP: net.IPv4bcast, Port: a.Port})
+		}
+		return nil
+	}
+	if e = send(); e != nil {
 		logging.L("transport").Warn("discovery_send_failed", "error", e.Error())
 		return nil, errors.New("network_unreachable")
-	}
-	// Some Wi-Fi networks discard subnet-directed broadcasts but deliver the
-	// IPv4 local broadcast. Use the same bound interface, request ID and nonce
-	// for both; replies are still validated against this discovery round.
-	if b.opts.DiscoveryTarget == "" && !a.IP.IsLoopback() && target == b.discoveryTarget() {
-		_, _ = conn.WriteToUDP(data, &net.UDPAddr{IP: net.IPv4bcast, Port: a.Port})
 	}
 	deadline := time.Now().Add(duration)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
-	_ = conn.SetReadDeadline(deadline)
+	nextSend := time.Now().Add(discoveryResendInterval)
+	if !broadcast {
+		nextSend = deadline
+	}
 	cancelDone := make(chan struct{})
 	defer close(cancelDone)
 	go func() {
@@ -142,13 +165,27 @@ func (b *Backend) query(ctx context.Context, target string, pair *Pairing, durat
 	pairingLostObserved := false
 	buf := make([]byte, 1025)
 	for {
+		readDeadline := deadline
+		if nextSend.Before(readDeadline) {
+			readDeadline = nextSend
+		}
+		_ = conn.SetReadDeadline(readDeadline)
 		n, addr, e := conn.ReadFromUDP(buf)
 		if e != nil {
-			if len(out) > 0 {
-				return out, nil
-			}
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
+			}
+			var wait net.Error
+			if broadcast && errors.As(e, &wait) && wait.Timeout() && time.Now().Before(deadline) {
+				if e = send(); e != nil {
+					logging.L("transport").Warn("discovery_send_failed", "error", e.Error())
+					return out, nil
+				}
+				nextSend = time.Now().Add(discoveryResendInterval)
+				continue
+			}
+			if len(out) > 0 {
+				return out, nil
 			}
 			return out, nil
 		}
@@ -177,6 +214,11 @@ func (b *Backend) query(ctx context.Context, target string, pair *Pairing, durat
 				continue
 			}
 			b.clearPairingLost(*r.DeviceID)
+			/* Remember the authenticated address: a cold start then probes
+			 * unicast, which the AP buffers for a modem-sleeping station. */
+			if e := b.store.rememberAddress(*r.DeviceID, addr.IP.String()); e != nil {
+				logging.L("transport").Warn("last_address_save_failed", "device", logging.Ref(*r.DeviceID), "error", e.Error())
+			}
 		} else if !*r.PairingOpen || r.PairingID != nil || r.MAC != nil {
 			continue
 		}
@@ -306,25 +348,37 @@ func (b *Backend) recoverDevice(ctx context.Context, p Pairing) {
 	b.mu.Lock()
 	c, ok := b.candidates[p.DeviceID]
 	b.mu.Unlock()
-	if ok {
-		out, e := b.query(ctx, c.Addr.String(), &p, lanRecoveryProbeTimeout, true)
-		if e == nil && len(out) > 0 {
-			logging.L("transport").Info("lan_recovery_connected", "device", logging.Ref(p.DeviceID),
-				"path", "candidate", "elapsed_ms", time.Since(start).Milliseconds())
-			return
-		}
+	type probeTarget struct {
+		address string
+		path    string
 	}
-	target := b.discoveryTarget()
-	if target != "" {
-		out, e := b.query(ctx, target, &p, lanRecoveryProbeTimeout, true)
+	targets := make([]probeTarget, 0, 3)
+	if ok {
+		targets = append(targets, probeTarget{c.Addr.String(), "candidate"})
+	}
+	/* A cold start has no in-memory candidate. The last authenticated address
+	 * is usually still valid and, unlike broadcast, unicast survives the
+	 * monitor's modem-sleep DTIM window. */
+	if p.LastAddress != "" && (!ok || c.Addr.IP.String() != p.LastAddress) {
+		targets = append(targets, probeTarget{net.JoinHostPort(p.LastAddress, discoveryPort), "address"})
+	}
+	if target := b.discoveryTarget(); target != "" {
+		targets = append(targets, probeTarget{target, "broadcast"})
+	}
+	for _, t := range targets {
+		timeout := lanRecoveryUnicastWait
+		if t.path == "broadcast" {
+			timeout = lanRecoveryProbeTimeout
+		}
+		out, e := b.query(ctx, t.address, &p, timeout, true)
 		if e == nil && len(out) > 0 {
 			logging.L("transport").Info("lan_recovery_connected", "device", logging.Ref(p.DeviceID),
-				"path", "broadcast", "elapsed_ms", time.Since(start).Milliseconds())
+				"path", t.path, "elapsed_ms", time.Since(start).Milliseconds())
 			return
 		}
 	}
 	logging.L("transport").Debug("lan_recovery_miss", "device", logging.Ref(p.DeviceID),
-		"elapsed_ms", time.Since(start).Milliseconds())
+		"elapsed_ms", time.Since(start).Milliseconds(), "probes", len(targets))
 }
 
 /* A revoked monitor answers a paired probe with pairing_open=true, the old

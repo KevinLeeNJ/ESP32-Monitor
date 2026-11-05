@@ -203,6 +203,12 @@ func (p *pairingServer) approve(w *pairWindow) error {
 	r := w.response
 	token, key := wire.Nonce(), wire.Nonce()
 	pair := Pairing{DeviceID: w.deviceID, DeviceName: w.request.DeviceName, PairingID: r.PairingID, DeviceToken: token, SerialKey: key, ConsentAt: w.consent.Unix(), WarningVersion: 1, LANConsent: true, SerialPort: w.port}
+	if storedIPv4(w.sourceIP) {
+		/* Persist the LAN address at pairing time so the first cold start can
+		 * probe unicast instead of relying on a broadcast the sleeping
+		 * monitor may miss. Serial pairing carries "serial" here. */
+		pair.LastAddress = w.sourceIP
+	}
 	if e := p.service.store.put(pair); e != nil {
 		return e
 	}

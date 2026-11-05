@@ -193,11 +193,23 @@ func (b *Backend) sendMQTT(s *session, topic string, data any, qos byte) error {
 	if e = wire.Validate(payload, 16384); e != nil {
 		return e
 	}
+	if qos == 1 {
+		/* A monitor behind Wi-Fi power save can delay the PUBACK past a
+		 * beacon interval. Drop a late token from a previous timed-out
+		 * publish so it cannot satisfy this wait. */
+		b.mu.Lock()
+		s.pendingMQTT = 0
+		select {
+		case <-s.qosDone:
+		default:
+		}
+		b.mu.Unlock()
+	}
 	if e = b.broker.Publish(prefix(b.store.HostID(), s.pair.DeviceID, s.id)+"/down/"+topic, payload, false, qos); e != nil {
 		return e
 	}
 	if qos == 1 {
-		timer := time.NewTimer(4 * time.Second)
+		timer := time.NewTimer(10 * time.Second)
 		defer timer.Stop()
 		select {
 		case <-s.ctx.Done():

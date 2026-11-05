@@ -40,7 +40,7 @@ onUnmounted(stopPolling);
         </button>
       </nav>
       <div class="sidefoot">
-        V1 · 本地控制台
+        0.1.0 · 本地控制台
         <div class="sidefoot-actions"><button class="text-action" @click="quitApp">退出应用</button></div>
       </div>
     </aside>

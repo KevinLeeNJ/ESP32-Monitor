@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"esp32-monitor/client/internal/transport/wire"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -25,6 +26,11 @@ type Pairing struct {
 	// LastSeen is the Unix time of the last live session, persisted so the
 	// device list keeps the previous value across Client restarts.
 	LastSeen int64 `json:"last_seen,omitempty"`
+	// LastAddress is the IPv4 address of the most recent authenticated
+	// discovery. A cold Client start probes it directly: unicast frames are
+	// buffered by the AP for a modem-sleeping station, while broadcast
+	// discovery can be missed between DTIM wakeups.
+	LastAddress string `json:"last_address,omitempty"`
 }
 type storeData struct {
 	HostID string             `json:"host_id"`
@@ -76,7 +82,7 @@ func OpenStore(dir string) (*Store, error) {
 		for id, p := range s.data.Pairs {
 			_, a := wire.RawNonce(p.DeviceToken)
 			_, b := wire.RawNonce(p.SerialKey)
-			if id != p.DeviceID || !wire.UUID(id) || !wire.UUID(p.PairingID) || a != nil || b != nil || p.ConsentAt <= 0 || p.WarningVersion != 1 || p.LastSeen < 0 {
+			if id != p.DeviceID || !wire.UUID(id) || !wire.UUID(p.PairingID) || a != nil || b != nil || p.ConsentAt <= 0 || p.WarningVersion != 1 || p.LastSeen < 0 || (p.LastAddress != "" && !storedIPv4(p.LastAddress)) {
 				e = errors.New("invalid_credential_store")
 			}
 		}
@@ -156,6 +162,35 @@ func (s *Store) remove(id string) error {
 	return nil
 }
 func (s *Store) Close() error { return s.root.Close() }
+
+// storedIPv4 accepts only a concrete IPv4 host address from the vault.
+func storedIPv4(value string) bool {
+	ip := net.ParseIP(value)
+	return ip != nil && ip.To4() != nil && !ip.IsUnspecified()
+}
+
+// rememberAddress records the address of the last authenticated discovery.
+// An unchanged value writes nothing, so steady-state recovery is free.
+func (s *Store) rememberAddress(id, address string) error {
+	if address == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.data.Pairs[id]
+	if !ok || p.LastAddress == address {
+		return nil
+	}
+	old := p.LastAddress
+	p.LastAddress = address
+	s.data.Pairs[id] = p
+	if e := s.save(); e != nil {
+		p.LastAddress = old
+		s.data.Pairs[id] = p
+		return e
+	}
+	return nil
+}
 
 type DeviceStatus struct {
 	IdentityVerified bool      `json:"identity_verified"`

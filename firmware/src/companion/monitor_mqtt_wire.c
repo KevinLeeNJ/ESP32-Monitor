@@ -11,6 +11,11 @@
 #define MSG_NOSIGNAL 0
 #endif
 
+/* A packet that has started may be delayed across several Wi-Fi power-save
+ * wakeups. The caller's timeout only bounds the wait for the next packet;
+ * once the fixed header arrives, the rest gets a wider budget. */
+#define MONITOR_MQTT_PACKET_TIMEOUT_MS 10000u
+
 static uint64_t monotonic_ms(void)
 {
     struct timespec t;
@@ -43,13 +48,14 @@ int monitor_mqtt_read(int fd, monitor_mqtt_packet_t *packet, uint8_t *buffer, si
     uint8_t header, b;
     int status = read_exact(fd, &header, 1, deadline, true);
     if (status != 1) return status;
+    const uint64_t packet_deadline = monotonic_ms() + MONITOR_MQTT_PACKET_TIMEOUT_MS;
     size_t len = 0, mult = 1;
     for (unsigned i = 0; i < 4; i++) {
-        if (read_exact(fd, &b, 1, deadline, false) != 1) return -1;
+        if (read_exact(fd, &b, 1, packet_deadline, false) != 1) return -1;
         len += (b & 0x7f) * mult;
         if (!(b & 0x80)) {
             if ((i && b == 0) || len > capacity || len > MONITOR_MQTT_MAX_PACKET) return -1;
-            if (len && read_exact(fd, buffer, len, deadline, false) != 1) return -1;
+            if (len && read_exact(fd, buffer, len, packet_deadline, false) != 1) return -1;
             packet->header = header; packet->body = buffer; packet->length = len;
             return 1;
         }

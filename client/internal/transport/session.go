@@ -236,6 +236,14 @@ func (s *session) run(b *Backend) {
 						s.lastSnapshotAt = time.Now()
 						continue
 					}
+					if errors.Is(e, errTimeout) && s.transport != "serial" {
+						/* The monitor may still be waking from Wi-Fi power save.
+						 * Keep the session; the next tick retries and the
+						 * 90-second receipt watchdog bounds a dead link. */
+						logging.L("transport").Warn("device_snapshot_timeout", "device", device)
+						s.lastSnapshotAt = time.Now()
+						continue
+					}
 					logging.L("transport").Warn("device_snapshot_failed", "device", device, "error", e.Error())
 					return
 				}

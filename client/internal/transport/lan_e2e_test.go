@@ -88,7 +88,8 @@ func TestLANPairingNeedsOnlyDeviceConfirmation(t *testing.T) {
 	}
 	m.Start()
 	defer m.Close()
-	b, err := transport.New(transport.Options{StoreDirectory: filepath.Join(t.TempDir(), "vault"), HostName: "test-host", BindIP: "127.0.0.1", MQTTAddress: "127.0.0.1:0", HTTPAddress: "127.0.0.1:0", DiscoveryTarget: m.Address()})
+	dir := filepath.Join(t.TempDir(), "vault")
+	b, err := transport.New(transport.Options{StoreDirectory: dir, HostName: "test-host", BindIP: "127.0.0.1", MQTTAddress: "127.0.0.1:0", HTTPAddress: "127.0.0.1:0", DiscoveryTarget: m.Address()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,6 +108,20 @@ func TestLANPairingNeedsOnlyDeviceConfirmation(t *testing.T) {
 		d, _ := b.Devices()
 		return len(d) == 1 && d[0].Paired && d[0].ConnectionState == "connected"
 	})
+	// The LAN address is captured at pairing time so a later cold start can
+	// probe unicast instead of a broadcast the sleeping monitor may miss.
+	raw, e := os.ReadFile(filepath.Join(dir, "companion.json"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	var stored struct {
+		Pairs map[string]struct {
+			LastAddress string `json:"last_address"`
+		} `json:"pairs"`
+	}
+	if e = json.Unmarshal(raw, &stored); e != nil || stored.Pairs[m.DeviceID].LastAddress != "127.0.0.1" {
+		t.Fatalf("pairing did not record the LAN address: %s", raw)
+	}
 }
 
 func TestLANKeepsHeartbeatsWithoutSnapshotRefresh(t *testing.T) {
