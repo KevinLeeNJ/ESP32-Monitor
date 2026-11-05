@@ -4,18 +4,66 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	v2 "esp32-monitor/client/internal/collector/uploadv2"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
 // Deterministic collectors exercise transactions, scheduling and previews.
 type testCollector struct{ dir string }
+
+type timeoutCollector struct {
+	delegate Collector
+	timeout  *atomic.Bool
+}
+
+func (c *timeoutCollector) Gather(ctx context.Context, ids []string) (Batch, map[string]string) {
+	if c.timeout.Load() {
+		<-ctx.Done()
+		return Batch{}, nil
+	}
+	return c.delegate.Gather(ctx, ids)
+}
+
+func TestRestoreRetriesTransientTimeout(t *testing.T) {
+	m := newHelper(t, "")
+	if _, err := m.Apply(context.Background(), cfg("mem/mem/used")); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	opts := m.opts
+	opts.ApplyTimeout = 30 * time.Millisecond
+	var timeout atomic.Bool
+	timeout.Store(true)
+	opts.CoreFactory = func() Collector { return &timeoutCollector{&testCollector{opts.StateDirectory}, &timeout} }
+	restored, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	if err := restored.Restore(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("restore error = %v", err)
+	}
+	timeout.Store(false)
+	go restored.retryRestore(restored.Snapshot().Revision, time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if restored.Snapshot().State == "healthy" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("collector did not recover: %+v", restored.Snapshot())
+}
 
 func TestUploaderAcceptsHTTPServer(t *testing.T) {
 	for _, endpoint := range []string{"http://192.168.1.5:8080/v2/collector/samples", "http://localhost:8080/v2/collector/samples"} {

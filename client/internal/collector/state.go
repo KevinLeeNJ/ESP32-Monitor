@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"esp32-monitor/client/internal/platform"
 )
@@ -66,8 +67,36 @@ func (m *Manager) Restore(ctx context.Context) error {
 		m.snapshot.State = "error"
 		m.snapshot.ErrorCode = err.Error()
 		m.mu.Unlock()
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			go m.retryRestore(p.Revision, 10*time.Second)
+		}
 	}
 	return err
+}
+
+// Retry transient startup timeouts without replacing a configuration that the
+// user has since changed or restarting collection after it was disabled.
+func (m *Manager) retryRestore(revision uint64, delay time.Duration) {
+	for {
+		timer := time.NewTimer(delay)
+		select {
+		case <-m.ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		m.op.Lock()
+		snapshot := m.Snapshot()
+		if m.closed || m.disabled.Load() || m.current != nil || snapshot.Revision != revision {
+			m.op.Unlock()
+			return
+		}
+		_, err := m.apply(m.ctx, snapshot.Config)
+		m.op.Unlock()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
+	}
 }
 
 // Load reads the persisted configuration without starting collection. A
