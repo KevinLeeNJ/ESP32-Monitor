@@ -1,6 +1,16 @@
 #!/bin/sh
 # Build the macOS application bundle: Wails GUI + Agent + media dylib.
 set -eu
+version=0.1.0
+skip_tests=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --version) [ "$#" -ge 2 ] || { echo 'Missing version' >&2; exit 1; }; version=$2; shift 2 ;;
+    --skip-tests) skip_tests=1; shift ;;
+    *) echo "Unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
+printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo 'Version must look like 1.2.3' >&2; exit 1; }
 client_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 app_name="ESP32 Monitor"
 build_dir="$client_dir/build"
@@ -61,7 +71,7 @@ mkdir -p "$build_dir"
 
 cd "$client_dir/frontend"
 if [ ! -d node_modules ]; then
-  npm install
+  npm ci
 fi
 npm run build
 
@@ -69,6 +79,11 @@ mkdir -p "$client_dir/internal/guiassets/assets"
 rsync -a --delete "$client_dir/frontend/dist-web/" "$client_dir/internal/guiassets/assets/"
 
 cd "$client_dir"
+if [ "$skip_tests" = 0 ]; then
+  echo 'Running Go tests and vet'
+  "$GO" test ./cmd/monitor-agent ./cmd/monitor-client ./cmd/sim-esp32 ./cmd/sim-server ./internal/...
+  "$GO" vet ./cmd/monitor-agent ./cmd/monitor-client ./cmd/sim-esp32 ./cmd/sim-server ./internal/...
+fi
 "$GO" build -trimpath -ldflags "$ldflags" -o "$build_dir/monitor-client" ./cmd/monitor-client
 "$GO" build -trimpath -ldflags "$ldflags" -o "$build_dir/monitor-agent" ./cmd/monitor-agent
 ./scripts/build-nowplaying-macos.sh
@@ -80,7 +95,7 @@ done
 
 # Assemble and sign outside the iCloud-synced tree: the fileprovider daemon
 # re-adds FinderInfo/fpfs xattrs to bundles under Documents, which trips
-# codesign --verify. Move the finished bundle into build/ afterwards.
+# codesign --verify. Package the staged bundle directly into the DMG.
 stage=$(mktemp -d)
 bundle="$stage/$app_name.app"
 contents="$bundle/Contents"
@@ -90,6 +105,8 @@ cp "$build_dir/monitor-agent" "$contents/MacOS/monitor-agent"
 cp "$client_dir/bin/libmonitor-media.dylib" "$contents/MacOS/libmonitor-media.dylib"
 cp "$client_dir/packaging/darwin/Info.plist" "$contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion $macos_target" "$contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $version" "$contents/Info.plist"
 cp "$client_dir/assets/icons/app-icon.icns" "$contents/Resources/app-icon.icns"
 cp "$client_dir/../LICENSE" "$contents/Resources/LICENSE.txt"
 cp "$client_dir/packaging/THIRD_PARTY_NOTICES.txt" "$contents/Resources/THIRD_PARTY_NOTICES.txt"
@@ -102,8 +119,14 @@ xattr -cr "$bundle"
 codesign --force --deep --sign - "$bundle"
 codesign --verify --deep --strict "$bundle"
 
-rm -rf "$build_dir/$app_name.app"
-mv "$bundle" "$build_dir/"
+arch=$("$GO" env GOARCH)
+dmg="$build_dir/ESP32-Monitor-$version-darwin-$arch.dmg"
+ln -s /Applications "$stage/Applications"
+rm -f "$dmg"
+hdiutil create -volname "$app_name" -srcfolder "$stage" -format UDZO "$dmg"
+hdiutil verify "$dmg"
+
 rm -rf "$stage"
-xattr -cr "$build_dir/$app_name.app" 2>/dev/null || true
-echo "Built $build_dir/$app_name.app"
+rm -rf "$build_dir/$app_name.app"
+echo "Built DMG: $dmg"
+echo "DMG: $dmg"

@@ -72,6 +72,9 @@ func (m *Manager) enqueueV2Locked(g *generation, s v2.Sample, at time.Time) {
 	}
 }
 func (m *Manager) requestV2(ctx context.Context, target *uploadTarget, method, path string, body []byte, condition string) (int, http.Header, []byte, error) {
+	if m.reportsPaused() {
+		return 0, nil, nil, errReportingPaused
+	}
 	if target == nil || target.token == nil {
 		return 401, nil, nil, errors.New("upload_auth_required")
 	}
@@ -91,6 +94,9 @@ func (m *Manager) requestV2(ctx context.Context, target *uploadTarget, method, p
 			key = "If-None-Match"
 		}
 		r.Header.Set(key, condition)
+	}
+	if m.reportsPaused() {
+		return 0, nil, nil, errReportingPaused
 	}
 	response, e := m.opts.HTTPClient.Do(r)
 	if e != nil {
@@ -206,6 +212,9 @@ func (m *Manager) deliverV2(q queued) {
 	defer cancel()
 	status, headers, e := m.syncV2(ctx, target, q.profile)
 	if e != nil {
+		if errors.Is(e, errReportingPaused) {
+			return
+		}
 		if status >= 200 && status < 300 {
 			status = 503
 		}
@@ -231,6 +240,9 @@ func (m *Manager) deliverV2(q queued) {
 		return
 	}
 	status, headers, data, e := m.requestV2(ctx, target, "POST", target.URL, body, "")
+	if errors.Is(e, errReportingPaused) {
+		return
+	}
 	if e != nil && status == 0 {
 		m.finishDelivery(q, 0, headers)
 		return

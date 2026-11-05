@@ -29,6 +29,8 @@ type uploadTarget struct {
 	token func(context.Context) (string, error)
 }
 
+var errReportingPaused = errors.New("reporting_paused")
+
 func (m *Manager) uploadTarget() *uploadTarget {
 	if t := m.target.Load(); t != nil {
 		return t
@@ -135,6 +137,9 @@ func (m *Manager) uploadLoop() {
 func (m *Manager) deliver() {
 	m.delivery.Lock()
 	defer m.delivery.Unlock()
+	if m.reportsPaused() {
+		return
+	}
 	m.mu.Lock()
 	m.trimQueueLocked(time.Now())
 	// A 401/403 only delays delivery: the token file is re-read on every

@@ -51,11 +51,16 @@ type Manager struct {
 	// more than one transient, local-only preview generation.
 	previewStarting bool
 	target          atomic.Pointer[uploadTarget]
+	reportingPaused func() bool
 	// disabled pauses collection and preview while keeping the Manager, its
 	// persisted configuration and its state-directory lock alive.
 	disabled atomic.Bool
 	// dropLogAt rate-limits queue-overflow logging during long outages.
 	dropLogAt time.Time
+}
+
+func (m *Manager) reportsPaused() bool {
+	return m.reportingPaused != nil && m.reportingPaused()
 }
 
 type generation struct {
@@ -98,7 +103,7 @@ func New(opts Options) (*Manager, error) {
 		return nil, errors.New("collector_already_owned")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{opts: opts, lock: lock, ctx: ctx, cancel: cancel, workerDone: make(chan struct{}), wake: make(chan struct{}, 1), previewCh: make(chan struct{}, 1), snapshot: Snapshot{SchemaVersion: SchemaVersion, State: "disabled", Config: DefaultConfig(), Preview: Batch{Metrics: []Metric{}}}}
+	m := &Manager{opts: opts, lock: lock, ctx: ctx, cancel: cancel, workerDone: make(chan struct{}), wake: make(chan struct{}, 1), previewCh: make(chan struct{}, 1), reportingPaused: macReportingPaused, snapshot: Snapshot{SchemaVersion: SchemaVersion, State: "disabled", Config: DefaultConfig(), Preview: Batch{Metrics: []Metric{}}}}
 	if err := m.initUploader(); err != nil {
 		cancel()
 		unlockFile(lock)
@@ -402,6 +407,9 @@ func (m *Manager) collectLoop(ctx context.Context, g *generation) {
 			// instead of waiting for the next sampling tick.
 		case <-ticker.C:
 		}
+		if m.reportsPaused() {
+			continue
+		}
 		preview := m.previewActive()
 		uploadEnabled := g.config.Upload != nil && g.config.Upload.Enabled
 		if !preview && !uploadEnabled {
@@ -416,6 +424,9 @@ func (m *Manager) collectLoop(ctx context.Context, g *generation) {
 		cancel()
 		if ctx.Err() != nil {
 			return
+		}
+		if m.reportsPaused() {
+			continue
 		}
 		// Preview-only sources may legitimately be unavailable; the collector
 		// state tracks the upload selections, not every previewed source.
