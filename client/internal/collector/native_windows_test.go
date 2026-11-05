@@ -5,6 +5,7 @@ package collector
 import (
 	"context"
 	"errors"
+	"esp32-monitor/client/internal/windowshelper"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -374,7 +375,11 @@ func TestWindowsNativeLiveScan(t *testing.T) {
 		}
 		ids = append(ids, src.id)
 	}
-	batch, reasons := newNativeCollector().Gather(ctx, ids)
+	helper := windowshelper.NewPlatform()
+	defer helper.Close()
+	native := newNativeCollector().(*windowsCollector)
+	native.setWindowsHelper(helper)
+	batch, reasons := native.Gather(ctx, ids)
 	if ctx.Err() != nil {
 		t.Skipf("WMI scan timed out: %v", ctx.Err())
 	}

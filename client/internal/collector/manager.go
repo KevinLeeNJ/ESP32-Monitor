@@ -7,6 +7,7 @@ import (
 	"errors"
 	"esp32-monitor/client/internal/collector/uploadv2"
 	"esp32-monitor/client/internal/logging"
+	"esp32-monitor/client/internal/windowshelper"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -26,6 +27,7 @@ type Options struct {
 	UploadToken    func(context.Context) (string, error)
 	HTTPClient     *http.Client
 	ApplyTimeout   time.Duration
+	WindowsHelper  *windowshelper.Client // borrowed from Application, nil for standalone Manager
 }
 type Manager struct {
 	op         sync.Mutex // serializes scans, configuration changes and shutdown
@@ -55,7 +57,8 @@ type Manager struct {
 	// persisted configuration and its state-directory lock alive.
 	disabled atomic.Bool
 	// dropLogAt rate-limits queue-overflow logging during long outages.
-	dropLogAt time.Time
+	dropLogAt   time.Time
+	ownedHelper *windowshelper.Client
 }
 
 type generation struct {
@@ -114,6 +117,14 @@ func New(opts Options) (*Manager, error) {
 			var base Collector = &CoreCollector{}
 			if factory == &m.opts.NativeFactory {
 				base = newNativeCollector()
+				if native, ok := base.(interface{ setWindowsHelper(*windowshelper.Client) }); ok {
+					helper := opts.WindowsHelper
+					if helper == nil {
+						helper = windowshelper.NewPlatform()
+						m.ownedHelper = helper
+					}
+					native.setWindowsHelper(helper)
+				}
 			}
 			if fixed, ok := base.(fixedCollector); ok {
 				m.fixed.Metrics = append(m.fixed.Metrics, fixed.Fixed(startup).Metrics...)
@@ -130,6 +141,7 @@ func New(opts Options) (*Manager, error) {
 	// capability mapping available before a Server has been configured; the
 	// endpoint only controls delivery, never local collection or preview.
 	if err := m.initV2(); err != nil {
+		m.ownedHelper.Close()
 		cancel()
 		unlockFile(lock)
 		lock.Close()
@@ -506,6 +518,7 @@ func (m *Manager) Close() error {
 	}
 	m.closed = true
 	m.cancel()
+	m.ownedHelper.Close()
 	if m.api != nil {
 		_ = m.api.Close()
 	}

@@ -5,6 +5,7 @@ package collector
 import (
 	"context"
 	"errors"
+	"esp32-monitor/client/internal/windowshelper"
 	"net"
 	"strconv"
 	"strings"
@@ -40,7 +41,12 @@ type windowsFixed struct {
 }
 
 func newNativeCollector() Collector {
-	return &windowsCollector{load: &windowsLoadState{}, lhm: &windowsLHMCache{}}
+	return &windowsCollector{load: &windowsLoadState{}, lhm: newWindowsLHMCache(nil)}
+}
+
+// Called once by Manager before fixed inventory and any Fork/Gather.
+func (d *windowsCollector) setWindowsHelper(helper *windowshelper.Client) {
+	d.lhm = newWindowsLHMCache(helper)
 }
 
 func (d *windowsCollector) Fixed(ctx context.Context) Batch {
@@ -59,7 +65,7 @@ func (d *windowsCollector) Fork() Collector {
 		d.load = &windowsLoadState{}
 	}
 	if d.lhm == nil {
-		d.lhm = &windowsLHMCache{}
+		d.lhm = newWindowsLHMCache(nil)
 	}
 	return &windowsCollector{fixed: d.fixed, load: d.load, lhm: d.lhm}
 }
@@ -72,7 +78,7 @@ func (d *windowsCollector) fixedLocked(ctx context.Context) *windowsFixed {
 		d.load = &windowsLoadState{}
 	}
 	if d.lhm == nil {
-		d.lhm = &windowsLHMCache{}
+		d.lhm = newWindowsLHMCache(nil)
 	}
 	f := d.fixed
 	f.once.Do(func() {

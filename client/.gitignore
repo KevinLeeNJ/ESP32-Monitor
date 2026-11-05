@@ -9,4 +9,10 @@
 *.syso
 /tools/lhm-helper/bin/
 /tools/lhm-helper/obj/
+/tools/gsmtc-helper/bin/
+/tools/gsmtc-helper/obj/
+/tools/windows-helper/bin/
+/tools/windows-helper/obj/
+/tools/windows-helper-tests/bin/
+/tools/windows-helper-tests/obj/
 /packaging/windows/resources/version.h

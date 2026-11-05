@@ -2,13 +2,14 @@ ESP32 Monitor — Windows x64 绿色包
 =================================
 
 版本：见同目录 VERSION.txt
-适用：Windows 10 / 11 x64
+适用：Windows 10 2004（19041）或更新版本 / Windows 11 x64
 
 包含文件
 --------
 monitor-client.exe        图形界面（GUI），启动后由它在后台托管 Agent
 monitor-agent.exe         采集/上传/ESP32 连接进程，GUI 会以管理员权限启动它
-helpers\lhm-helper\       LibreHardwareMonitor PawnIO 硬件传感器助手（含 .NET 运行时）
+helpers\windows-helper\  共享硬件传感器（LHM/PawnIO）与媒体会话（GSMTC）只读助手
+                         windows-helper.exe 与自带的 .NET 8 运行时
 PawnIO_setup.exe          PawnIO 安装程序
 app-icon.ico              应用图标
 LICENSE.txt               项目 MIT 许可证
@@ -24,7 +25,10 @@ THIRD_PARTY_NOTICES.txt   第三方组件与许可证说明
 3. 后台 Agent 需要管理员权限读取低层传感器。启动 GUI 时 Windows 会弹出 UAC，
    请选择“是”；GUI 本身仍以普通权限运行。
 
-硬件监控助手已自带 .NET 运行时，无需另行安装 .NET Framework。
+共享助手已自带 .NET 8 运行时，无需另行安装 .NET Framework。
+同一 Agent 复用一个助手；音乐按订阅启停，音乐超时不会中断传感器采集。
+升级绿色包前请完全退出旧版并解压到新目录；不要混用旧 helpers\lhm-helper
+或 helpers\gsmtc-helper 目录。安装器升级只清理这两个旧助手目录。
 
 首次启动
 --------
@@ -51,6 +55,9 @@ THIRD_PARTY_NOTICES.txt   第三方组件与许可证说明
   .\monitor-agent.exe --collector-scan
 
 可查看本机实时采集能力；缺少硬件监控助手或未获管理员权限时，输出会给出原因。
+共享助手的只读传感器明细诊断（单次 schema=1 JSONL）：
+
+  .\helpers\windows-helper\windows-helper.exe --diagnostic
 
 数据位置与卸载
 --------------

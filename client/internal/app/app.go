@@ -14,6 +14,7 @@ import (
 	"esp32-monitor/client/internal/providers/codex"
 	"esp32-monitor/client/internal/providers/github"
 	"esp32-monitor/client/internal/transport"
+	"esp32-monitor/client/internal/windowshelper"
 	"net"
 	"os"
 	"path/filepath"
@@ -44,6 +45,7 @@ type Application struct {
 	collector        *collector.Manager
 	collectorEnabled bool
 	closed           bool
+	windowsHelper    *windowshelper.Client
 
 	// ops serializes service lifecycle changes.
 	ops          sync.Mutex
@@ -66,12 +68,20 @@ func NewWithOptions(c config.Config, cacheDir string, opts Options) (*Applicatio
 	if err != nil {
 		return nil, err
 	}
-	music, err := adapters.NewSwitchable(adapters.Options{Enabled: c.Music.Enabled, Adapter: c.Music.Adapter, NativeLibrary: c.Music.NativeLibrary})
+	helper := windowshelper.NewPlatform()
+	initialized := false
+	defer func() {
+		if !initialized {
+			helper.Close()
+		}
+	}()
+	music, err := adapters.NewSwitchable(adapters.Options{Enabled: c.Music.Enabled, Adapter: c.Music.Adapter, NativeLibrary: c.Music.NativeLibrary, WindowsHelper: helper})
 	if err != nil {
 		return nil, err
 	}
 	application := &Application{
 		GitHubAuth:       auth,
+		windowsHelper:    helper,
 		Companion:        &companion.Service{Music: music, GitHub: githubProvider, Codex: codex.NewSwitchable(codex.Options{Enabled: c.Codex.Enabled, Executable: c.Codex.Executable, DesktopEnabled: c.Codex.DesktopEnabled, TaskAdapter: c.Codex.TaskAdapter, Home: c.Codex.Home, ThreadIDs: c.Codex.ThreadIDs})},
 		cacheDir:         cacheDir,
 		collectorAPI:     opts.CollectorAPI,
@@ -103,7 +113,7 @@ func NewWithOptions(c config.Config, cacheDir string, opts Options) (*Applicatio
 		application.monitor = backend
 	}
 	if c.Collector.Enabled || opts.PrepareCollector {
-		manager, e := collector.New(collector.Options{StateDirectory: c.Collector.StateDirectory, UploadURL: c.Collector.UploadURL, UploadToken: collector.TokenFile(c.Collector.UploadTokenFile)})
+		manager, e := collector.New(collector.Options{StateDirectory: c.Collector.StateDirectory, UploadURL: c.Collector.UploadURL, UploadToken: collector.TokenFile(c.Collector.UploadTokenFile), WindowsHelper: helper})
 		if e != nil {
 			_ = application.Close()
 			return nil, e
@@ -113,6 +123,7 @@ func NewWithOptions(c config.Config, cacheDir string, opts Options) (*Applicatio
 			manager.SetCollecting(false)
 		}
 	}
+	initialized = true
 	return application, nil
 }
 
@@ -386,6 +397,7 @@ func (a *Application) Close() error {
 	a.collector, a.monitor = nil, nil
 	a.mu.Unlock()
 	var errs []error
+	a.windowsHelper.Close()
 	if manager != nil {
 		errs = append(errs, manager.Close())
 	}

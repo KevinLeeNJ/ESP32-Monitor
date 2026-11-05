@@ -8,6 +8,7 @@ import (
 	"esp32-monitor/client/internal/logging"
 	"esp32-monitor/client/internal/nowplaying"
 	"esp32-monitor/client/internal/providers"
+	"esp32-monitor/client/internal/windowshelper"
 	"io"
 	"math"
 	"os/exec"
@@ -17,7 +18,28 @@ import (
 	"unicode"
 )
 
-const StaleAfter = 15 * time.Second
+const (
+	StaleAfter = 15 * time.Second
+	// A failed bridge is retried with backoff, then suspended until the adapter
+	// is rebuilt. A platform API that is permanently hung must not respawn an
+	// expensive bridge process every few seconds.
+	bridgeRetryMin  = 2 * time.Second
+	bridgeRetryMax  = 5 * time.Minute
+	bridgeMaxFailed = 3
+)
+
+func retryDelay(previous time.Duration) time.Duration {
+	switch {
+	case previous < 5*time.Second:
+		return 5 * time.Second
+	case previous < 15*time.Second:
+		return 15 * time.Second
+	case previous < time.Minute:
+		return time.Minute
+	default:
+		return bridgeRetryMax
+	}
+}
 
 // Message is the complete read-only native bridge response, never a diff.
 type Message struct {
@@ -27,8 +49,9 @@ type Message struct {
 
 type Options struct {
 	Enabled       bool
-	Adapter       string // auto, mediaremote, gsmtc, mpris
-	NativeLibrary string // optional absolute macOS bridge path
+	Adapter       string                // auto, mediaremote, gsmtc, mpris
+	NativeLibrary string                // optional absolute macOS bridge path
+	WindowsHelper *windowshelper.Client // shared with the Windows collector; not owned by the adapter
 }
 
 type streamAdapter struct {
@@ -40,6 +63,7 @@ type streamAdapter struct {
 	lastRead time.Time // retains monotonic component for freshness
 	command  func(context.Context) (*exec.Cmd, error)
 	enabled  bool
+	helper   *windowshelper.Client
 }
 
 func New(o Options) (nowplaying.Adapter, error) {
@@ -51,7 +75,7 @@ func New(o Options) (nowplaying.Adapter, error) {
 	if o.Enabled {
 		state = providers.Starting
 	}
-	a := &streamAdapter{ready: make(chan struct{}), enabled: o.Enabled, command: command,
+	a := &streamAdapter{ready: make(chan struct{}), enabled: o.Enabled, command: command, helper: o.WindowsHelper,
 		snapshot: nowplaying.Snapshot{Adapter: id, Coverage: coverage, Health: providers.Health{State: state, ObservedAt: time.Now().UTC(), SourceVersion: "2"}}}
 	if !o.Enabled {
 		a.markReady()
@@ -188,9 +212,28 @@ func (a *streamAdapter) run(ctx context.Context) {
 		runNative(ctx, a)
 		return
 	}
+	failures := 0
+	delay := bridgeRetryMin
 	for ctx.Err() == nil {
-		a.readStream(ctx)
-		timer := time.NewTimer(2 * time.Second)
+		if a.readStream(ctx) {
+			failures = 0
+			delay = bridgeRetryMin
+		} else {
+			if ctx.Err() != nil {
+				return
+			}
+			failures++
+			if failures >= bridgeMaxFailed {
+				logging.L("music").Warn("music_bridge_suspended", "attempts", failures, "error_code", a.Snapshot().Health.ErrorCode)
+				return
+			}
+			if next := retryDelay(delay); next != delay {
+				// Log only when the backoff escalates, not on every retry.
+				delay = next
+				logging.L("music").Warn("music_bridge_retry", "delay", delay.String(), "error_code", a.Snapshot().Health.ErrorCode)
+			}
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -199,25 +242,30 @@ func (a *streamAdapter) run(ctx context.Context) {
 		}
 	}
 }
-func (a *streamAdapter) readStream(ctx context.Context) {
+
+// readStream runs one bridge process and reports whether it delivered a
+// healthy message. A process that only reports errors, never reports, or dies
+// is a failure and drives the caller's retry backoff.
+func (a *streamAdapter) readStream(ctx context.Context) bool {
+	healthy := false
 	child, cancel := context.WithCancel(ctx)
 	defer cancel()
 	cmd, err := a.command(child)
 	if err != nil {
 		a.update(Message{ErrorCode: err.Error()})
-		return
+		return false
 	}
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
 		a.update(Message{ErrorCode: "music_read_failed"})
-		return
+		return false
 	}
 	// Bound subprocess cleanup even when a platform unexpectedly inherits handles.
 	cmd.WaitDelay = time.Second
 	cmd.Stderr = io.Discard
 	if err = cmd.Start(); err != nil {
 		a.update(Message{ErrorCode: "music_dependency_missing"})
-		return
+		return false
 	}
 	// A silent or hung bridge must not keep old content alive or block shutdown.
 	watchdog := time.AfterFunc(StaleAfter, func() { cancel() })
@@ -232,6 +280,7 @@ func (a *streamAdapter) readStream(ctx context.Context) {
 		if json.Unmarshal(line, &envelope) != nil || envelope == nil || (envelope["current"] == nil && envelope["error_code"] == nil) || json.Unmarshal(line, &m) != nil {
 			a.update(Message{ErrorCode: "music_protocol_error"})
 			protocolError = true
+			healthy = false
 			cancel()
 			break
 		}
@@ -240,11 +289,13 @@ func (a *streamAdapter) readStream(ctx context.Context) {
 			break
 		}
 		receivedError = m.ErrorCode != ""
+		healthy = !receivedError
 		a.update(m)
 	}
 	watchdog.Stop()
 	_ = cmd.Wait()
 	if ctx.Err() == nil && !receivedError && !protocolError {
+		healthy = false
 		code := "music_bridge_exited"
 		if scanner.Err() != nil {
 			code = "music_protocol_error"
@@ -253,4 +304,5 @@ func (a *streamAdapter) readStream(ctx context.Context) {
 		}
 		a.update(Message{ErrorCode: code})
 	}
+	return healthy
 }

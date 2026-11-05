@@ -170,6 +170,38 @@ func TestBridgeExitClearsAndPreservesCause(t *testing.T) {
 	}
 }
 
+func TestRetryDelayBacksOff(t *testing.T) {
+	for _, tc := range []struct{ previous, want time.Duration }{
+		{bridgeRetryMin, 5 * time.Second},
+		{5 * time.Second, 15 * time.Second},
+		{15 * time.Second, time.Minute},
+		{time.Minute, bridgeRetryMax},
+		{bridgeRetryMax, bridgeRetryMax},
+	} {
+		if got := retryDelay(tc.previous); got != tc.want {
+			t.Fatalf("retryDelay(%v) = %v, want %v", tc.previous, got, tc.want)
+		}
+	}
+}
+
+func TestReadStreamHealth(t *testing.T) {
+	a := testAdapter(t)
+	helper(a, "valid")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if !a.readStream(ctx) {
+		t.Fatal("valid bridge reported unhealthy")
+	}
+
+	b := testAdapter(t)
+	helper(b, "error")
+	ctx, cancel = context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if b.readStream(ctx) {
+		t.Fatal("error bridge reported healthy")
+	}
+}
+
 func TestConcurrentSnapshots(t *testing.T) {
 	a := testAdapter(t)
 	ctx, cancel := context.WithCancel(context.Background())
