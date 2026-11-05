@@ -3,70 +3,43 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Security.Principal;
-using System.Text;
-using System.Text.Json;
+#nullable disable
 using LibreHardwareMonitor.Hardware;
 using LibreHardwareMonitor.Hardware.Storage;
 
-namespace ESP32Monitor.LhmHelper
+namespace ESP32Monitor.WindowsHelper
 {
-    // Windows-only, read-only hardware sensor bridge. It targets .NET Framework
-    // 8 and is launched by the agent as a short-lived child process. All
-    // values come from LibreHardwareMonitor's hardware graph; unsupported
-    // readings are omitted instead of being replaced with zeroes.
-    internal static class Program
+    // Only the serialized sensor worker accesses this retained hardware graph.
+    // Lazy caches Open failures too: a failed Open is not retried in this process.
+    internal sealed class Sensors
     {
         private const string Backend = "LibreHardwareMonitor 0.9.6 (PawnIO)";
-        private static readonly JsonSerializerOptions Json = new JsonSerializerOptions { IncludeFields = true };
+        private readonly Lazy<Computer> opened;
+        private Computer computer;
 
-        private static int Main(string[] args)
+        public Sensors()
         {
-            Console.OutputEncoding = Encoding.UTF8;
-            try
+            opened = new Lazy<Computer>(() =>
             {
-                if (args.Length == 1 && args[0] == "--diagnostic")
+                computer = new Computer
                 {
-                    Write(Diagnostic.Create());
-                    return 0;
-                }
-                Write(Snapshot.Create());
-                return 0;
-            }
-            catch (Exception exception)
-            {
-                Write(new ErrorResult
-                {
-                    ok = false,
-                    schema = 1,
-                    error_code = "lhm_scan_failed",
-                    message = Short(exception)
-                });
-                return 1;
-            }
+                    IsCpuEnabled = true,
+                    IsGpuEnabled = true,
+                    IsStorageEnabled = true
+                };
+                computer.Open();
+                return computer;
+            });
         }
 
-        private static void Write(object value)
-        {
-            Console.Out.Write(JsonSerializer.Serialize(value, value.GetType(), Json));
-            Console.Out.Flush();
-        }
+        public object Read() => Snapshot.Create(opened.Value);
 
-        private static string Short(Exception exception)
-        {
-            string message = exception.GetType().Name + ": " + exception.Message;
-            return message.Length > 500 ? message.Substring(0, 500) : message;
-        }
+        public object ReadDiagnostic() => Diagnostic.Create(opened.Value);
 
-        private static Computer OpenComputer()
+        public void Close()
         {
-            var computer = new Computer
-            {
-                IsCpuEnabled = true,
-                IsGpuEnabled = true,
-                IsStorageEnabled = true
-            };
-            computer.Open();
-            return computer;
+            // Also clean up a partially opened Computer, but never force lazy Open.
+            try { computer?.Close(); } catch { }
         }
 
         private static bool IsElevated()
@@ -102,7 +75,7 @@ namespace ESP32Monitor.LhmHelper
             public List<Gpu> gpus = new List<Gpu>();
             public List<Disk> disks = new List<Disk>();
 
-            public static Snapshot Create()
+            public static Snapshot Create(Computer computer)
             {
                 var snapshot = new Snapshot
                 {
@@ -110,16 +83,8 @@ namespace ESP32Monitor.LhmHelper
                     runtime = Environment.Version.ToString(),
                     warnings = BaseWarnings()
                 };
-                var computer = OpenComputer();
-                try
-                {
-                    foreach (IHardware hardware in computer.Hardware)
-                        Visit(hardware, snapshot);
-                }
-                finally
-                {
-                    try { computer.Close(); } catch { }
-                }
+                foreach (IHardware hardware in computer.Hardware)
+                    Visit(hardware, snapshot);
 
                 if (snapshot.cpu_temperature_celsius == null)
                     snapshot.warnings.Add("cpu_temperature_unavailable");
@@ -272,7 +237,7 @@ namespace ESP32Monitor.LhmHelper
             public List<string> warnings = new List<string>();
             public List<HardwareDiagnostic> hardware = new List<HardwareDiagnostic>();
 
-            public static Diagnostic Create()
+            public static Diagnostic Create(Computer computer)
             {
                 var diagnostic = new Diagnostic
                 {
@@ -280,16 +245,8 @@ namespace ESP32Monitor.LhmHelper
                     runtime = Environment.Version.ToString(),
                     warnings = BaseWarnings()
                 };
-                var computer = OpenComputer();
-                try
-                {
-                    foreach (IHardware hardware in computer.Hardware)
-                        Visit(hardware, diagnostic.hardware);
-                }
-                finally
-                {
-                    try { computer.Close(); } catch { }
-                }
+                foreach (IHardware hardware in computer.Hardware)
+                    Visit(hardware, diagnostic.hardware);
                 return diagnostic;
             }
 
@@ -331,14 +288,6 @@ namespace ESP32Monitor.LhmHelper
             public string device;
             public string model;
             public double? temperature_celsius;
-        }
-
-        private sealed class ErrorResult
-        {
-            public bool ok;
-            public int schema;
-            public string error_code;
-            public string message;
         }
 
         private sealed class HardwareDiagnostic

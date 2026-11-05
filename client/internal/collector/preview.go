@@ -44,7 +44,9 @@ func (m *Manager) startPreview() {
 		m.previewStarting = false
 		m.mu.Unlock()
 	}()
-	if m.closed || m.disabled.Load() || m.current != nil || !m.previewActive() {
+	// ctx is nil only for a zero-value Manager (test fixtures); such a Manager
+	// has no lifecycle and must not start a preview generation.
+	if m.closed || m.ctx == nil || m.disabled.Load() || m.current != nil || !m.previewActive() {
 		return
 	}
 	snapshot := m.Snapshot()

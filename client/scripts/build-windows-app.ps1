@@ -11,7 +11,8 @@ $client = Split-Path -Parent $PSScriptRoot
 $repo = Split-Path -Parent $client
 $buildRoot = Join-Path $client "build\windows"
 $package = Join-Path $buildRoot "ESP32-Monitor"
-$helperProject = Join-Path $client "tools\lhm-helper\LhmHelper.csproj"
+$helperProject = Join-Path $client "tools\windows-helper\WindowsHelper.csproj"
+$helperTests = Join-Path $client "tools\windows-helper-tests\WindowsHelper.Tests.csproj"
 $frontend = Join-Path $client "frontend"
 $assets = Join-Path $client "internal\guiassets\assets"
 $iss = Join-Path $client "packaging\windows\ESP32-Monitor.iss"
@@ -60,11 +61,15 @@ try {
   New-Item -ItemType Directory -Force $assets | Out-Null
   Copy-Item (Join-Path $frontend "dist-web\*") $assets -Recurse -Force
 
-  Write-Host "[2/6] Publishing LibreHardwareMonitor helper (net8.0)"
-  & $dotnet restore $helperProject --use-lock-file -r win-x64
-  if ($LASTEXITCODE -ne 0) { throw "LHM helper restore failed" }
+  Write-Host "[2/6] Publishing shared Windows helper (net8.0)"
+  if (-not $SkipTests) {
+    & $dotnet run --project $helperTests -c $Configuration
+    if ($LASTEXITCODE -ne 0) { throw "Windows helper tests failed" }
+  }
+  & $dotnet restore $helperProject --locked-mode -r win-x64
+  if ($LASTEXITCODE -ne 0) { throw "Windows helper restore failed" }
   & $dotnet publish $helperProject --no-restore -c $Configuration -r win-x64 --self-contained true /p:RestoreLockedMode=true /p:DebugType=None /p:DebugSymbols=false
-  if ($LASTEXITCODE -ne 0) { throw "LHM helper publish failed" }
+  if ($LASTEXITCODE -ne 0) { throw "Windows helper publish failed" }
 
   Write-Host "[3/6] Running Go tests and vet"
   if (-not $SkipTests) {
@@ -104,8 +109,8 @@ try {
   & $go build -trimpath -ldflags "-s -w" -o (Join-Path $package "monitor-agent.exe") ./cmd/monitor-agent
   if ($LASTEXITCODE -ne 0) { throw "monitor-agent build failed" }
 
-  $helperOut = Join-Path $client "tools\lhm-helper\bin\$Configuration\net8.0\win-x64\publish"
-  $helperDest = Join-Path $package "helpers\lhm-helper"
+  $helperOut = Join-Path $client "tools\windows-helper\bin\$Configuration\net8.0-windows10.0.19041.0\win-x64\publish"
+  $helperDest = Join-Path $package "helpers\windows-helper"
   New-Item -ItemType Directory -Force $helperDest | Out-Null
   Copy-Item (Join-Path $helperOut "*") $helperDest -Recurse -Force
   # Use the installer distributed with this exact LHM release and verify it.
@@ -151,6 +156,7 @@ try {
   Remove-Item (Join-Path $frontend "dist-web"), $assets -Recurse -Force -ErrorAction SilentlyContinue
   New-Item -ItemType Directory -Force $assets | Out-Null
   Set-Content -Path (Join-Path $assets "index.html") -Value "Frontend has not been built."
-  Remove-Item (Join-Path $client "tools\lhm-helper\bin"), (Join-Path $client "tools\lhm-helper\obj") -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item (Join-Path $client "tools\windows-helper\bin"), (Join-Path $client "tools\windows-helper\obj") -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item (Join-Path $client "tools\windows-helper-tests\bin"), (Join-Path $client "tools\windows-helper-tests\obj") -Recurse -Force -ErrorAction SilentlyContinue
   if ($nodeModulesCreated) { Remove-Item (Join-Path $frontend "node_modules") -Recurse -Force -ErrorAction SilentlyContinue }
 }

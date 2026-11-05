@@ -30,6 +30,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
 
+[InstallDelete]
+; Remove only obsolete installed helpers when upgrading to the shared helper.
+Type: filesandordirs; Name: "{app}\helpers\lhm-helper"
+Type: filesandordirs; Name: "{app}\helpers\gsmtc-helper"
+
 [Files]
 Source: "..\..\build\windows\ESP32-Monitor\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 

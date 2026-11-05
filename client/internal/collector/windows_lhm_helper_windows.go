@@ -6,10 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"sync"
+	"esp32-monitor/client/internal/windowshelper"
 	"time"
 )
 
@@ -40,50 +37,51 @@ type windowsLHMDisk struct {
 }
 
 type windowsLHMCache struct {
-	mu   sync.Mutex
-	data windowsLHMData
-	at   time.Time
-	err  error
+	gate        chan struct{}
+	readSensors func(context.Context) (json.RawMessage, error)
+	data        windowsLHMData
+	at          time.Time
+	err         error
 }
 
-func windowsLHMHelperPath() (string, error) {
-	if value := os.Getenv("MONITOR_LHM_HELPER"); value != "" {
-		if info, err := os.Stat(value); err == nil && !info.IsDir() {
-			return value, nil
-		}
+func newWindowsLHMCache(helper *windowshelper.Client) *windowsLHMCache {
+	c := &windowsLHMCache{gate: make(chan struct{}, 1)}
+	if helper != nil {
+		c.readSensors = helper.ReadSensors
 	}
-	executable, err := os.Executable()
-	if err == nil {
-		for _, candidate := range []string{filepath.Join(filepath.Dir(executable), "helpers", "lhm-helper", "lhm-helper.exe"), filepath.Join(filepath.Dir(executable), "lhm-helper.exe")} {
-			if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
-				return candidate, nil
-			}
-		}
-	}
-	return "", errLHMHelperMissing
+	return c
 }
 
 func (c *windowsLHMCache) read(ctx context.Context) (windowsLHMData, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c != nil && !c.at.IsZero() && time.Since(c.at) < 5*time.Second {
-		return c.data, c.err
-	}
-	path, err := windowsLHMHelperPath()
-	if err != nil {
-		c.err, c.at = err, time.Now()
-		return windowsLHMData{}, err
+	if c == nil || c.readSensors == nil {
+		return windowsLHMData{}, errLHMHelperMissing
 	}
 	callCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(callCtx, path).Output()
+	select {
+	case c.gate <- struct{}{}:
+		defer func() { <-c.gate }()
+	case <-callCtx.Done():
+		return windowsLHMData{}, callCtx.Err()
+	}
+	if err := callCtx.Err(); err != nil {
+		return windowsLHMData{}, err
+	}
+	if !c.at.IsZero() && time.Since(c.at) < 5*time.Second {
+		return c.data, c.err
+	}
+	output, err := c.readSensors(callCtx)
 	if err != nil {
-		c.err, c.at = err, time.Now()
+		// A cancelled generation must not cache its cancellation for the next
+		// generation; process-level failures are still briefly cached.
+		if callCtx.Err() == nil {
+			c.data, c.err, c.at = windowsLHMData{}, err, time.Now()
+		}
 		return windowsLHMData{}, err
 	}
 	var data windowsLHMData
 	if err = json.Unmarshal(output, &data); err != nil || !data.OK || data.Schema != 1 {
-		c.err, c.at = errors.New("lhm_scan_failed"), time.Now()
+		c.data, c.err, c.at = windowsLHMData{}, errors.New("lhm_scan_failed"), time.Now()
 		return windowsLHMData{}, c.err
 	}
 	c.data, c.err, c.at = data, nil, time.Now()
@@ -91,7 +89,7 @@ func (c *windowsLHMCache) read(ctx context.Context) (windowsLHMData, error) {
 }
 
 func lhmReason(err error) string {
-	if errors.Is(err, errLHMHelperMissing) {
+	if errors.Is(err, errLHMHelperMissing) || errors.Is(err, windowshelper.ErrMissing) {
 		return "lhm_helper_missing"
 	}
 	return "lhm_scan_failed"

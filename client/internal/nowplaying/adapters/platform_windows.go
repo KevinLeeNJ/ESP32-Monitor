@@ -2,24 +2,43 @@ package adapters
 
 import (
 	"context"
-	_ "embed"
-	"encoding/base64"
-	"encoding/binary"
+	"encoding/json"
 	"os/exec"
-	"unicode/utf16"
+	"time"
+
+	"esp32-monitor/client/internal/windowshelper"
 )
 
-//go:embed scripts/gsmtc.ps1
-var gsmtcScript string
+func platformCommand(Options) (string, string, func(context.Context) (*exec.Cmd, error)) {
+	return "gsmtc", "system_current_source", nil
+}
 
-func platformCommand(o Options) (string, string, func(context.Context) (*exec.Cmd, error)) {
-	units := utf16.Encode([]rune(gsmtcScript))
-	b := make([]byte, len(units)*2)
-	for i, v := range units {
-		binary.LittleEndian.PutUint16(b[i*2:], v)
+func runNative(ctx context.Context, a *streamAdapter) {
+	helper := a.helper
+	if helper == nil {
+		helper = windowshelper.NewPlatform()
+		defer helper.Close()
 	}
-	encoded := base64.StdEncoding.EncodeToString(b)
-	return "gsmtc", "system_current_source", func(ctx context.Context) (*exec.Cmd, error) {
-		return exec.CommandContext(ctx, "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded), nil
+	events, unsubscribe := helper.SubscribeMusic()
+	defer unsubscribe()
+	// Music silence is channel-local. Restarting the shared process here would
+	// reload PawnIO and disrupt sensors when only the SMTC broker is wedged.
+	timer := time.NewTimer(StaleAfter)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			a.update(Message{ErrorCode: "music_timeout"})
+			timer.Reset(StaleAfter)
+		case line := <-events:
+			var m Message
+			if json.Unmarshal(line, &m) != nil {
+				m = Message{ErrorCode: "music_protocol_error"}
+			}
+			a.update(m)
+			timer.Reset(StaleAfter)
+		}
 	}
 }

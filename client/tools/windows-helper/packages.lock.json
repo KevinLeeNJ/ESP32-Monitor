@@ -1,7 +1,7 @@
 {
   "version": 1,
   "dependencies": {
-    "net8.0": {
+    "net8.0-windows10.0.19041": {
       "LibreHardwareMonitorLib": {
         "type": "Direct",
         "requested": "[0.9.6, )",
@@ -179,7 +179,7 @@
         "contentHash": "PO3IM2ZXOJTjuuFDYMP62i290J41y891C+ytTa1HCDUo5FdywK/Ro6jflWHmbgZ2tz62EhRDa8WIT2vVJX45AQ=="
       }
     },
-    "net8.0/win-x64": {
+    "net8.0-windows10.0.19041/win-x64": {
       "LibreHardwareMonitorLib": {
         "type": "Direct",
         "requested": "[0.9.6, )",
