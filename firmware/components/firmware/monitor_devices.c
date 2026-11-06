@@ -454,7 +454,9 @@ static void devices_task(void *arg)
             continue;
         }
         int64_t wake = expiry;
-        if (configured && wifi) {
+        /* next_poll is stale while the companion session pauses direct polling;
+         * gating on it collapses the wait to the 2ms retry and busy-polls. */
+        if (configured && wifi && !s_companion_active) {
             /* Time becoming valid wakes us through the clock task as well. */
             int64_t poll = clock_ready ? next_poll : INT64_MAX;
             if (poll < wake) wake = poll;
