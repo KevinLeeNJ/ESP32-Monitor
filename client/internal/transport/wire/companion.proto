@@ -129,6 +129,12 @@ message Config {
   required WeatherConfig weather = 7;
   required DevicesConfig devices = 8;
   required TimeConfig time = 9;
+  // Milliseconds until the device's next wall-clock refresh slot. The Client
+  // waits this long before its first fetch, then follows the same 900 s
+  // weather and 30 s Devices slots, so Page one keeps the standalone cadence.
+  // Absent means fetch immediately.
+  optional uint32 weather_delay_ms = 10;
+  optional uint32 devices_delay_ms = 11;
 }
 
 message WeatherConfig {
@@ -525,6 +531,7 @@ message WeatherData {
   optional double latitude = 2;
   optional double longitude = 3;
   required string location_source = 4;
+  optional string city = 5;
 }
 
 message AQIData {

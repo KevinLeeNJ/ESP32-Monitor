@@ -52,6 +52,47 @@ func newProxy(ctx context.Context, c wire.Config, client HTTPDoer) *proxyWorker 
 	return p
 }
 func (p *proxyWorker) stop() { p.cancel(); <-p.done }
+const (
+	weatherRefreshInterval = 15 * time.Minute
+	devicesRefreshInterval = 30 * time.Second
+)
+
+// waitDelay honours the device's handover hint before the first fetch. A nil
+// hint keeps older firmware's immediate start.
+func waitDelay(ctx context.Context, ms *uint32) bool {
+	if ms == nil || *ms == 0 {
+		return true
+	}
+	timer := time.NewTimer(time.Duration(*ms) * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// nextSlot returns the next wall-clock multiple of interval, matching
+// monitor_schedule_due's epoch slots.
+func nextSlot(now time.Time, interval time.Duration) time.Time {
+	return now.Truncate(interval).Add(interval)
+}
+
+// waitForSlot blocks until the next wall-clock multiple of interval so Page
+// one keeps the standalone cadence after a companion takes over.
+func waitForSlot(ctx context.Context, interval time.Duration) bool {
+	now := time.Now()
+	timer := time.NewTimer(nextSlot(now, interval).Sub(now))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
 func (p *proxyWorker) run(ctx context.Context) {
 	defer close(p.done)
 	var wg sync.WaitGroup
@@ -67,8 +108,9 @@ func (p *proxyWorker) run(ctx context.Context) {
 	<-ctx.Done()
 }
 func (p *proxyWorker) devicesLoop(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+	if !waitDelay(ctx, p.config.DevicesDelayMS) {
+		return
+	}
 	for {
 		var d wire.DeviceSummary
 		e := p.fetch(ctx, strings.TrimRight(*p.config.Devices.URL, "/")+"/v2/devices/summary", &d, 4096, func(r *http.Request) {
@@ -83,10 +125,8 @@ func (p *proxyWorker) devicesLoop(ctx context.Context) {
 		p.mu.Lock()
 		p.update(&p.data.Devices, d, e)
 		p.mu.Unlock()
-		select {
-		case <-ctx.Done():
+		if !waitForSlot(ctx, devicesRefreshInterval) {
 			return
-		case <-ticker.C:
 		}
 	}
 }
@@ -203,41 +243,57 @@ func (p *proxyWorker) snapshot(serial bool) wire.ProxyData {
 }
 func (p *proxyWorker) weatherLoop(ctx context.Context) {
 	lat, lon := p.config.Weather.Latitude, p.config.Weather.Longitude
+	city := ""
 	var locationErr error
 	if p.config.Weather.LocationMode == "ip" {
-		var geo struct {
-			Success   bool    `json:"success"`
-			Latitude  float64 `json:"latitude"`
-			Longitude float64 `json:"longitude"`
-		}
-		locationErr = p.fetch(ctx, "https://ipwho.is/", &geo, 4096, func(r *http.Request) {
-			r.Header.Set("Accept", "application/json")
-		})
-		if locationErr == nil && (!geo.Success || geo.Latitude < -90 || geo.Latitude > 90 || geo.Longitude < -180 || geo.Longitude > 180) {
-			locationErr = errors.New("invalid_upstream")
-		}
-		lat = &geo.Latitude
-		lon = &geo.Longitude
+		lat, lon = nil, nil
 	}
-	ticker := time.NewTicker(15 * time.Minute)
-	defer ticker.Stop()
+	if !waitDelay(ctx, p.config.WeatherDelayMS) {
+		return
+	}
+	backoff := time.Second
 	for {
+		if lat == nil {
+			var geo struct {
+				Success   bool    `json:"success"`
+				Latitude  float64 `json:"latitude"`
+				Longitude float64 `json:"longitude"`
+				City      string  `json:"city"`
+			}
+			locationErr = p.fetch(ctx, "https://ipwho.is/", &geo, 4096, func(r *http.Request) {
+				r.Header.Set("Accept", "application/json")
+			})
+			if locationErr == nil && (!geo.Success || geo.Latitude < -90 || geo.Latitude > 90 || geo.Longitude < -180 || geo.Longitude > 180) {
+				locationErr = errors.New("invalid_upstream")
+			}
+			if locationErr == nil {
+				lat, lon = &geo.Latitude, &geo.Longitude
+				city = wire.Clip(geo.City, 31)
+				backoff = time.Second
+			}
+		}
 		if locationErr != nil {
 			p.mu.Lock()
 			p.update(&p.data.Weather, nil, locationErr)
 			p.update(&p.data.AQI, nil, locationErr)
 			p.mu.Unlock()
-		} else {
-			p.weather(ctx, *lat, *lon)
+			// Location gates weather/AQI; keep retrying with backoff instead
+			// of staying broken until the next 15-minute tick.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			backoff = min(backoff*2, 30*time.Second)
+			continue
 		}
-		select {
-		case <-ctx.Done():
+		p.weather(ctx, *lat, *lon, city)
+		if !waitForSlot(ctx, weatherRefreshInterval) {
 			return
-		case <-ticker.C:
 		}
 	}
 }
-func (p *proxyWorker) weather(ctx context.Context, lat, lon float64) {
+func (p *proxyWorker) weather(ctx context.Context, lat, lon float64, city string) {
 	host := *p.config.Weather.Host
 	if !strings.Contains(host, "://") {
 		host = "https://" + host
@@ -260,7 +316,11 @@ func (p *proxyWorker) weather(ctx context.Context, lat, lon float64) {
 		}
 	}
 	p.mu.Lock()
-	p.update(&p.data.Weather, map[string]any{"condition": condition, "latitude": lat, "longitude": lon, "location_source": p.config.Weather.LocationMode}, e)
+	payload := map[string]any{"condition": condition, "latitude": lat, "longitude": lon, "location_source": p.config.Weather.LocationMode}
+	if city != "" {
+		payload["city"] = city
+	}
+	p.update(&p.data.Weather, payload, e)
 	p.mu.Unlock()
 	errorText := ""
 	if e != nil {

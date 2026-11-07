@@ -54,6 +54,17 @@ static monitor_devices_snapshot_t s_companion_devices_seen;
 static uint32_t s_companion_generation, s_companion_devices_version;
 static uint64_t s_companion_log_ms;
 static bool s_companion_overlay, s_companion_connected, s_companion_page_revert;
+/* Page one keeps its Standalone values until the Client has supplied each
+ * source once; after that the Client's unavailable state is authoritative. */
+static bool s_companion_weather_seen, s_companion_aqi_seen, s_companion_devices_supplied;
+
+/* A proxy source is Client-owned once it delivered data this session or while
+ * it is not waiting for its first scheduled refresh. A pending source (the
+ * Client continues the device's cadence) keeps the cached standalone value. */
+static bool companion_owns(bool pending, bool valid, bool seen)
+{
+    return !pending && (valid || seen);
+}
 
 static void feed_task_watchdog(void)
 {
@@ -70,6 +81,7 @@ typedef struct {
     monitor_devices_snapshot_t devices;
     char time_text[8];
     char date_text[16];
+    char city_text[32];
     bool profiling;
 } display_snapshot_t;
 
@@ -81,6 +93,7 @@ static void refresh_monitor_data(char *time_text, size_t time_size,
     monitor_weather_get(&weather);
     if(weather.weather_valid) g_demo.weather_condition = weather.condition;
     if(weather.aqi_valid) g_demo.aqi = weather.aqi;
+    snprintf(g_demo.city_text, sizeof(g_demo.city_text), "%s", weather.city);
     monitor_sensor_data_t sensors;
     monitor_sensors_get(&sensors);
     if(sensors.battery_valid) g_demo.board_battery_percent = sensors.battery_percent;
@@ -101,22 +114,40 @@ static void capture_display_snapshot(display_snapshot_t *snapshot)
     snapshot->humidity_percent = g_demo.humidity_percent;
     snapshot->aqi = g_demo.aqi;
     snapshot->weather_condition = g_demo.weather_condition;
-    snapshot->wifi_state = monitor_serial_active() ? MONITOR_WIFI_SERIAL : monitor_wifi_get_state();
+    snprintf(snapshot->city_text, sizeof(snapshot->city_text), "%s", g_demo.city_text);
+    snapshot->wifi_state = monitor_serial_active() ? MONITOR_WIFI_SERIAL :
+                           s_companion_overlay ? MONITOR_WIFI_LAN : monitor_wifi_get_state();
     snapshot->profiling = monitor_pm_profile_active();
     g_demo.wifi_state = snapshot->wifi_state;
     /* An authenticated LAN session owns page one's proxy values. Local
      * battery and environment readings stay local, and RTC time remains the
      * fallback while the upstream time source has no usable value. */
     if (s_companion_overlay) {
-        snapshot->weather_condition = s_companion_view.weather_valid
-            ? s_companion_view.weather_condition : MONITOR_WEATHER_UNKNOWN;
-        snapshot->aqi = s_companion_view.aqi_valid ? s_companion_view.aqi : -1;
+        if (companion_owns(s_companion_view.weather_pending, s_companion_view.weather_valid,
+                           s_companion_weather_seen)) {
+            snapshot->weather_condition = s_companion_view.weather_valid
+                ? s_companion_view.weather_condition : MONITOR_WEATHER_UNKNOWN;
+            if (s_companion_view.weather_valid) s_companion_weather_seen = true;
+        }
+        if (companion_owns(s_companion_view.aqi_pending, s_companion_view.aqi_valid,
+                           s_companion_aqi_seen)) {
+            snapshot->aqi = s_companion_view.aqi_valid ? s_companion_view.aqi : -1;
+            if (s_companion_view.aqi_valid) s_companion_aqi_seen = true;
+        }
         if (s_companion_view.time_valid) {
             snprintf(snapshot->time_text, sizeof snapshot->time_text, "%s", s_companion_view.time_text);
             snprintf(snapshot->date_text, sizeof snapshot->date_text, "%s", s_companion_view.date_text);
         }
-        snapshot->devices = s_companion_view.devices;
-        snapshot->devices.version = s_companion_devices_version ? s_companion_devices_version : 1;
+        if (companion_owns(s_companion_view.devices_pending, s_companion_view.devices_valid,
+                           s_companion_devices_supplied)) {
+            snapshot->devices = s_companion_view.devices;
+            snapshot->devices.version = s_companion_devices_version ? s_companion_devices_version : 1;
+            if (s_companion_view.devices_valid) s_companion_devices_supplied = true;
+        }
+        /* An empty Client city means coordinates mode, not a different place:
+         * the coordinates came from this device, so keep the cached city. */
+        if (s_companion_view.city[0])
+            snprintf(snapshot->city_text, sizeof(snapshot->city_text), "%s", s_companion_view.city);
     }
 }
 
@@ -153,6 +184,7 @@ static bool apply_companion_if_changed(monitor_pages_t *pages)
     s_companion_overlay = connected && s_companion_view.proxy_owned;
     if (connected != s_companion_connected) {
         s_companion_connected = connected;
+        s_companion_weather_seen = s_companion_aqi_seen = s_companion_devices_supplied = false;
         /* One owner per page-one source: the direct HTTP producers stop while
          * an authenticated session proxies weather and Devices. */
         monitor_weather_set_companion_active(connected);
@@ -193,7 +225,8 @@ static bool display_snapshot_equal(const display_snapshot_t *a,
            a->wifi_state == b->wifi_state &&
            a->profiling == b->profiling &&
            strcmp(a->time_text, b->time_text) == 0 &&
-           strcmp(a->date_text, b->date_text) == 0;
+           strcmp(a->date_text, b->date_text) == 0 &&
+           strcmp(a->city_text, b->city_text) == 0;
 }
 
 static lv_obj_t *monitor_screen_factory(lv_obj_t *parent)
@@ -432,6 +465,7 @@ static void apply_display_snapshot(monitor_lvgl_t *renderer, const display_snaps
         .weather_condition = snapshot->weather_condition,
         .temperature_tenths_c = snapshot->temperature_tenths_c,
         .humidity_percent = snapshot->humidity_percent, .aqi = snapshot->aqi,
+        .city_text = snapshot->city_text,
         .profiling = snapshot->profiling,
     };
     monitor_ui_apply_snapshot(monitor_lvgl_root(renderer), &ui);

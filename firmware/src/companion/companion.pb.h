@@ -156,6 +156,14 @@ typedef struct _esp32monitor_companion_Config {
     esp32monitor_companion_WeatherConfig weather;
     esp32monitor_companion_DevicesConfig devices;
     esp32monitor_companion_TimeConfig time;
+    /* Milliseconds until the device's next wall-clock refresh slot. The Client
+ waits this long before its first fetch, then follows the same 900 s
+ weather and 30 s Devices slots, so Page one keeps the standalone cadence.
+ Absent means fetch immediately. */
+    bool has_weather_delay_ms;
+    uint32_t weather_delay_ms;
+    bool has_devices_delay_ms;
+    uint32_t devices_delay_ms;
 } esp32monitor_companion_Config;
 
 typedef struct _esp32monitor_companion_ConfigAck {
@@ -545,6 +553,8 @@ typedef struct _esp32monitor_companion_WeatherData {
     bool has_longitude;
     double longitude;
     char location_source[32];
+    bool has_city;
+    char city[32];
 } esp32monitor_companion_WeatherData;
 
 typedef struct _esp32monitor_companion_WeatherSection {
@@ -675,7 +685,7 @@ extern "C" {
 #define esp32monitor_companion_Open_init_default {0, "", "", "", "", "", ""}
 #define esp32monitor_companion_Session_init_default {0, "", "", "", "", "", 0, 0, 0}
 #define esp32monitor_companion_Control_init_default {0, "", "", "", 0, 0, false, "", {0, {0}}}
-#define esp32monitor_companion_Config_init_default {0, "", "", "", "", 0, esp32monitor_companion_WeatherConfig_init_default, esp32monitor_companion_DevicesConfig_init_default, esp32monitor_companion_TimeConfig_init_default}
+#define esp32monitor_companion_Config_init_default {0, "", "", "", "", 0, esp32monitor_companion_WeatherConfig_init_default, esp32monitor_companion_DevicesConfig_init_default, esp32monitor_companion_TimeConfig_init_default, false, 0, false, 0}
 #define esp32monitor_companion_WeatherConfig_init_default {0, "", false, 0, false, 0, false, "", false, ""}
 #define esp32monitor_companion_DevicesConfig_init_default {0, false, "", false, ""}
 #define esp32monitor_companion_TimeConfig_init_default {0, 0}
@@ -718,7 +728,7 @@ extern "C" {
 #define esp32monitor_companion_SelectedTask_init_default {"", "", 0}
 #define esp32monitor_companion_MusicData_init_default {"", "", false, esp32monitor_companion_CurrentMusic_init_default}
 #define esp32monitor_companion_CurrentMusic_init_default {"", false, "", false, "", false, "", false, 0, false, 0, false, 0}
-#define esp32monitor_companion_WeatherData_init_default {0, false, 0, false, 0, ""}
+#define esp32monitor_companion_WeatherData_init_default {0, false, 0, false, 0, "", false, ""}
 #define esp32monitor_companion_AQIData_init_default {0, ""}
 #define esp32monitor_companion_Envelope_init_zero {0, 0, {esp32monitor_companion_Error_init_zero}}
 #define esp32monitor_companion_Error_init_zero   {0, {{NULL}, NULL}, esp32monitor_companion_ErrorDetail_init_zero}
@@ -729,7 +739,7 @@ extern "C" {
 #define esp32monitor_companion_Open_init_zero    {0, "", "", "", "", "", ""}
 #define esp32monitor_companion_Session_init_zero {0, "", "", "", "", "", 0, 0, 0}
 #define esp32monitor_companion_Control_init_zero {0, "", "", "", 0, 0, false, "", {0, {0}}}
-#define esp32monitor_companion_Config_init_zero  {0, "", "", "", "", 0, esp32monitor_companion_WeatherConfig_init_zero, esp32monitor_companion_DevicesConfig_init_zero, esp32monitor_companion_TimeConfig_init_zero}
+#define esp32monitor_companion_Config_init_zero  {0, "", "", "", "", 0, esp32monitor_companion_WeatherConfig_init_zero, esp32monitor_companion_DevicesConfig_init_zero, esp32monitor_companion_TimeConfig_init_zero, false, 0, false, 0}
 #define esp32monitor_companion_WeatherConfig_init_zero {0, "", false, 0, false, 0, false, "", false, ""}
 #define esp32monitor_companion_DevicesConfig_init_zero {0, false, "", false, ""}
 #define esp32monitor_companion_TimeConfig_init_zero {0, 0}
@@ -772,7 +782,7 @@ extern "C" {
 #define esp32monitor_companion_SelectedTask_init_zero {"", "", 0}
 #define esp32monitor_companion_MusicData_init_zero {"", "", false, esp32monitor_companion_CurrentMusic_init_zero}
 #define esp32monitor_companion_CurrentMusic_init_zero {"", false, "", false, "", false, "", false, 0, false, 0, false, 0}
-#define esp32monitor_companion_WeatherData_init_zero {0, false, 0, false, 0, ""}
+#define esp32monitor_companion_WeatherData_init_zero {0, false, 0, false, 0, "", false, ""}
 #define esp32monitor_companion_AQIData_init_zero {0, ""}
 
 /* Field tags (for use in manual encoding/decoding) */
@@ -861,6 +871,8 @@ extern "C" {
 #define esp32monitor_companion_Config_weather_tag 7
 #define esp32monitor_companion_Config_devices_tag 8
 #define esp32monitor_companion_Config_time_tag   9
+#define esp32monitor_companion_Config_weather_delay_ms_tag 10
+#define esp32monitor_companion_Config_devices_delay_ms_tag 11
 #define esp32monitor_companion_ConfigAck_protocol_version_tag 1
 #define esp32monitor_companion_ConfigAck_request_id_tag 2
 #define esp32monitor_companion_ConfigAck_device_id_tag 3
@@ -1071,6 +1083,7 @@ extern "C" {
 #define esp32monitor_companion_WeatherData_latitude_tag 2
 #define esp32monitor_companion_WeatherData_longitude_tag 3
 #define esp32monitor_companion_WeatherData_location_source_tag 4
+#define esp32monitor_companion_WeatherData_city_tag 5
 #define esp32monitor_companion_WeatherSection_state_tag 1
 #define esp32monitor_companion_WeatherSection_observed_at_tag 2
 #define esp32monitor_companion_WeatherSection_last_success_at_tag 3
@@ -1291,7 +1304,9 @@ X(a, STATIC,   REQUIRED, STRING,   config_epoch,      5) \
 X(a, STATIC,   REQUIRED, UINT32,   config_revision,   6) \
 X(a, STATIC,   REQUIRED, MESSAGE,  weather,           7) \
 X(a, STATIC,   REQUIRED, MESSAGE,  devices,           8) \
-X(a, STATIC,   REQUIRED, MESSAGE,  time,              9)
+X(a, STATIC,   REQUIRED, MESSAGE,  time,              9) \
+X(a, STATIC,   OPTIONAL, UINT32,   weather_delay_ms,  10) \
+X(a, STATIC,   OPTIONAL, UINT32,   devices_delay_ms,  11)
 #define esp32monitor_companion_Config_CALLBACK NULL
 #define esp32monitor_companion_Config_DEFAULT NULL
 #define esp32monitor_companion_Config_weather_MSGTYPE esp32monitor_companion_WeatherConfig
@@ -1762,7 +1777,8 @@ X(a, STATIC,   OPTIONAL, SINT64,   position_observed_at,   7)
 X(a, STATIC,   REQUIRED, SINT32,   condition,         1) \
 X(a, STATIC,   OPTIONAL, DOUBLE,   latitude,          2) \
 X(a, STATIC,   OPTIONAL, DOUBLE,   longitude,         3) \
-X(a, STATIC,   REQUIRED, STRING,   location_source,   4)
+X(a, STATIC,   REQUIRED, STRING,   location_source,   4) \
+X(a, STATIC,   OPTIONAL, STRING,   city,              5)
 #define esp32monitor_companion_WeatherData_CALLBACK NULL
 #define esp32monitor_companion_WeatherData_DEFAULT NULL
 
@@ -1900,7 +1916,7 @@ extern const pb_msgdesc_t esp32monitor_companion_AQIData_msg;
 #define esp32monitor_companion_CodexData_size    1210
 #define esp32monitor_companion_CodexSection_size 1466
 #define esp32monitor_companion_ConfigAck_size    185
-#define esp32monitor_companion_Config_size       869
+#define esp32monitor_companion_Config_size       881
 #define esp32monitor_companion_Control_size      4274
 #define esp32monitor_companion_CurrentMusic_size 1223
 #define esp32monitor_companion_DeviceCard_size   131
@@ -1920,16 +1936,16 @@ extern const pb_msgdesc_t esp32monitor_companion_AQIData_msg;
 #define esp32monitor_companion_PairRequest_size  295
 #define esp32monitor_companion_PairResponse_size 356
 #define esp32monitor_companion_Presence_size     170
-#define esp32monitor_companion_ProxyData_size    1767
-#define esp32monitor_companion_ProxySection_size 2023
+#define esp32monitor_companion_ProxyData_size    1800
+#define esp32monitor_companion_ProxySection_size 2056
 #define esp32monitor_companion_QuotaData_size    398
 #define esp32monitor_companion_QuotaSection_size 654
 #define esp32monitor_companion_QuotaWindow_size  97
 #define esp32monitor_companion_Resync_size       39
-#define esp32monitor_companion_Sections_size     5846
+#define esp32monitor_companion_Sections_size     5879
 #define esp32monitor_companion_SelectedTask_size 110
 #define esp32monitor_companion_Session_size      189
-#define esp32monitor_companion_Snapshot_size     6030
+#define esp32monitor_companion_Snapshot_size     6063
 #define esp32monitor_companion_SourceLease_size  104
 #define esp32monitor_companion_TasksData_size    294
 #define esp32monitor_companion_TasksSection_size 550
@@ -1937,8 +1953,8 @@ extern const pb_msgdesc_t esp32monitor_companion_AQIData_msg;
 #define esp32monitor_companion_TimeData_size     52
 #define esp32monitor_companion_TimeSection_size  307
 #define esp32monitor_companion_WeatherConfig_size 361
-#define esp32monitor_companion_WeatherData_size  57
-#define esp32monitor_companion_WeatherSection_size 312
+#define esp32monitor_companion_WeatherData_size  90
+#define esp32monitor_companion_WeatherSection_size 345
 
 #ifdef __cplusplus
 } /* extern "C" */

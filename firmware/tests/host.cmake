@@ -78,6 +78,10 @@ add_test(NAME monitor_display_diff_tests
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/display_diff_test.py" "${CMAKE_C_COMPILER}")
 set_tests_properties(monitor_display_diff_tests PROPERTIES TIMEOUT 30 LABELS "behavior;display")
 
+add_test(NAME monitor_companion_handover_tests
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/companion_handover_test.py" "${CMAKE_C_COMPILER}")
+set_tests_properties(monitor_companion_handover_tests PROPERTIES TIMEOUT 30 LABELS "behavior;display")
+
 foreach(target IN ITEMS monitor_contract_tests monitor_rtc_tests)
     target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
 endforeach()

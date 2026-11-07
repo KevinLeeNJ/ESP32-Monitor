@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
 
 #define PERIOD_US (30LL * 1000000)
 #define RETAIN_US (90LL * 1000000)
@@ -32,6 +33,9 @@ static uint32_t s_generation;
 static bool s_wifi, s_have_snapshot;
 static volatile bool s_companion_active;
 static int64_t s_last_success;
+/* Wall-clock 30 s slot of the last scheduled attempt, so a companion session
+ * can continue the same cadence instead of polling on connect. */
+static int64_t s_last_devices_slot = -1;
 static monitor_devices_snapshot_t s_snapshot;
 
 /* Caller holds s_mux. Compare visible content only; successful identical
@@ -59,6 +63,18 @@ void monitor_devices_get(monitor_devices_snapshot_t *out)
 void monitor_devices_request_refresh(void)
 {
     if (s_task) xTaskNotifyGive(s_task);
+}
+uint32_t monitor_devices_refresh_delay_ms(void)
+{
+    if (!monitor_clock_is_valid()) return 0;
+    time_t now = time(NULL);
+    if (now <= 0) return 0;
+    int64_t slot = (int64_t)now / 30;
+    portENTER_CRITICAL(&s_mux);
+    bool serviced = s_last_devices_slot == slot;
+    portEXIT_CRITICAL(&s_mux);
+    if (!serviced) return 0;
+    return (uint32_t)((30 - (int64_t)now % 30) * 1000);
 }
 void monitor_devices_set_companion_active(bool active)
 {
@@ -401,6 +417,12 @@ static void devices_task(void *arg)
              * Keep a relative fallback only for HTTP before time is known. */
             next_poll = monitor_clock_is_valid() ? INT64_MAX : now + PERIOD_US;
             bool reused = false;
+            time_t requested_at = time(NULL);
+            if (requested_at > 0) {
+                portENTER_CRITICAL(&s_mux);
+                s_last_devices_slot = (int64_t)requested_at / 30;
+                portEXIT_CRITICAL(&s_mux);
+            }
             int64_t request_started = esp_timer_get_time();
             bool ok = fetch(&transport, &config, &candidate, &status, &reused);
             feed_task_watchdog();

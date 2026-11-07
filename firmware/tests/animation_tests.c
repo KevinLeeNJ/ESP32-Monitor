@@ -16,7 +16,7 @@ static monitor_ui_snapshot_t snapshot(const char *time)
 {
     return (monitor_ui_snapshot_t){.time_text = time, .wifi_state = MONITOR_WIFI_CONNECTED,
         .battery_percent = 78, .weather_condition = MONITOR_WEATHER_UNKNOWN,
-        .temperature_tenths_c = 245, .humidity_percent = 58, .aqi = 42};
+        .temperature_tenths_c = 245, .humidity_percent = 58, .aqi = 42, .city_text = "Beijing"};
 }
 
 static void settle(monitor_renderer_t *renderer)

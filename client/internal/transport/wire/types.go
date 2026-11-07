@@ -94,6 +94,10 @@ type Config struct {
 	Weather         WeatherConfig `json:"weather"`
 	Devices         DevicesConfig `json:"devices"`
 	Time            TimeConfig    `json:"time"`
+	// Optional device cadence hints: milliseconds until the device's next
+	// wall-clock refresh slot. Absent means fetch immediately.
+	WeatherDelayMS *uint32 `json:"weather_delay_ms"`
+	DevicesDelayMS *uint32 `json:"devices_delay_ms"`
 }
 type WeatherConfig struct {
 	Enabled      bool     `json:"enabled"`

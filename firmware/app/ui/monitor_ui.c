@@ -19,6 +19,9 @@
 #define DEVICE_HEIGHT 180
 #define DEVICE_GAP 5
 #define ROLL_DURATION_MS 320U
+/* Font Awesome 5 globe (0xF0AC); LVGL has no built-in symbol for it. */
+#define MONITOR_SYMBOL_GLOBE "\xef\x82\xac"
+#define CITY_MAX_CHARS 16
 
 extern const lv_image_dsc_t monitor_weather_clear;
 extern const lv_image_dsc_t monitor_weather_partly_cloudy;
@@ -51,6 +54,7 @@ static monitor_ui_demo_data_t demo_data = {
     .temperature_tenths_c = 245,
     .humidity_percent = 58,
     .aqi = 42,
+    .city_text = "Beijing",
 };
 
 void monitor_ui_set_demo_data(const monitor_ui_demo_data_t *data)
@@ -99,6 +103,8 @@ typedef struct {
     lv_obj_t *battery_label;
     lv_obj_t *battery_outline;
     lv_obj_t *wifi_slash;
+    lv_obj_t *city_label;
+    char city_text[32];
     info_roll_t info[4]; /* weather, temperature, humidity, AQI */
     bool animations_enabled;
     motion_phase_t phase;
@@ -480,6 +486,7 @@ static const char *wifi_state_symbol(monitor_wifi_state_t state)
         case MONITOR_WIFI_OFFLINE:
         case MONITOR_WIFI_DISCONNECTED: return LV_SYMBOL_WIFI;
         case MONITOR_WIFI_SERIAL: return LV_SYMBOL_USB;
+        case MONITOR_WIFI_LAN: return MONITOR_SYMBOL_GLOBE;
         default: return LV_SYMBOL_WARNING;
     }
 }
@@ -491,6 +498,36 @@ static void format_temperature(char *text, size_t size, int tenths)
         int magnitude = tenths < 0 ? -tenths : tenths;
         snprintf(text, size, "%s%d.%d°C", tenths < 0 ? "-" : "", magnitude / 10, magnitude % 10);
     }
+}
+
+/* Location sits on the date line, uppercased to match the date. Non-ASCII
+ * bytes have no glyph in the embedded fonts. */
+static void update_city(monitor_ui_state_t *state, const char *city)
+{
+    if (city == NULL) city = "";
+    if (strcmp(state->city_text, city) == 0) return;
+    snprintf(state->city_text, sizeof(state->city_text), "%s", city);
+    char text[CITY_MAX_CHARS + 1];
+    unsigned n = 0;
+    for (const char *p = state->city_text; *p && n < CITY_MAX_CHARS; ++p) {
+        if (*p < 0x20 || *p > 0x7e) continue;
+        text[n++] = *p >= 'a' && *p <= 'z' ? *p - ('a' - 'A') : *p;
+    }
+    text[n] = '\0';
+    lv_label_set_text(state->city_label, text);
+    if (n) lv_obj_clear_flag(state->city_label, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(state->city_label, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* Follow the date label's width so the city stays just to its right. */
+static void position_city(monitor_ui_state_t *state)
+{
+    lv_point_t date_size;
+    lv_text_get_size(&date_size, lv_label_get_text(state->date_label), &monitor_misans_12,
+                     0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    const int32_t x = 16 + date_size.x + 6;
+    lv_obj_set_x(state->city_label, x);
+    lv_obj_set_width(state->city_label, 148 - x);
 }
 
 void monitor_ui_apply_snapshot(lv_obj_t *root, const monitor_ui_snapshot_t *snapshot)
@@ -514,6 +551,8 @@ void monitor_ui_apply_snapshot(lv_obj_t *root, const monitor_ui_snapshot_t *snap
         lv_obj_set_style_text_color(state->wifi_label,
             lv_color_hex(snapshot->wifi_state == MONITOR_WIFI_PROVISIONING ? COLOR_MUTED : COLOR_BLACK), 0);
     }
+    update_city(state, snapshot->city_text);
+    position_city(state);
     snprintf(text, sizeof(text), snapshot->battery_percent < 0 ? "--" : "%d%%", snapshot->battery_percent);
     if (strcmp(lv_label_get_text(state->battery_label), text) != 0) {
         lv_label_set_text(state->battery_label, text);
@@ -539,7 +578,7 @@ void monitor_ui_apply_snapshot(lv_obj_t *root, const monitor_ui_snapshot_t *snap
 
 static lv_obj_t *make_wifi_status(lv_obj_t *parent, monitor_wifi_state_t state)
 {
-    lv_obj_t *icon = make_label(parent, wifi_state_symbol(state), 18, 63,
+    lv_obj_t *icon = make_label(parent, wifi_state_symbol(state), 16, 63,
                                 &monitor_misans_14,
                                 state == MONITOR_WIFI_PROVISIONING ? COLOR_MUTED : COLOR_BLACK);
     set_name(icon, "wifi_status");
@@ -547,7 +586,7 @@ static lv_obj_t *make_wifi_status(lv_obj_t *parent, monitor_wifi_state_t state)
     static const lv_point_precise_t slash_points[] = {{1, 1}, {14, 14}};
     lv_obj_t *slash = lv_line_create(parent);
     lv_line_set_points(slash, slash_points, 2);
-    lv_obj_set_pos(slash, 17, 62);
+    lv_obj_set_pos(slash, 15, 62);
     lv_obj_set_size(slash, 16, 16);
     lv_obj_set_style_line_width(slash, 3, 0);
     lv_obj_set_style_line_color(slash, lv_color_hex(COLOR_BLACK), 0);
@@ -1110,13 +1149,20 @@ lv_obj_t *monitor_ui_create_with_devices_battery_wifi_variant(lv_obj_t *parent,
     /* Header: time and four compact rounded data cards. Weather has no text
      * label; temperature and humidity are identified by sourced icons. */
     make_clock(state);
-    state->date_label = make_label(root, clock_date_text, 19, 43, &monitor_misans_12, COLOR_MUTED);
+    state->date_label = make_label(root, clock_date_text, 16, 43, &monitor_misans_12, COLOR_MUTED);
     set_name(state->date_label, "clock_date");
     state->wifi_label = make_wifi_status(root, wifi_state);
     state->wifi_slash = lv_obj_get_child_by_name(root, "wifi_slash");
     make_board_battery(root, 38, 65, demo_data.board_battery_percent);
     state->battery_label = lv_obj_get_child_by_name(root, "board_battery_value");
     state->battery_outline = lv_obj_get_child_by_name(root, "board_battery_outline");
+
+    state->city_label = make_label(root, "", 16, 43, &monitor_misans_12, COLOR_MUTED);
+    lv_label_set_long_mode(state->city_label, LV_LABEL_LONG_CLIP);
+    set_name(state->city_label, "city_label");
+    lv_obj_add_flag(state->city_label, LV_OBJ_FLAG_HIDDEN);
+    update_city(state, demo_data.city_text);
+    position_city(state);
 
     /* Keep the four data cards together as a 2x2 block in the upper-right. */
     const monitor_weather_condition_t weather_condition = demo_data.weather_condition;

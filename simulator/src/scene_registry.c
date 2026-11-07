@@ -180,6 +180,17 @@ static lv_obj_t *create_serial_status(lv_obj_t *parent, monitor_frame_variant_t 
     return root;
 }
 
+static lv_obj_t *create_lan_status(lv_obj_t *parent, monitor_frame_variant_t variant)
+{
+    lv_obj_t *root = create_monitor_scene(parent, variant);
+    monitor_ui_snapshot_t ui = {.time_text = "20:15", .date_text = "SAT 1 NOV",
+        .wifi_state = MONITOR_WIFI_LAN, .battery_percent = 78,
+        .weather_condition = MONITOR_WEATHER_CLEAR, .city_text = "Beijing",
+        .temperature_tenths_c = 245, .humidity_percent = 58, .aqi = 42};
+    monitor_ui_apply_snapshot(root, &ui);
+    return root;
+}
+
 static lv_obj_t *create_profiling(lv_obj_t *parent, monitor_frame_variant_t variant)
 {
     lv_obj_t *root = create_monitor_scene(parent, variant);
@@ -382,6 +393,7 @@ static const simulator_scene_t SCENES[] = {
     { .name = "configuring", .description = "Configuration session status", .create = create_configuring },
     { .name = "offline", .description = "Offline retains local data after configuration", .create = create_local_offline },
     { .name = "serial-status", .description = "Serial companion session replaces the Wi-Fi icon", .create = create_serial_status },
+    { .name = "lan-status", .description = "LAN companion globe icon with vertical city label", .create = create_lan_status },
     { .name = "monitor-waiting", .description = "Live boot placeholders before first data", .create = create_waiting },
     { .name = "animation-load-3", .description = "First snapshot with three Devices", .create = create_first_data_3 },
     { .name = "animation-load-2", .description = "First snapshot with two Devices", .create = create_first_data_2 },

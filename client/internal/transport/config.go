@@ -18,6 +18,10 @@ func validateConfig(c wire.Config) error {
 	if c.ProtocolVersion != 1 || !wire.UUID(c.RequestID) || !wire.UUID(c.DeviceID) || !wire.UUID(c.SessionID) || !wire.UUID(c.Epoch) || c.Revision == 0 || !c.Time.Enabled || c.Time.Offset < -720 || c.Time.Offset > 840 {
 		return bad()
 	}
+	if (c.WeatherDelayMS != nil && *c.WeatherDelayMS > 900000) ||
+		(c.DevicesDelayMS != nil && *c.DevicesDelayMS > 30000) {
+		return bad()
+	}
 	w := c.Weather
 	if w.LocationMode != "coordinates" && w.LocationMode != "ip" {
 		return bad()

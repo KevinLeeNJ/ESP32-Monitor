@@ -9,6 +9,7 @@
 #include <strings.h>
 #include <math.h>
 #include <limits.h>
+#include <time.h>
 
 #include "cJSON.h"
 #include "esp_check.h"
@@ -29,12 +30,17 @@
 #define HTTP_TIMEOUT_MS 4000
 #define HTTP_CONNECT_ATTEMPTS 3
 #define HTTP_CONNECT_RETRY_MS 1000
+#define LOCATION_ATTEMPTS 4
+#define LOCATION_RETRY_BASE_MS 1000
 #define RESPONSE_MAX 8192
 
 static TaskHandle_t s_task;
 static volatile bool s_wifi_available;
 static volatile bool s_companion_active;
 static portMUX_TYPE s_data_mux = portMUX_INITIALIZER_UNLOCKED;
+/* Wall-clock 900 s slot of the last scheduled attempt, so a companion session
+ * can continue the same cadence instead of fetching on connect. */
+static int64_t s_last_weather_slot = -1;
 static monitor_weather_data_t s_data = {
     .condition = MONITOR_WEATHER_CLEAR, .aqi = -1,
     .latitude = 0, .longitude = 0,
@@ -231,7 +237,7 @@ static bool read_configured_location(float *lat, float *lon)
     return true;
 }
 
-static bool locate_by_public_ip(float *lat, float *lon)
+static bool locate_by_public_ip(float *lat, float *lon, char *city, size_t city_size)
 {
     /* PERF may inline this function into update_weather and keep its stack
      * frame alive during the later TLS requests. Do not reserve 8 KB there. */
@@ -252,9 +258,37 @@ static bool locate_by_public_ip(float *lat, float *lon)
               isfinite(lat_item->valuedouble) && isfinite(lon_item->valuedouble) &&
               lat_item->valuedouble >= -90 && lat_item->valuedouble <= 90 &&
               lon_item->valuedouble >= -180 && lon_item->valuedouble <= 180;
-    if (ok) { *lat = (float)lat_item->valuedouble; *lon = (float)lon_item->valuedouble; }
+    if (ok) {
+        *lat = (float)lat_item->valuedouble; *lon = (float)lon_item->valuedouble;
+        cJSON *city_item = cJSON_GetObjectItem(json, "city");
+        if (city_size > 0) {
+            if (cJSON_IsString(city_item) && city_item->valuestring[0])
+                snprintf(city, city_size, "%s", city_item->valuestring);
+            else city[0] = '\0';
+        }
+    }
     cJSON_Delete(json);
     return ok;
+}
+
+/* IP geolocation gates the weather/AQI requests, so retry a failed lookup
+ * with backoff instead of waiting for the next external event. DHCP/DNS can
+ * lag Wi-Fi association by several seconds. Disconnect or a Companion
+ * ownership change cancels the recovery, mirroring http_get. */
+static bool locate_with_retry(float *lat, float *lon, char *city, size_t city_size)
+{
+    const bool direct = !s_companion_active;
+    for (unsigned attempt = 0; attempt < LOCATION_ATTEMPTS; ++attempt) {
+        if (locate_by_public_ip(lat, lon, city, city_size)) return true;
+        if (attempt + 1 == LOCATION_ATTEMPTS || !s_wifi_available ||
+            (direct ? s_companion_active : !s_companion_active)) return false;
+        ESP_LOGI(TAG, "location retry %u/%u", attempt + 2, LOCATION_ATTEMPTS);
+        feed_task_watchdog();
+        vTaskDelay(pdMS_TO_TICKS(LOCATION_RETRY_BASE_MS << attempt));
+        feed_task_watchdog();
+        if (!s_wifi_available || (direct ? s_companion_active : !s_companion_active)) return false;
+    }
+    return false;
 }
 
 static monitor_weather_condition_t condition_from_qweather(int code)
@@ -294,6 +328,14 @@ static bool read_qweather_config(char *host, size_t host_size, char *key, size_t
 static void update_weather(void)
 {
     feed_task_watchdog();
+    /* The clock scheduler fires on wall-clock 900 s slots; boot/Wi-Fi triggers
+     * service the current slot too. Record it before the network work. */
+    time_t requested_at = time(NULL);
+    if (requested_at > 0) {
+        portENTER_CRITICAL(&s_data_mux);
+        s_last_weather_slot = (int64_t)requested_at / 900;
+        portEXIT_CRITICAL(&s_data_mux);
+    }
     char host[192];
     char key[128];
     if (!read_qweather_config(host, sizeof(host), key, sizeof(key))) {
@@ -302,6 +344,8 @@ static void update_weather(void)
     }
 
     float lat, lon;
+    char city[32] = "";
+    bool ip_located = false;
     bool location_ok = read_configured_location(&lat, &lon);
     if (!location_ok) {
         portENTER_CRITICAL(&s_data_mux);
@@ -309,7 +353,10 @@ static void update_weather(void)
         if (location_ok) { lat = s_data.latitude; lon = s_data.longitude; }
         portEXIT_CRITICAL(&s_data_mux);
     }
-    if (!location_ok) location_ok = locate_by_public_ip(&lat, &lon);
+    if (!location_ok) {
+        location_ok = locate_with_retry(&lat, &lon, city, sizeof(city));
+        ip_located = location_ok;
+    }
     feed_task_watchdog();
     if (!location_ok) { ESP_LOGW(TAG, "location unavailable"); return; }
 
@@ -381,7 +428,10 @@ static void update_weather(void)
         if (json) cJSON_Delete(json);
     }
     free(response);
-    portENTER_CRITICAL(&s_data_mux); s_data.latitude = lat; s_data.longitude = lon; s_data.location_valid = true; portEXIT_CRITICAL(&s_data_mux);
+    portENTER_CRITICAL(&s_data_mux);
+    s_data.latitude = lat; s_data.longitude = lon; s_data.location_valid = true;
+    if (ip_located) snprintf(s_data.city, sizeof(s_data.city), "%s", city);
+    portEXIT_CRITICAL(&s_data_mux);
     if (display_changed) monitor_display_refresh_request_reason(
         initial_data ? MONITOR_REFRESH_RECOVER : MONITOR_REFRESH_WEATHER);
     ESP_LOGI(TAG, "update: weather=%s aqi=%s", weather_ok ? "ok" : "failed", aqi_ok ? "ok" : "failed");
@@ -399,21 +449,12 @@ static void weather_task(void *arg)
         xTaskNotifyWait(0, UINT32_MAX, &notified, portMAX_DELAY);
         ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
         feed_task_watchdog();
-        if (s_wifi_available && monitor_clock_is_valid() && (notified & WEATHER_EVT_UPDATE)) {
-            if (!s_companion_active) update_weather();
-            else {
-                float lat, lon;
-                portENTER_CRITICAL(&s_data_mux);
-                bool valid = s_data.location_valid;
-                portEXIT_CRITICAL(&s_data_mux);
-                if (!valid && locate_by_public_ip(&lat, &lon)) {
-                    portENTER_CRITICAL(&s_data_mux);
-                    s_data.latitude = lat;
-                    s_data.longitude = lon;
-                    s_data.location_valid = true;
-                    portEXIT_CRITICAL(&s_data_mux);
-                }
-            }
+        /* A companion session owns weather, AQI and the city, so takeover must
+         * not start a new location lookup or weather request. Standalone keeps
+         * its cached values while the Client's first snapshot is in flight. */
+        if (!s_companion_active && s_wifi_available && monitor_clock_is_valid() &&
+            (notified & WEATHER_EVT_UPDATE)) {
+            update_weather();
         }
     }
 }
@@ -435,7 +476,10 @@ void monitor_weather_set_companion_active(bool active)
     if (s_companion_active == active) return;
     s_companion_active = active;
     ESP_LOGI(TAG, "direct producer %s", active ? "paused" : "resumed");
-    monitor_weather_request_refresh();
+    /* Takeover is silent: the direct producer must not start location or
+     * weather work while the Client supplies them. Only returning to
+     * Standalone needs fresh data. */
+    if (!active) monitor_weather_request_refresh();
 }
 
 static void log_dns_servers(void)
@@ -470,6 +514,19 @@ void monitor_weather_on_wifi_disconnected(void)
 void monitor_weather_on_time_valid(void)
 {
     monitor_weather_request_refresh();
+}
+
+uint32_t monitor_weather_refresh_delay_ms(void)
+{
+    if (!monitor_clock_is_valid()) return 0;
+    time_t now = time(NULL);
+    if (now <= 0) return 0;
+    int64_t slot = (int64_t)now / 900;
+    portENTER_CRITICAL(&s_data_mux);
+    bool serviced = s_last_weather_slot == slot;
+    portEXIT_CRITICAL(&s_data_mux);
+    if (!serviced) return 0;
+    return (uint32_t)((900 - (int64_t)now % 900) * 1000);
 }
 
 void monitor_weather_get(monitor_weather_data_t *out)

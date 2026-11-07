@@ -39,7 +39,7 @@ def main():
                 "--range", "0x20-0x7e,0xb0", "--symbols", weather,
             ]
             if size == 14:
-                command += ["--font", "FontAwesome.woff", "--range", "0xf021,0xf071,0xf1eb,0xf287"]
+                command += ["--font", "FontAwesome.woff", "--range", "0xf021,0xf071,0xf0ac,0xf1eb,0xf287"]
             command += ["--lv-font-name", name, "--output", f"{name}.c"]
             subprocess.run(command, cwd=work, check=True)
             source = (work / f"{name}.c").read_text()

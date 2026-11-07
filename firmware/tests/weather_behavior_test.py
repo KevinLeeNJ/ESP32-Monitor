@@ -11,6 +11,7 @@ code=r'''
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "monitor_weather.h"
 #include "monitor_display_refresh.h"
 #include "cJSON.h"
@@ -62,9 +63,13 @@ static void xTaskNotifyWait(unsigned a,unsigned b,uint32_t *bits,unsigned timeou
     ++worker_step;
 }
 static monitor_weather_data_t s_data;
+static int64_t s_last_weather_slot = -1;
 static const char *ip_body="{\"success\":true,\"latitude\":31.2,\"longitude\":121.5}";
 static const char *weather_body="{\"code\":\"200\",\"now\":{\"icon\":\"100\"}}";
 static const char *aqi_body="{\"indexes\":[{\"aqiDisplay\":\"42\"}]}";
+static unsigned ip_fail,delays[8],delay_count;
+static bool companion_flip;
+static void vTaskDelay(unsigned ticks){assert(delay_count<8);delays[delay_count++]=ticks;}
 static void *test_malloc(size_t size){return alloc_ok?malloc(size):NULL;}
 #define malloc test_malloc
 #define MALLOC_CAP_SPIRAM 1u
@@ -91,7 +96,9 @@ void monitor_display_refresh_request_reason(uint32_t bits){++notifications;reaso
 static bool http_get(const char *url,char *out,size_t size,const char *api_key){
     if(worker_step)assert(watchdog_active);
     const char *body;
-    if(strstr(url,"ipwho.is")){++http_calls[0];assert(!api_key);body=ip_body;}
+    if(strstr(url,"ipwho.is")){++http_calls[0];assert(!api_key);
+        if(companion_flip){s_companion_active=true;companion_flip=false;}
+        if(ip_fail){--ip_fail;return false;}body=ip_body;}
     else {assert(api_key && !strcmp(api_key,"fixture-key"));
         if (!strncmp(host,"http://",7) || !strncmp(host,"https://",8)) assert(!strncmp(url,host,strlen(host)));
         else assert(!strncmp(url,"https://fixture.test/",21));
@@ -102,12 +109,13 @@ static bool http_get(const char *url,char *out,size_t size,const char *api_key){
     assert(strlen(body)<size);strcpy(out,body);return true;
 }
 '''
-code+=defines(source,['RESPONSE_MAX','WEATHER_EVT_UPDATE','WEATHER_EVT_WIFI_CHANGED'])+'\n'
-code+='\n'.join(function(source,name) for name in ['parse_coordinate','json_nonnegative_int','read_configured_location','locate_by_public_ip','condition_from_qweather','read_qweather_config','update_weather','monitor_weather_get','weather_task','monitor_weather_request_refresh','monitor_weather_on_wifi_connected','monitor_weather_on_wifi_disconnected','monitor_weather_on_time_valid','monitor_weather_start'])
+code+=defines(source,['RESPONSE_MAX','WEATHER_EVT_UPDATE','WEATHER_EVT_WIFI_CHANGED','LOCATION_ATTEMPTS','LOCATION_RETRY_BASE_MS'])+'\n'
+code+='\n'.join(function(source,name) for name in ['parse_coordinate','json_nonnegative_int','read_configured_location','locate_by_public_ip','locate_with_retry','condition_from_qweather','read_qweather_config','update_weather','monitor_weather_get','monitor_weather_refresh_delay_ms','weather_task','monitor_weather_request_refresh','monitor_weather_set_companion_active','monitor_weather_on_wifi_connected','monitor_weather_on_wifi_disconnected','monitor_weather_on_time_valid','monitor_weather_start'])
 code+=r'''
 static void reset(void){
-    s_data=(monitor_weather_data_t){.aqi=-1};
+    s_data=(monitor_weather_data_t){.aqi=-1};s_last_weather_slot=-1;clock_ready=true;
     notifications=opened=closed=reason=0;memset(http_calls,0,sizeof(http_calls));
+    ip_fail=delay_count=0;s_wifi_available=false;companion_flip=false;worker_step=0;
     lat_text="31.2";lon_text="121.5";host="fixture.test";key="fixture-key";nvs_ok=alloc_ok=true;
     ip_body="{\"success\":true,\"latitude\":31.2,\"longitude\":121.5}";
     weather_body="{\"code\":\"200\",\"now\":{\"icon\":\"100\"}}";
@@ -134,8 +142,8 @@ int main(void){
     reset();lat_text=lon_text="";ip_body=NULL;update_weather();assert(!s_data.weather_valid && !http_calls[1]);
     const char *invalid_ip[]={"{}","{","{\"success\":false,\"latitude\":1,\"longitude\":2}","{\"success\":true,\"latitude\":91,\"longitude\":0}","{\"success\":true,\"latitude\":0,\"longitude\":181}","{\"success\":true,\"latitude\":\"31\",\"longitude\":121}"};
     for(unsigned i=0;i<sizeof(invalid_ip)/sizeof(*invalid_ip);++i){
-        reset();lat_text=lon_text="";ip_body=invalid_ip[i];float a=7,b=8;
-        assert(!locate_by_public_ip(&a,&b) && a==7 && b==8);
+        reset();lat_text=lon_text="";ip_body=invalid_ip[i];float a=7,b=8;char city[32]="keep";
+        assert(!locate_by_public_ip(&a,&b,city,sizeof(city)) && a==7 && b==8 && !strcmp(city,"keep"));
     }
     const char *invalid_coord[]={"bad","31junk","nan","inf","91","","1e999"};
     for(unsigned i=0;i<sizeof(invalid_coord)/sizeof(*invalid_coord);++i){
@@ -175,14 +183,46 @@ int main(void){
     queued=0;monitor_weather_on_wifi_disconnected();assert(!s_wifi_available && queued==WEATHER_EVT_WIFI_CHANGED);
     queued=0;monitor_weather_on_wifi_connected();assert(s_wifi_available && queued==WEATHER_EVT_UPDATE);
     queued=0;monitor_weather_on_time_valid();assert(queued==WEATHER_EVT_UPDATE);
+    // Pausing for a companion session is silent; resuming in Standalone refreshes.
+    queued=0;s_companion_active=false;monitor_weather_set_companion_active(true);assert(!queued);
+    queued=0;monitor_weather_set_companion_active(false);assert(queued==WEATHER_EVT_UPDATE);
     reset();worker_step=0;if(!setjmp(worker_done))weather_task(NULL);
     assert(http_calls[1]==2 && http_calls[2]==2 && !http_calls[0]);
-    // Companion mode resolves the device's location without fetching weather.
+    // Companion takeover with cached Standalone data starts no location lookup
+    // and no weather request; the Client owns both until the session ends.
     reset();s_companion_active=true;worker_step=4;
+    ip_body="{\"success\":true,\"latitude\":31.2,\"longitude\":121.5,\"city\":\"Beijing\"}";
     if(!setjmp(worker_done))weather_task(NULL);
-    assert(http_calls[0] == 1 && !http_calls[1] && !http_calls[2] && !notifications);
-    assert(s_data.location_valid && s_data.latitude > 31 && s_data.longitude > 121);
+    assert(!http_calls[0] && !http_calls[1] && !http_calls[2] && !notifications);
+    assert(!s_data.location_valid && !s_data.weather_valid && !s_data.aqi_valid);
     s_companion_active=false;
+    // IP location backs off (1s/2s/4s) and only then gates the weather fetch.
+    reset();lat_text=lon_text="";s_wifi_available=true;ip_fail=2;
+    ip_body="{\"success\":true,\"latitude\":31.2,\"longitude\":121.5,\"city\":\"Beijing\"}";
+    update_weather();
+    assert(http_calls[0]==3 && delay_count==2 && delays[0]==1000 && delays[1]==2000);
+    assert(s_data.location_valid && !strcmp(s_data.city,"Beijing") && s_data.weather_valid && s_data.aqi_valid);
+    // Exhausted retries must not trigger weather/AQI requests.
+    reset();lat_text=lon_text="";s_wifi_available=true;ip_fail=99;
+    update_weather();
+    assert(http_calls[0]==LOCATION_ATTEMPTS && delay_count==LOCATION_ATTEMPTS-1);
+    assert(delays[2]==4000 && !s_data.location_valid && !s_data.weather_valid && !http_calls[1] && !http_calls[2]);
+    // Wi-Fi loss or a Companion ownership change cancels the backoff.
+    reset();s_wifi_available=false;ip_fail=99;float ra,rb;char retry_city[32];
+    assert(!locate_with_retry(&ra,&rb,retry_city,sizeof(retry_city)) && http_calls[0]==1 && delay_count==0);
+    reset();s_wifi_available=true;ip_fail=99;companion_flip=true;
+    assert(!locate_with_retry(&ra,&rb,retry_city,sizeof(retry_city)) && http_calls[0]==1 && delay_count==0);
+    s_companion_active=false;
+    // Manual coordinates skip IP lookup and keep any previously resolved city.
+    reset();s_wifi_available=true;strcpy(s_data.city,"Cached");
+    update_weather();
+    assert(!http_calls[0] && s_data.weather_valid && !strcmp(s_data.city,"Cached"));
+    // A companion takeover waits for the device's next 900 s slot.
+    reset();assert(monitor_weather_refresh_delay_ms()==0); // never serviced
+    update_weather();
+    uint32_t refresh_delay=monitor_weather_refresh_delay_ms();
+    assert(refresh_delay>0 && refresh_delay<=900000);
+    clock_ready=false;assert(monitor_weather_refresh_delay_ms()==0);
     puts("Weather/AQI first data, unchanged/partial/error cache, no location, cached/IP location, NVS failure, strict coordinates/API code/metrics, allocation failure and recovery: PASS");
 }
 '''

@@ -9,6 +9,7 @@ code=r'''
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include "monitor_devices.h"
 #include "monitor_display_refresh.h"
 #define ESP_ERR_INVALID_STATE 0x103
@@ -101,7 +102,7 @@ static void reset(void){
     watchdog_active=false;idle_waits=0;now=0;finish=95000000;disconnect_at=reconnect_at=config_at=-1;
     calls=resets=notices=feeds=scenario=0;last_reason=0;notified=false;
     clock_valid=notify_clock=nvs_ok=true;
-    memset(&s_config,0,sizeof(s_config));s_snapshot=(monitor_devices_snapshot_t){0};s_generation=0;s_wifi=false;s_have_snapshot=false;s_last_success=0;
+    memset(&s_config,0,sizeof(s_config));s_snapshot=(monitor_devices_snapshot_t){0};s_generation=0;s_wifi=false;s_have_snapshot=false;s_last_success=0;s_last_devices_slot=-1;
     expiry_timer.active=false;s_expiry_timer=(esp_timer_handle_t)&expiry_timer;
     stored_url="http://fixture.test";stored_token="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     monitor_devices_config_changed();monitor_devices_set_wifi_available(true);
@@ -137,6 +138,12 @@ int main(void){
     reset();config_at=15000000;work();assert(calls==1 && !s_have_snapshot && last_status==MONITOR_DEVICES_NOT_CONFIGURED);
     reset();monitor_devices_request_refresh();uint32_t gen=s_generation;monitor_devices_set_wifi_available(true);assert(s_generation==gen);
     monitor_devices_snapshot_t copy;monitor_devices_get(NULL);monitor_devices_get(&copy);assert(copy.status==MONITOR_DEVICES_WAITING);
+    // A companion takeover waits for the device's next 30 s slot.
+    reset();assert(monitor_devices_refresh_delay_ms()==0); // never polled
+    reset();scenario=0;finish=1000000;work();
+    uint32_t refresh_delay=monitor_devices_refresh_delay_ms();
+    assert(refresh_delay>0 && refresh_delay<=30000);
+    clock_valid=false;assert(monitor_devices_refresh_delay_ms()==0);
     puts("Devices worker: missing/invalid config, offline/HTTPS clock gate, fixed polling/no spin, first/unchanged data, 90s stale expiry, auth failure, recovery, disconnect/config races and configuration removal: PASS");
 }
 '''

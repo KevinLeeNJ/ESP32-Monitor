@@ -95,9 +95,9 @@ Config 带 device/session/request_id、`config_epoch` UUID、非零 `config_revi
 | devices | enabled；启用时 devices_api_url、devices_token；URL 最多192字节，禁止 userinfo/query/fragment，Token 最多128字节且字符受限 |
 | time | enabled 必须 true，utc_offset_minutes 在 −720～840 |
 
-关闭的 weather/devices 组不带其可选秘密/坐标字段。新 epoch 可重新开始 revision；同 epoch 旧 revision 或同 revision 异内容为 config_conflict。先完整校验，再建立候选 worker 并替换，失败保留原配置；applied ACK 回显 epoch/revision 与 weather_configured/devices_configured。ACK 只证明配置应用，不证明上游请求已成功。
+Config 另带可选 `weather_delay_ms`（≤900000）与 `devices_delay_ms`（≤30000）：设备已服务当前墙钟时隙时，给出到下一个天气 900 秒 / Devices 30 秒时隙的毫秒数，否则为 0。Client 首次抓取按此等待，之后与设备相同地对齐墙钟时隙；字段缺省（旧固件）时立即抓取。这样连接 Client 不会改变 Page 1 天气与 Devices 的更新时隙；退出会话时设备恢复本地直连并立即取一次最新值，随后仍按同一时隙继续。关闭的 weather/devices 组不带其可选秘密/坐标字段。新 epoch 可重新开始 revision；同 epoch 旧 revision 或同 revision 异内容为 config_conflict。先完整校验，再建立候选 worker 并替换，失败保留原配置；applied ACK 回显 epoch/revision 与 weather_configured/devices_configured。ACK 只证明配置应用，不证明上游请求已成功。
 
-天气/AQI 启动后及每 15 分钟获取；devices 每 30 秒获取（**不能为省电降低该频率**）。Devices URL 是基地址，Client 追加 `/v2/devices/summary`，只用只读 Token。设备使用 IP 定位时，由设备通过 ipwho.is 定位并向 Client 提供坐标；定位成功前不启用代理天气，避免使用 Client 的代理出口位置。请求有超时、体积限制与重定向限制。Client 使用设备配置的 HTTP/HTTPS 地址，支持局域网 IP 和域名，无需额外授权。
+天气/AQI 按 900 秒墙钟时隙获取，devices 按 30 秒墙钟时隙获取（**不能为省电降低该频率**）。会话开始时 Client 按 Config 的 delay 提示延续设备时隙：未到刷新点不立即抓取，Page 1 继续显示 Standalone 已取得的数据；到时抓取后按同一墙钟时隙继续。Devices URL 是基地址，Client 追加 `/v2/devices/summary`，只用只读 Token。IP 定位模式由 Client 通过 ipwho.is 获取坐标与城市：失败时退避重试（1秒起倍增、上限30秒），成功后本会话缓存坐标。定位成功或已手动配置坐标是天气/AQI 请求的前置条件，定位失败且无坐标则不触发天气更新。城市经可选 `WeatherData.city`（≤31字节）下发，坐标模式不带城市。切换为 LAN/Serial 接管时，设备端不重新定位、不立即拉取天气或 AQI，Standalone 已取得的位置与天气保持缓存；会话结束后恢复本地直连。请求有超时、体积限制与重定向限制。Client 使用设备配置的 HTTP/HTTPS 地址，支持局域网 IP 和域名，无需额外授权。
 
 时间快照来自本机 system_clock，当前 `trusted=false`，不能宣称 Client 已验证上位机时钟准确。板载电池和温湿度始终由固件本地采集，不被上位机指标覆盖。
 

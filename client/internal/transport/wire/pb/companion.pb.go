@@ -1206,8 +1206,14 @@ type Config struct {
 	Weather         *WeatherConfig         `protobuf:"bytes,7,req,name=weather" json:"weather,omitempty"`
 	Devices         *DevicesConfig         `protobuf:"bytes,8,req,name=devices" json:"devices,omitempty"`
 	Time            *TimeConfig            `protobuf:"bytes,9,req,name=time" json:"time,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Milliseconds until the device's next wall-clock refresh slot. The Client
+	// waits this long before its first fetch, then follows the same 900 s
+	// weather and 30 s Devices slots, so Page one keeps the standalone cadence.
+	// Absent means fetch immediately.
+	WeatherDelayMs *uint32 `protobuf:"varint,10,opt,name=weather_delay_ms,json=weatherDelayMs" json:"weather_delay_ms,omitempty"`
+	DevicesDelayMs *uint32 `protobuf:"varint,11,opt,name=devices_delay_ms,json=devicesDelayMs" json:"devices_delay_ms,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Config) Reset() {
@@ -1301,6 +1307,20 @@ func (x *Config) GetTime() *TimeConfig {
 		return x.Time
 	}
 	return nil
+}
+
+func (x *Config) GetWeatherDelayMs() uint32 {
+	if x != nil && x.WeatherDelayMs != nil {
+		return *x.WeatherDelayMs
+	}
+	return 0
+}
+
+func (x *Config) GetDevicesDelayMs() uint32 {
+	if x != nil && x.DevicesDelayMs != nil {
+		return *x.DevicesDelayMs
+	}
+	return 0
 }
 
 type WeatherConfig struct {
@@ -4925,6 +4945,7 @@ type WeatherData struct {
 	Latitude       *float64               `protobuf:"fixed64,2,opt,name=latitude" json:"latitude,omitempty"`
 	Longitude      *float64               `protobuf:"fixed64,3,opt,name=longitude" json:"longitude,omitempty"`
 	LocationSource *string                `protobuf:"bytes,4,req,name=location_source,json=locationSource" json:"location_source,omitempty"`
+	City           *string                `protobuf:"bytes,5,opt,name=city" json:"city,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -4983,6 +5004,13 @@ func (x *WeatherData) GetLongitude() float64 {
 func (x *WeatherData) GetLocationSource() string {
 	if x != nil && x.LocationSource != nil {
 		return *x.LocationSource
+	}
+	return ""
+}
+
+func (x *WeatherData) GetCity() string {
+	if x != nil && x.City != nil {
+		return *x.City
 	}
 	return ""
 }
@@ -5160,7 +5188,7 @@ const file_internal_transport_wire_companion_proto_rawDesc = "" +
 	"\asent_at\x18\x06 \x02(\x12R\x06sentAt\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\a \x01(\tR\trequestId\x12\x12\n" +
-	"\x04data\x18\b \x02(\fR\x04data\"\x94\x03\n" +
+	"\x04data\x18\b \x02(\fR\x04data\"\xe8\x03\n" +
 	"\x06Config\x12)\n" +
 	"\x10protocol_version\x18\x01 \x02(\x11R\x0fprotocolVersion\x12\x1d\n" +
 	"\n" +
@@ -5172,7 +5200,10 @@ const file_internal_transport_wire_companion_proto_rawDesc = "" +
 	"\x0fconfig_revision\x18\x06 \x02(\rR\x0econfigRevision\x12?\n" +
 	"\aweather\x18\a \x02(\v2%.esp32monitor.companion.WeatherConfigR\aweather\x12?\n" +
 	"\adevices\x18\b \x02(\v2%.esp32monitor.companion.DevicesConfigR\adevices\x126\n" +
-	"\x04time\x18\t \x02(\v2\".esp32monitor.companion.TimeConfigR\x04time\"\xd0\x01\n" +
+	"\x04time\x18\t \x02(\v2\".esp32monitor.companion.TimeConfigR\x04time\x12(\n" +
+	"\x10weather_delay_ms\x18\n" +
+	" \x01(\rR\x0eweatherDelayMs\x12(\n" +
+	"\x10devices_delay_ms\x18\v \x01(\rR\x0edevicesDelayMs\"\xd0\x01\n" +
 	"\rWeatherConfig\x12\x18\n" +
 	"\aenabled\x18\x01 \x02(\bR\aenabled\x12#\n" +
 	"\rlocation_mode\x18\x02 \x02(\tR\flocationMode\x12\x1a\n" +
@@ -5532,12 +5563,13 @@ const file_internal_transport_wire_companion_proto_rawDesc = "" +
 	"\x06source\x18\x04 \x01(\tR\x06source\x12\x1a\n" +
 	"\bduration\x18\x05 \x01(\x01R\bduration\x12\x1a\n" +
 	"\bposition\x18\x06 \x01(\x01R\bposition\x120\n" +
-	"\x14position_observed_at\x18\a \x01(\x12R\x12positionObservedAt\"\x8e\x01\n" +
+	"\x14position_observed_at\x18\a \x01(\x12R\x12positionObservedAt\"\xa2\x01\n" +
 	"\vWeatherData\x12\x1c\n" +
 	"\tcondition\x18\x01 \x02(\x11R\tcondition\x12\x1a\n" +
 	"\blatitude\x18\x02 \x01(\x01R\blatitude\x12\x1c\n" +
 	"\tlongitude\x18\x03 \x01(\x01R\tlongitude\x12'\n" +
-	"\x0flocation_source\x18\x04 \x02(\tR\x0elocationSource\"5\n" +
+	"\x0flocation_source\x18\x04 \x02(\tR\x0elocationSource\x12\x12\n" +
+	"\x04city\x18\x05 \x01(\tR\x04city\"5\n" +
 	"\aAQIData\x12\x14\n" +
 	"\x05value\x18\x01 \x02(\rR\x05value\x12\x14\n" +
 	"\x05scale\x18\x02 \x02(\tR\x05scaleB1Z/esp32-monitor/client/internal/transport/wire/pb"

@@ -132,7 +132,7 @@ static bool percent_of(const esp32monitor_companion_QuotaWindow *w, int *percent
 
 static int closest_window(const esp32monitor_companion_QuotaData *q, int64_t minutes, int skip)
 {
-    int best = -1, best_percent = -1;
+    int best = -1;
     int64_t best_distance = 0;
     for (unsigned i = 0; i < q->windows_count; i++) {
         if ((int)i == skip || !q->windows[i].has_window_minutes) continue;
@@ -141,7 +141,7 @@ static int closest_window(const esp32monitor_companion_QuotaData *q, int64_t min
         int64_t distance = q->windows[i].window_minutes - minutes;
         if (distance < 0) distance = -distance;
         if (best < 0 || distance < best_distance) {
-            best = (int)i; best_percent = percent; best_distance = distance;
+            best = (int)i; best_distance = distance;
         }
     }
     return best >= 0 ? best : -1;
@@ -217,8 +217,14 @@ static void build_music(const esp32monitor_companion_MusicSection *section,
 static void build_weather(const esp32monitor_companion_WeatherSection *section,
                           const view_clock_t *clock, monitor_companion_view_t *out)
 {
+    if (!strcmp(section->state, "starting")) {
+        out->weather_pending = true;
+        return;
+    }
     int64_t age = section_age(clock, "proxy.weather", section->has_age_ms, section->age_ms);
     if (!usable(section->state, age, section->expire_after_ms, section->has_data)) return;
+    if (section->data.has_city)
+        snprintf(out->city, sizeof out->city, "%s", section->data.city);
     int condition = section->data.condition;
     if (condition < 0 || condition > 15) return;
     out->weather_valid = true;
@@ -228,6 +234,10 @@ static void build_weather(const esp32monitor_companion_WeatherSection *section,
 static void build_aqi(const esp32monitor_companion_AQISection *section,
                       const view_clock_t *clock, monitor_companion_view_t *out)
 {
+    if (!strcmp(section->state, "starting")) {
+        out->aqi_pending = true;
+        return;
+    }
     int64_t age = section_age(clock, "proxy.aqi", section->has_age_ms, section->age_ms);
     if (!usable(section->state, age, section->expire_after_ms, section->has_data)) return;
     if (section->data.value > 500) return;
@@ -291,6 +301,7 @@ static void build_devices(const esp32monitor_companion_DevicesSection *section,
     }
     if (!strcmp(section->state, "starting")) {
         devices->status = MONITOR_DEVICES_WAITING;
+        out->devices_pending = true;
         return;
     }
     if (!section->has_data || section->data.device_count < 0 ||
@@ -302,6 +313,7 @@ static void build_devices(const esp32monitor_companion_DevicesSection *section,
         return;
     }
     devices->count = (uint8_t)section->data.device_count;
+    out->devices_valid = true;
     devices->status = age >= section->stale_after_ms ? MONITOR_DEVICES_STALE : MONITOR_DEVICES_READY;
     for (unsigned i = 0; i < devices->count; i++) {
         const esp32monitor_companion_DeviceCard *card = &section->data.devices[i];

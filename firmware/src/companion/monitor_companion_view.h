@@ -17,13 +17,21 @@ typedef struct {
      * never replaced. */
     bool weather_valid;
     monitor_weather_condition_t weather_condition;
+    /* The proxy worker exists but has not reached its first scheduled fetch.
+     * Page one keeps the cached standalone values until the slot arrives. */
+    bool weather_pending;
+    /* IP-geolocation city name; empty when the client has none. */
+    char city[32];
     bool aqi_valid;
+    bool aqi_pending;
     int aqi;
     bool time_valid;
     int64_t time_utc_ms;
     char time_text[8];
     char date_text[16];
     bool proxy_owned;
+    bool devices_valid;
+    bool devices_pending;
     monitor_devices_snapshot_t devices;
 } monitor_companion_view_t;
 

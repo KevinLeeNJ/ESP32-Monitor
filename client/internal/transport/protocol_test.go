@@ -37,13 +37,50 @@ func TestConfigValidation(t *testing.T) {
 		c.Devices = wire.DevicesConfig{Enabled: true, URL: wire.Ptr("ftp://server.example"), Token: wire.Ptr("token")}
 	}, func(c *wire.Config) {
 		c.Devices = wire.DevicesConfig{Enabled: true, URL: wire.Ptr("https://server.example/?key=x"), Token: wire.Ptr("token")}
-	}}
+	}, func(c *wire.Config) { c.WeatherDelayMS = wire.Ptr(uint32(900001)) }, func(c *wire.Config) { c.DevicesDelayMS = wire.Ptr(uint32(30001)) }}
 	for i, change := range tests {
 		c := base
 		change(&c)
 		if validateConfig(c) == nil {
 			t.Errorf("accepted %d", i)
 		}
+	}
+	bounded := base
+	bounded.WeatherDelayMS = wire.Ptr(uint32(900000))
+	bounded.DevicesDelayMS = wire.Ptr(uint32(30000))
+	if e := validateConfig(bounded); e != nil {
+		t.Fatalf("slot bounds rejected: %v", e)
+	}
+}
+
+// The device's cadence hint survives the protobuf roundtrip, including a
+// present zero, while an older device without the field keeps it absent.
+func TestConfigDelayHintPresence(t *testing.T) {
+	cfg := disabledConfig()
+	cfg.WeatherDelayMS = wire.Ptr(uint32(42))
+	cfg.DevicesDelayMS = wire.Ptr(uint32(0))
+	body, err := wire.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out wire.Config
+	if err = wire.Decode(body, &out, wire.MaxMessage); err != nil {
+		t.Fatal(err)
+	}
+	if out.WeatherDelayMS == nil || *out.WeatherDelayMS != 42 ||
+		out.DevicesDelayMS == nil || *out.DevicesDelayMS != 0 {
+		t.Fatalf("delay hints = %v/%v", out.WeatherDelayMS, out.DevicesDelayMS)
+	}
+	body, err = wire.Marshal(disabledConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var absent wire.Config
+	if err = wire.Decode(body, &absent, wire.MaxMessage); err != nil {
+		t.Fatal(err)
+	}
+	if absent.WeatherDelayMS != nil || absent.DevicesDelayMS != nil {
+		t.Fatalf("absent hints decoded as %v/%v", absent.WeatherDelayMS, absent.DevicesDelayMS)
 	}
 }
 
@@ -121,7 +158,7 @@ func TestWeatherProxyUsesConfiguredScheme(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &proxyWorker{config: cfg, client: server.Client(), now: time.Now, successTimes: map[*wire.Section]time.Time{}}
-	p.weather(context.Background(), 31.2, 121.5)
+	p.weather(context.Background(), 31.2, 121.5, "")
 	if !paths["/v7/weather/now"] || !paths["/airquality/v1/current/31.20000/121.50000"] {
 		t.Fatalf("requests: %v", paths)
 	}

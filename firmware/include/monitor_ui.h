@@ -31,6 +31,8 @@ typedef enum {
     MONITOR_WIFI_OFFLINE,
     /* Companion serial session owns the link; the radio is suspended. */
     MONITOR_WIFI_SERIAL,
+    /* Authenticated LAN companion session owns the proxied data. */
+    MONITOR_WIFI_LAN,
 } monitor_wifi_state_t;
 
 typedef enum {
@@ -60,6 +62,7 @@ typedef struct {
     int temperature_tenths_c;
     int humidity_percent;
     int aqi;
+    char city_text[32];
 } monitor_ui_demo_data_t;
 
 typedef struct {
@@ -71,6 +74,8 @@ typedef struct {
     int temperature_tenths_c;
     int humidity_percent;
     int aqi;
+    /* NULL or empty hides the vertical city label. */
+    const char *city_text;
     bool profiling;
 } monitor_ui_snapshot_t;
 

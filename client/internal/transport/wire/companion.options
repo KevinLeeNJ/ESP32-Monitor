@@ -96,6 +96,7 @@ esp32monitor.companion.CurrentMusic.title max_size:513
 esp32monitor.companion.CurrentMusic.artist max_size:513
 esp32monitor.companion.CurrentMusic.source max_size:129
 esp32monitor.companion.WeatherData.location_source max_size:32
+esp32monitor.companion.WeatherData.city max_size:32
 esp32monitor.companion.AQIData.scale max_size:32
 esp32monitor.companion.DeviceSummary.devices max_count:4
 esp32monitor.companion.DeviceCard.name max_size:9

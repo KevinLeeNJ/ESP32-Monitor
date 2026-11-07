@@ -1,4 +1,5 @@
 #include "monitor_companion_config.h"
+#include "monitor_devices.h"
 #include "monitor_devices_data.h"
 #include "monitor_weather.h"
 #include "nvs.h"
@@ -29,6 +30,12 @@ esp_err_t monitor_companion_config_read(esp32monitor_companion_Config *config)
     config->time.enabled = true;
     config->time.utc_offset_minutes = 480; /* monitor_clock currently sets CST-8 */
     strcpy(config->weather.location_mode,"ip");
+    /* Page one keeps the device's wall-clock slots after a companion takeover:
+     * tell the Client how long to wait for its first weather/Devices fetch. */
+    config->has_weather_delay_ms = true;
+    config->weather_delay_ms = monitor_weather_refresh_delay_ms();
+    config->has_devices_delay_ms = true;
+    config->devices_delay_ms = monitor_devices_refresh_delay_ms();
     nvs_handle_t nvs;
     esp_err_t error=nvs_open("monitor_loc",NVS_READONLY,&nvs);
     if (error == ESP_ERR_NVS_NOT_FOUND) return ESP_OK;

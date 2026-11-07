@@ -179,6 +179,8 @@ static void proxy(void)
     p->weather.stale_after_ms = 1800000; p->weather.expire_after_ms = 7200000;
     p->weather.has_data = true;
     p->weather.data.condition = 4;
+    p->weather.data.has_city = true;
+    strcpy(p->weather.data.city, "Beijing");
     strcpy(p->aqi.state, "healthy");
     p->aqi.stale_after_ms = 1800000; p->aqi.expire_after_ms = 7200000;
     p->aqi.has_data = true;
@@ -213,10 +215,13 @@ static void proxy(void)
     monitor_companion_view_build(&s, NULL, 0, 0, &view);
     assert(view.proxy_owned);
     assert(view.weather_valid && view.weather_condition == MONITOR_WEATHER_LIGHT_RAIN);
+    assert(!strcmp(view.city, "Beijing"));
     assert(view.aqi_valid && view.aqi == 42);
     assert(view.time_valid);
     assert(!strcmp(view.time_text, "16:00"));
     assert(!strcmp(view.date_text, "FRI 15 JAN"));
+    assert(!view.weather_pending && !view.aqi_pending);
+    assert(view.devices_valid && !view.devices_pending);
     assert(view.devices.count == 2);
     assert(view.devices.status == MONITOR_DEVICES_READY);
     assert(!strcmp(view.devices.devices[0].name, "NAS"));
@@ -224,6 +229,12 @@ static void proxy(void)
     assert(view.devices.devices[0].metrics[0].percent_valid);
     assert(view.devices.devices[0].metrics[0].percent == 12);
     assert(!strcmp(view.devices.devices[1].name, "PI"));
+
+    /* An older Client without the optional city field must not leave stale text. */
+    p->weather.data.has_city = false;
+    monitor_companion_view_build(&s, NULL, 0, 0, &view);
+    assert(view.weather_valid);
+    assert(view.city[0] == '\0');
 
     strcpy(p->devices.state, "auth_required");
     p->devices.has_data = false;
@@ -241,6 +252,17 @@ static void proxy(void)
     monitor_companion_view_build(&s, NULL, 2000, 0, &view);
     assert(view.devices.count == 0);
     assert(view.devices.status == MONITOR_DEVICES_UNAVAILABLE);
+
+    /* The Client waits for the device's next wall-clock slot after takeover. */
+    strcpy(p->weather.state, "starting");
+    strcpy(p->aqi.state, "starting");
+    strcpy(p->devices.state, "starting");
+    p->weather.has_data = p->aqi.has_data = p->devices.has_data = false;
+    monitor_companion_view_build(&s, NULL, 0, 0, &view);
+    assert(view.proxy_owned);
+    assert(view.weather_pending && view.aqi_pending && view.devices_pending);
+    assert(!view.weather_valid && !view.aqi_valid && !view.devices_valid);
+    assert(view.devices.status == MONITOR_DEVICES_WAITING && view.devices.count == 0);
 }
 
 static void leases(void)
