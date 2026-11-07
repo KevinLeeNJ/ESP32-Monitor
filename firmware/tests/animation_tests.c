@@ -485,6 +485,9 @@ static void test_configuring_to_offline(void)
     settle(&r);
     lv_obj_t *date = lv_obj_get_child_by_name(r.root, "clock_date");
     CHECK(date && !strcmp(lv_label_get_text(date), "Configuring"), "configuration status overrides date");
+    lv_obj_t *dots = lv_obj_get_child_by_name(r.root, "week_dots");
+    CHECK(dots && (int)(uintptr_t)lv_obj_get_user_data(dots) == 6,
+          "Saturday fills six weekday dots even while a status overrides the date");
     lv_obj_t *temp = lv_obj_get_child_by_name(r.root, "temperature_card");
     lv_obj_t *clip = lv_obj_get_child_by_name(temp, "value_viewport");
     lv_obj_t *visible = lv_obj_get_child(clip, lv_obj_has_flag(lv_obj_get_child(clip, 0), LV_OBJ_FLAG_HIDDEN) ? 1 : 0);
@@ -504,7 +507,7 @@ static void test_configuring_to_offline(void)
     settle(&r);
     ui.wifi_state = MONITOR_WIFI_CONNECTED;
     monitor_ui_apply_snapshot(r.root, &ui);
-    CHECK(!strcmp(lv_label_get_text(date), "SAT 24 OCT"), "connection restores date");
+    CHECK(!strcmp(lv_label_get_text(date), "24 OCT"), "connection restores date without weekday text");
     for (int state = MONITOR_WIFI_PROVISIONING; state <= MONITOR_WIFI_OFFLINE; ++state) {
         ui.wifi_state = (monitor_wifi_state_t)state;
         ui.profiling = true;
@@ -514,7 +517,7 @@ static void test_configuring_to_offline(void)
     ui.profiling = false;
     ui.wifi_state = MONITOR_WIFI_CONNECTED;
     monitor_ui_apply_snapshot(r.root, &ui);
-    CHECK(!strcmp(lv_label_get_text(date), "SAT 24 OCT"), "profiling completion restores current date");
+    CHECK(!strcmp(lv_label_get_text(date), "24 OCT"), "profiling completion restores current date");
     monitor_renderer_deinit(&r);
 }
 

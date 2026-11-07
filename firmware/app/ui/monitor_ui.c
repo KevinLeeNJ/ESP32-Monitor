@@ -22,6 +22,13 @@
 /* Font Awesome 5 globe (0xF0AC); LVGL has no built-in symbol for it. */
 #define MONITOR_SYMBOL_GLOBE "\xef\x82\xac"
 #define CITY_MAX_CHARS 16
+/* Seven binary weekday dots: filled through today, hollow for the rest. */
+#define WEEK_DOTS_COUNT 7
+#define WEEK_DOTS_SIZE 8
+#define WEEK_DOTS_GAP 2
+#define WEEK_DOTS_X 119
+#define WEEK_DOTS_Y 13
+#define WEEK_DOTS_HEIGHT (WEEK_DOTS_COUNT * WEEK_DOTS_SIZE + (WEEK_DOTS_COUNT - 1) * WEEK_DOTS_GAP)
 
 extern const lv_image_dsc_t monitor_weather_clear;
 extern const lv_image_dsc_t monitor_weather_partly_cloudy;
@@ -105,6 +112,8 @@ typedef struct {
     lv_obj_t *wifi_slash;
     lv_obj_t *city_label;
     char city_text[32];
+    lv_obj_t *week_dots;
+    int32_t week_key;
     info_roll_t info[4]; /* weather, temperature, humidity, AQI */
     bool animations_enabled;
     motion_phase_t phase;
@@ -526,8 +535,77 @@ static void position_city(monitor_ui_state_t *state)
     lv_text_get_size(&date_size, lv_label_get_text(state->date_label), &monitor_misans_12,
                      0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
     const int32_t x = 16 + date_size.x + 6;
+    const int32_t limit = WEEK_DOTS_X - 4;
     lv_obj_set_x(state->city_label, x);
-    lv_obj_set_width(state->city_label, 148 - x);
+    lv_obj_set_width(state->city_label, limit > x ? limit - x : 0);
+}
+
+static void week_dots_draw(lv_event_t *event)
+{
+    lv_obj_t *obj = lv_event_get_target(event);
+    lv_layer_t *layer = lv_event_get_layer(event);
+    const int filled = (int)(uintptr_t)lv_obj_get_user_data(obj);
+    lv_area_t box;
+    lv_obj_get_coords(obj, &box);
+
+    lv_draw_rect_dsc_t dsc;
+    lv_draw_rect_dsc_init(&dsc);
+    dsc.radius = LV_RADIUS_CIRCLE;
+    dsc.bg_color = lv_obj_get_style_border_color(obj, 0);
+    dsc.border_color = dsc.bg_color;
+    dsc.border_width = 1;
+    for(int i = 0; i < WEEK_DOTS_COUNT; ++i) {
+        const int32_t top = box.y1 + i * (WEEK_DOTS_SIZE + WEEK_DOTS_GAP);
+        lv_area_t dot = {box.x1, top, box.x1 + WEEK_DOTS_SIZE - 1, top + WEEK_DOTS_SIZE - 1};
+        const bool on = i < filled;
+        dsc.bg_opa = on ? LV_OPA_COVER : LV_OPA_TRANSP;
+        dsc.border_opa = on ? LV_OPA_TRANSP : LV_OPA_COVER;
+        lv_draw_rect(layer, &dsc, &dot);
+    }
+}
+
+static int weekday_from_date(const char *date)
+{
+    static const char *const names[WEEK_DOTS_COUNT] = {"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"};
+    if(date == NULL) return -1;
+    for(int i = 0; i < WEEK_DOTS_COUNT; ++i)
+        if(strncmp(date, names[i], 3) == 0) return i;
+    return -1;
+}
+
+static int hour_from_time(const char *time)
+{
+    if(time == NULL || time[0] < '0' || time[0] > '9' ||
+       time[1] < '0' || time[1] > '9' || time[2] != ':') return -1;
+    const int hour = (time[0] - '0') * 10 + (time[1] - '0');
+    return hour < 24 ? hour : -1;
+}
+
+/* The dots replace the weekday text: "MON 18 OCT" reads as "18 OCT". */
+static const char *date_body(const char *date)
+{
+    return weekday_from_date(date) >= 0 && date[3] == ' ' ? date + 4 : date;
+}
+
+static void update_week_dots(monitor_ui_state_t *state, const char *time_text, const char *date_text)
+{
+    /* NULL means the caller has no date opinion (status-only snapshots keep
+     * the current week); an explicit non-date string hides the dots. */
+    if(date_text == NULL) return;
+    const int weekday = weekday_from_date(date_text);
+    const int hour = hour_from_time(time_text);
+    const int key = weekday >= 0 && hour >= 0 ? weekday * 24 + hour : -1;
+    if(key == state->week_key) return;
+    state->week_key = key;
+    if(key < 0) {
+        lv_obj_add_flag(state->week_dots, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_clear_flag(state->week_dots, LV_OBJ_FLAG_HIDDEN);
+    const int filled = weekday + 1;
+    if((int)(uintptr_t)lv_obj_get_user_data(state->week_dots) == filled) return;
+    lv_obj_set_user_data(state->week_dots, (void *)(uintptr_t)filled);
+    lv_obj_invalidate(state->week_dots);
 }
 
 void monitor_ui_apply_snapshot(lv_obj_t *root, const monitor_ui_snapshot_t *snapshot)
@@ -541,8 +619,9 @@ void monitor_ui_apply_snapshot(lv_obj_t *root, const monitor_ui_snapshot_t *snap
                        snapshot->wifi_state == MONITOR_WIFI_PROVISIONING ? "Configuring" :
                        snapshot->wifi_state == MONITOR_WIFI_OFFLINE ? "Offline" :
                        snapshot->wifi_state == MONITOR_WIFI_DISCONNECTED ? "Connecting" : snapshot->date_text;
-    if (date && strcmp(lv_label_get_text(state->date_label), date) != 0)
-        lv_label_set_text(state->date_label, date);
+    const char *shown = date != NULL ? date_body(date) : NULL;
+    if (shown && strcmp(lv_label_get_text(state->date_label), shown) != 0)
+        lv_label_set_text(state->date_label, shown);
     if (state->wifi_state != snapshot->wifi_state) {
         state->wifi_state = snapshot->wifi_state;
         lv_label_set_text(state->wifi_label, wifi_state_symbol(snapshot->wifi_state));
@@ -553,6 +632,7 @@ void monitor_ui_apply_snapshot(lv_obj_t *root, const monitor_ui_snapshot_t *snap
     }
     update_city(state, snapshot->city_text);
     position_city(state);
+    update_week_dots(state, snapshot->time_text, snapshot->date_text);
     snprintf(text, sizeof(text), snapshot->battery_percent < 0 ? "--" : "%d%%", snapshot->battery_percent);
     if (strcmp(lv_label_get_text(state->battery_label), text) != 0) {
         lv_label_set_text(state->battery_label, text);
@@ -1149,7 +1229,7 @@ lv_obj_t *monitor_ui_create_with_devices_battery_wifi_variant(lv_obj_t *parent,
     /* Header: time and four compact rounded data cards. Weather has no text
      * label; temperature and humidity are identified by sourced icons. */
     make_clock(state);
-    state->date_label = make_label(root, clock_date_text, 16, 43, &monitor_misans_12, COLOR_MUTED);
+    state->date_label = make_label(root, date_body(clock_date_text), 16, 43, &monitor_misans_12, COLOR_MUTED);
     set_name(state->date_label, "clock_date");
     state->wifi_label = make_wifi_status(root, wifi_state);
     state->wifi_slash = lv_obj_get_child_by_name(root, "wifi_slash");
@@ -1163,6 +1243,13 @@ lv_obj_t *monitor_ui_create_with_devices_battery_wifi_variant(lv_obj_t *parent,
     lv_obj_add_flag(state->city_label, LV_OBJ_FLAG_HIDDEN);
     update_city(state, demo_data.city_text);
     position_city(state);
+
+    state->week_dots = make_box(root, WEEK_DOTS_X, WEEK_DOTS_Y, WEEK_DOTS_SIZE,
+                                WEEK_DOTS_HEIGHT, 0, COLOR_WHITE, 0, COLOR_BLACK);
+    set_name(state->week_dots, "week_dots");
+    lv_obj_add_event_cb(state->week_dots, week_dots_draw, LV_EVENT_DRAW_MAIN, NULL);
+    state->week_key = -1;
+    update_week_dots(state, clock_time_text, clock_date_text);
 
     /* Keep the four data cards together as a 2x2 block in the upper-right. */
     const monitor_weather_condition_t weather_condition = demo_data.weather_condition;
