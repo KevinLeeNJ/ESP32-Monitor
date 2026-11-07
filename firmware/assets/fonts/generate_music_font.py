@@ -31,7 +31,9 @@ fusion_source = root / 'client/frontend/public/fonts/fusion-pixel-zh-hans-12px.w
 misans_source = args.misans.resolve(strict=True)
 output = root / 'firmware/app/ui/fonts'
 # MiSans covers Latin, punctuation, symbols, kana, fullwidth forms and CJK.
-misans = '0x20-0x7e,0xa0-0xff,0x2000-0x206f,0x2605-0x2606,0x3000-0x30ff,0xff00-0xffef,0x3400-0x9fff'
+# CJK Extension A (0x3400-0x4dbf) is omitted: music metadata rarely uses it
+# and its sparse cmap alone costs tens of kilobytes of flash.
+misans = '0x20-0x7e,0xa0-0xff,0x2000-0x206f,0x2605-0x2606,0x3000-0x30ff,0xff00-0xffef,0x4e00-0x9fff'
 # Fallback only for glyphs MiSans lacks. Split the 18px bitmap below
 # LVGL's 20-bit bitmap-index limit.
 fallback = '0xac00-0xd7a3,0x266a-0x266b'

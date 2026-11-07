@@ -25,8 +25,10 @@
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
 
-extern const char index_html_start[] asm("_binary_wifi_configuration_html_start");
-extern const char done_html_start[] asm("_binary_wifi_configuration_done_html_start");
+extern const char index_html_start[] asm("_binary_wifi_configuration_html_gz_start");
+extern const char index_html_end[] asm("_binary_wifi_configuration_html_gz_end");
+extern const char done_html_start[] asm("_binary_wifi_configuration_done_html_gz_start");
+extern const char done_html_end[] asm("_binary_wifi_configuration_done_html_gz_end");
 
 WifiConfigurationAp::WifiConfigurationAp()
 {
@@ -303,10 +305,12 @@ bool WifiConfigurationAp::StartWebServer()
         .uri = "/",
         .method = HTTP_GET,
         .handler = [](httpd_req_t *req) -> esp_err_t {
+            httpd_resp_set_type(req, "text/html");
+            httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
             httpd_resp_set_hdr(req, "Connection", "close");
             httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate");
             httpd_resp_set_hdr(req, "Pragma", "no-cache");
-            httpd_resp_send(req, index_html_start, strlen(index_html_start));
+            httpd_resp_send(req, index_html_start, index_html_end - index_html_start);
             return ESP_OK;
         },
         .user_ctx = NULL
@@ -503,8 +507,10 @@ bool WifiConfigurationAp::StartWebServer()
         .uri = "/done.html",
         .method = HTTP_GET,
         .handler = [](httpd_req_t *req) -> esp_err_t {
+            httpd_resp_set_type(req, "text/html");
+            httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
             httpd_resp_set_hdr(req, "Connection", "close");
-            httpd_resp_send(req, done_html_start, strlen(done_html_start));
+            httpd_resp_send(req, done_html_start, done_html_end - done_html_start);
             return ESP_OK;
         },
         .user_ctx = NULL
