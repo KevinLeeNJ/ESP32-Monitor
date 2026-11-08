@@ -64,6 +64,7 @@ static void xTaskNotifyWait(unsigned a,unsigned b,uint32_t *bits,unsigned timeou
 }
 static monitor_weather_data_t s_data;
 static int64_t s_last_weather_slot = -1;
+static volatile int32_t s_handoff_until_slot;
 static const char *ip_body="{\"success\":true,\"latitude\":31.2,\"longitude\":121.5}";
 static const char *weather_body="{\"code\":\"200\",\"now\":{\"icon\":\"100\"}}";
 static const char *aqi_body="{\"indexes\":[{\"aqiDisplay\":\"42\"}]}";
@@ -110,10 +111,10 @@ static bool http_get(const char *url,char *out,size_t size,const char *api_key){
 }
 '''
 code+=defines(source,['RESPONSE_MAX','WEATHER_EVT_UPDATE','WEATHER_EVT_WIFI_CHANGED','LOCATION_ATTEMPTS','LOCATION_RETRY_BASE_MS'])+'\n'
-code+='\n'.join(function(source,name) for name in ['parse_coordinate','json_nonnegative_int','read_configured_location','locate_by_public_ip','locate_with_retry','condition_from_qweather','read_qweather_config','update_weather','monitor_weather_get','monitor_weather_refresh_delay_ms','weather_task','monitor_weather_request_refresh','monitor_weather_set_companion_active','monitor_weather_on_wifi_connected','monitor_weather_on_wifi_disconnected','monitor_weather_on_time_valid','monitor_weather_start'])
+code+='\n'.join(function(source,name) for name in ['handoff_hold','parse_coordinate','json_nonnegative_int','read_configured_location','locate_by_public_ip','locate_with_retry','condition_from_qweather','read_qweather_config','update_weather','monitor_weather_get','monitor_weather_refresh_delay_ms','weather_task','monitor_weather_request_refresh','monitor_weather_set_companion_active','monitor_weather_adopt_cached','monitor_weather_on_wifi_connected','monitor_weather_on_wifi_disconnected','monitor_weather_on_time_valid','monitor_weather_start'])
 code+=r'''
 static void reset(void){
-    s_data=(monitor_weather_data_t){.aqi=-1};s_last_weather_slot=-1;clock_ready=true;
+    s_data=(monitor_weather_data_t){.aqi=-1};s_last_weather_slot=-1;s_handoff_until_slot=0;clock_ready=true;
     notifications=opened=closed=reason=0;memset(http_calls,0,sizeof(http_calls));
     ip_fail=delay_count=0;s_wifi_available=false;companion_flip=false;worker_step=0;
     lat_text="31.2";lon_text="121.5";host="fixture.test";key="fixture-key";nvs_ok=alloc_ok=true;
@@ -183,9 +184,30 @@ int main(void){
     queued=0;monitor_weather_on_wifi_disconnected();assert(!s_wifi_available && queued==WEATHER_EVT_WIFI_CHANGED);
     queued=0;monitor_weather_on_wifi_connected();assert(s_wifi_available && queued==WEATHER_EVT_UPDATE);
     queued=0;monitor_weather_on_time_valid();assert(queued==WEATHER_EVT_UPDATE);
-    // Pausing for a companion session is silent; resuming in Standalone refreshes.
+    // Both companion edges are silent: the wall-clock 900 s slot owns resumes.
     queued=0;s_companion_active=false;monitor_weather_set_companion_active(true);assert(!queued);
-    queued=0;monitor_weather_set_companion_active(false);assert(queued==WEATHER_EVT_UPDATE);
+    queued=0;monitor_weather_set_companion_active(false);assert(!queued);
+    // Session end drops recovery updates until the next RTC 900 s slot.
+    reset();s_wifi_available=true;s_companion_active=false;
+    monitor_weather_set_companion_active(true);
+    monitor_weather_set_companion_active(false);
+    assert(s_handoff_until_slot>0);
+    worker_step=4;if(!setjmp(worker_done))weather_task(NULL);
+    assert(!http_calls[0]&&!http_calls[1]&&!http_calls[2]);
+    // The slot ends the hold; the next update runs normally.
+    s_handoff_until_slot=0;
+    worker_step=4;if(!setjmp(worker_done))weather_task(NULL);
+    assert(http_calls[1]==2&&http_calls[2]==2);
+    // Session end adopts the Client's last values without touching the network.
+    reset();monitor_weather_adopt_cached(MONITOR_WEATHER_FEW_CLOUDS,7,"Shanghai");
+    assert(s_data.weather_valid && s_data.condition==MONITOR_WEATHER_FEW_CLOUDS);
+    assert(s_data.aqi_valid && s_data.aqi==7 && !strcmp(s_data.city,"Shanghai"));
+    assert(notifications==1 && reason==MONITOR_REFRESH_WEATHER);
+    assert(!http_calls[0] && !http_calls[1] && !http_calls[2]);
+    // A source the Client never supplied keeps the cached standalone value.
+    monitor_weather_data_t kept=s_data;notifications=0;
+    monitor_weather_adopt_cached(MONITOR_WEATHER_UNKNOWN,-1,"");
+    assert(!memcmp(&kept,&s_data,sizeof(kept)) && notifications==0);
     reset();worker_step=0;if(!setjmp(worker_done))weather_task(NULL);
     assert(http_calls[1]==2 && http_calls[2]==2 && !http_calls[0]);
     // Companion takeover with cached Standalone data starts no location lookup

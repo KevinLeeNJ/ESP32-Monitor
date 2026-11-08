@@ -41,6 +41,20 @@ static portMUX_TYPE s_data_mux = portMUX_INITIALIZER_UNLOCKED;
 /* Wall-clock 900 s slot of the last scheduled attempt, so a companion session
  * can continue the same cadence instead of fetching on connect. */
 static int64_t s_last_weather_slot = -1;
+/* Wall-clock 900 s slot that ends a companion handoff. Recovery triggers must
+ * not fetch off the standalone grid; the clock task's boundary notification
+ * performs the first update. 0 means no handoff is pending. */
+static volatile int32_t s_handoff_until_slot;
+
+static bool handoff_hold(void)
+{
+    int32_t until = s_handoff_until_slot;
+    if (until <= 0) return false;
+    time_t now = time(NULL);
+    if (now > 0 && now / 900 < until) return true;
+    s_handoff_until_slot = 0;
+    return false;
+}
 static monitor_weather_data_t s_data = {
     .condition = MONITOR_WEATHER_CLEAR, .aqi = -1,
     .latitude = 0, .longitude = 0,
@@ -328,6 +342,8 @@ static bool read_qweather_config(char *host, size_t host_size, char *key, size_t
 static void update_weather(void)
 {
     feed_task_watchdog();
+    /* Any attempt ends a companion handoff: the next one is a regular slot. */
+    s_handoff_until_slot = 0;
     /* The clock scheduler fires on wall-clock 900 s slots; boot/Wi-Fi triggers
      * service the current slot too. Record it before the network work. */
     time_t requested_at = time(NULL);
@@ -451,9 +467,12 @@ static void weather_task(void *arg)
         feed_task_watchdog();
         /* A companion session owns weather, AQI and the city, so takeover must
          * not start a new location lookup or weather request. Standalone keeps
-         * its cached values while the Client's first snapshot is in flight. */
+         * its cached values while the Client's first snapshot is in flight.
+         * After a handoff, recovery notifications are dropped until the next
+         * wall-clock 900 s slot, which the clock task signals exactly at the
+         * boundary. */
         if (!s_companion_active && s_wifi_available && monitor_clock_is_valid() &&
-            (notified & WEATHER_EVT_UPDATE)) {
+            (notified & WEATHER_EVT_UPDATE) && !handoff_hold()) {
             update_weather();
         }
     }
@@ -475,11 +494,40 @@ void monitor_weather_set_companion_active(bool active)
 {
     if (s_companion_active == active) return;
     s_companion_active = active;
+    /* Both edges are silent: the Client owns the 900 s slot during a session,
+     * and on return the clock task wakes the next slot. Fetching here would
+     * restart the standalone phase. A Wi-Fi or time recovery that races the
+     * handoff is held until that same slot. */
+    if (active) {
+        s_handoff_until_slot = 0;
+    } else if (monitor_clock_is_valid()) {
+        time_t now = time(NULL);
+        if (now > 0) s_handoff_until_slot = (int32_t)((int64_t)now / 900 + 1);
+    }
     ESP_LOGI(TAG, "direct producer %s", active ? "paused" : "resumed");
-    /* Takeover is silent: the direct producer must not start location or
-     * weather work while the Client supplies them. Only returning to
-     * Standalone needs fresh data. */
-    if (!active) monitor_weather_request_refresh();
+}
+
+void monitor_weather_adopt_cached(monitor_weather_condition_t condition, int aqi,
+                                  const char *city)
+{
+    bool changed = false;
+    portENTER_CRITICAL(&s_data_mux);
+    if (condition != MONITOR_WEATHER_UNKNOWN) {
+        changed |= !s_data.weather_valid || s_data.condition != condition;
+        s_data.condition = condition;
+        s_data.weather_valid = true;
+    }
+    if (aqi >= 0) {
+        changed |= !s_data.aqi_valid || s_data.aqi != aqi;
+        s_data.aqi = aqi;
+        s_data.aqi_valid = true;
+    }
+    if (city && city[0] && strcmp(s_data.city, city)) {
+        snprintf(s_data.city, sizeof(s_data.city), "%s", city);
+        changed = true;
+    }
+    portEXIT_CRITICAL(&s_data_mux);
+    if (changed) monitor_display_refresh_request_reason(MONITOR_REFRESH_WEATHER);
 }
 
 static void log_dns_servers(void)

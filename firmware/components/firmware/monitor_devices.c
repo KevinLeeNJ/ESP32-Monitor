@@ -36,7 +36,21 @@ static int64_t s_last_success;
 /* Wall-clock 30 s slot of the last scheduled attempt, so a companion session
  * can continue the same cadence instead of polling on connect. */
 static int64_t s_last_devices_slot = -1;
+/* Wall-clock 30 s slot that ends a companion handoff: a Wi-Fi recovery during
+ * the handoff must not poll off the standalone grid. 0 when no handoff is
+ * pending; the clock task's boundary notification performs the first poll. */
+static volatile int32_t s_handoff_until_slot;
 static monitor_devices_snapshot_t s_snapshot;
+
+static bool handoff_hold(void)
+{
+    int32_t until = s_handoff_until_slot;
+    if (until <= 0) return false;
+    time_t now = time(NULL);
+    if (now > 0 && now / 30 < until) return true;
+    s_handoff_until_slot = 0;
+    return false;
+}
 
 /* Caller holds s_mux. Compare visible content only; successful identical
  * responses renew the lease without waking the display task. */
@@ -80,8 +94,34 @@ void monitor_devices_set_companion_active(bool active)
 {
     if (s_companion_active == active) return;
     s_companion_active = active;
+    /* Resuming waits for the clock task's next 30 s slot, continuing the
+     * standalone phase. The relative HTTP fallback has no wall-clock slot and
+     * needs the notification to reschedule its own timer. */
+    if (active) {
+        s_handoff_until_slot = 0;
+    } else if (monitor_clock_is_valid()) {
+        time_t now = time(NULL);
+        if (now > 0) s_handoff_until_slot = (int32_t)((int64_t)now / 30 + 1);
+    } else {
+        monitor_devices_request_refresh();
+    }
     ESP_LOGI(TAG, "direct producer %s", active ? "paused" : "resumed");
-    if (!active) monitor_devices_request_refresh();
+}
+void monitor_devices_adopt_snapshot(const monitor_devices_snapshot_t *snapshot)
+{
+    if (!snapshot) return;
+    bool changed;
+    portENTER_CRITICAL(&s_mux);
+    monitor_devices_snapshot_t next = *snapshot;
+    changed = publish(&next);
+    s_have_snapshot = true;
+    s_last_success = esp_timer_get_time();
+    portEXIT_CRITICAL(&s_mux);
+    if (s_expiry_timer) {
+        esp_timer_stop(s_expiry_timer);
+        esp_timer_start_once(s_expiry_timer, RETAIN_US);
+    }
+    notify_display(changed, true);
 }
 void monitor_devices_config_changed(void)
 {
@@ -410,13 +450,17 @@ static void devices_task(void *arg)
             initial_retry_used = false;
         }
         bool clock_ready = strncmp(config.url, "https://", 8) != 0 || monitor_clock_is_valid();
-        if (configured && wifi && clock_ready && now >= next_poll && !s_companion_active) {
+        /* After a companion handoff only the clock task's next wall-clock 30 s
+         * slot may poll; recovery notifications wait for that boundary. */
+        if (configured && wifi && clock_ready && now >= next_poll && !s_companion_active &&
+            !handoff_hold()) {
             monitor_devices_snapshot_t candidate = {0};
             int status = 0;
             /* The clock task owns :00/:30 polling while wall time is valid.
              * Keep a relative fallback only for HTTP before time is known. */
             next_poll = monitor_clock_is_valid() ? INT64_MAX : now + PERIOD_US;
             bool reused = false;
+            s_handoff_until_slot = 0;
             time_t requested_at = time(NULL);
             if (requested_at > 0) {
                 portENTER_CRITICAL(&s_mux);
@@ -478,7 +522,7 @@ static void devices_task(void *arg)
         int64_t wake = expiry;
         /* next_poll is stale while the companion session pauses direct polling;
          * gating on it collapses the wait to the 2ms retry and busy-polls. */
-        if (configured && wifi && !s_companion_active) {
+        if (configured && wifi && !s_companion_active && !handoff_hold()) {
             /* Time becoming valid wakes us through the clock task as well. */
             int64_t poll = clock_ready ? next_poll : INT64_MAX;
             if (poll < wake) wake = poll;

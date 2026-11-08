@@ -66,6 +66,40 @@ static bool companion_owns(bool pending, bool valid, bool seen)
     return !pending && (valid || seen);
 }
 
+/* Client-owned page-one values captured before build(NULL) clears the view. */
+typedef struct {
+    bool weather_valid;
+    monitor_weather_condition_t weather_condition;
+    bool aqi_valid;
+    int aqi;
+    char city[32];
+    bool devices_valid;
+    monitor_devices_snapshot_t devices;
+} companion_page_cache_t;
+
+static void capture_companion_page_cache(companion_page_cache_t *cache)
+{
+    memset(cache, 0, sizeof *cache);
+    cache->weather_valid = s_companion_view.weather_valid;
+    cache->weather_condition = s_companion_view.weather_condition;
+    cache->aqi_valid = s_companion_view.aqi_valid;
+    cache->aqi = s_companion_view.aqi;
+    snprintf(cache->city, sizeof cache->city, "%s", s_companion_view.city);
+    cache->devices_valid = s_companion_view.devices_valid;
+    cache->devices = s_companion_view.devices;
+}
+
+/* A session end hands the Client's last values to the direct producers, so
+ * page one keeps them while they wait for the next wall-clock slot. */
+static void adopt_companion_page_cache(const companion_page_cache_t *cache)
+{
+    if (cache->weather_valid || cache->aqi_valid || cache->city[0])
+        monitor_weather_adopt_cached(cache->weather_valid ? cache->weather_condition
+                                                          : MONITOR_WEATHER_UNKNOWN,
+                                     cache->aqi_valid ? cache->aqi : -1, cache->city);
+    if (cache->devices_valid) monitor_devices_adopt_snapshot(&cache->devices);
+}
+
 static void feed_task_watchdog(void)
 {
     ESP_ERROR_CHECK(esp_task_wdt_reset());
@@ -175,6 +209,11 @@ static bool apply_companion_if_changed(monitor_pages_t *pages)
         now > s_companion.heartbeat_received_ms) {
         heartbeat_elapsed = now - s_companion.heartbeat_received_ms;
     }
+    /* Capture Client-owned values before build(NULL) clears the view: the
+     * production caches take over the instant the session ends. */
+    companion_page_cache_t cached = {0};
+    const bool adopt_resumed = !connected && s_companion_connected && s_companion_overlay;
+    if (adopt_resumed) capture_companion_page_cache(&cached);
     monitor_companion_view_build(connected ? &s_companion.snapshot : NULL,
                                  connected && s_companion.has_heartbeat ? &s_companion.heartbeat : NULL,
                                  elapsed, heartbeat_elapsed, &s_companion_view);
@@ -189,6 +228,7 @@ static bool apply_companion_if_changed(monitor_pages_t *pages)
          * an authenticated session proxies weather and Devices. */
         monitor_weather_set_companion_active(connected);
         monitor_devices_set_companion_active(connected);
+        if (adopt_resumed) adopt_companion_page_cache(&cached);
     }
     if (!connected && pages && monitor_pages_is_second(pages)) s_companion_page_revert = true;
     /* Card motion is expensive: only a semantic device change gets a new

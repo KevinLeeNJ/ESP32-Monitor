@@ -102,7 +102,7 @@ static void reset(void){
     watchdog_active=false;idle_waits=0;now=0;finish=95000000;disconnect_at=reconnect_at=config_at=-1;
     calls=resets=notices=feeds=scenario=0;last_reason=0;notified=false;
     clock_valid=notify_clock=nvs_ok=true;
-    memset(&s_config,0,sizeof(s_config));s_snapshot=(monitor_devices_snapshot_t){0};s_generation=0;s_wifi=false;s_have_snapshot=false;s_last_success=0;s_last_devices_slot=-1;
+    memset(&s_config,0,sizeof(s_config));s_snapshot=(monitor_devices_snapshot_t){0};s_generation=0;s_wifi=false;s_have_snapshot=false;s_last_success=0;s_last_devices_slot=-1;s_companion_active=false;s_handoff_until_slot=0;
     expiry_timer.active=false;s_expiry_timer=(esp_timer_handle_t)&expiry_timer;
     stored_url="http://fixture.test";stored_token="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     monitor_devices_config_changed();monitor_devices_set_wifi_available(true);
@@ -144,6 +144,34 @@ int main(void){
     uint32_t refresh_delay=monitor_devices_refresh_delay_ms();
     assert(refresh_delay>0 && refresh_delay<=30000);
     clock_valid=false;assert(monitor_devices_refresh_delay_ms()==0);
+    // Session end adopts the Client's cards and renews their lease.
+    reset();
+    monitor_devices_snapshot_t client={.status=MONITOR_DEVICES_READY,.count=2,.version=9};
+    strcpy(client.devices[0].name,"SRV");
+    strcpy(client.devices[1].name,"NAS");
+    monitor_devices_adopt_snapshot(&client);
+    assert(s_have_snapshot && s_snapshot.version==2 && s_snapshot.count==2);
+    assert(!strcmp(s_snapshot.devices[0].name,"SRV") && s_last_success==0);
+    assert(expiry_timer.active && expiry_timer.due==RETAIN_US);
+    unsigned notices_before=notices;
+    monitor_devices_adopt_snapshot(&client); // identical cache stays silent
+    assert(s_snapshot.version==2 && notices==notices_before);
+    // Resuming waits for the clock task; only the relative fallback polls.
+    reset();clock_valid=true;
+    monitor_devices_set_companion_active(true);
+    notified=false;monitor_devices_set_companion_active(false);
+    assert(!notified && s_handoff_until_slot>0);
+    clock_valid=false;s_handoff_until_slot=0;notified=false;
+    monitor_devices_set_companion_active(true);monitor_devices_set_companion_active(false);
+    assert(notified);
+    // Recovery wakes during the handoff cannot poll before the RTC slot.
+    reset();clock_valid=true;
+    s_handoff_until_slot=(int32_t)((int64_t)time(NULL)/30+10);
+    work();
+    assert(calls==0);
+    // The slot ends the hold and normal 30 s polling resumes.
+    reset();clock_valid=true;
+    work();assert(calls==4);
     puts("Devices worker: missing/invalid config, offline/HTTPS clock gate, fixed polling/no spin, first/unchanged data, 90s stale expiry, auth failure, recovery, disconnect/config races and configuration removal: PASS");
 }
 '''
