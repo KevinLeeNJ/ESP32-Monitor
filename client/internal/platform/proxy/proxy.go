@@ -17,6 +17,17 @@ var ErrAutomatic = errors.New("automatic_proxy_unsupported")
 var ErrDetection = errors.New("system_proxy_detection_failed")
 var ErrInvalid = errors.New("invalid_proxy_configuration")
 
+// KnownError returns the matched sentinel when err is one of the shared proxy
+// configuration errors, or nil.
+func KnownError(err error) error {
+	for _, known := range []error{ErrAutomatic, ErrDetection, ErrInvalid} {
+		if errors.Is(err, known) {
+			return known
+		}
+	}
+	return nil
+}
+
 type Settings struct {
 	HTTP      string
 	HTTPS     string

@@ -184,9 +184,6 @@ func (b *Backend) query(ctx context.Context, target string, pair *Pairing, durat
 				nextSend = time.Now().Add(discoveryResendInterval)
 				continue
 			}
-			if len(out) > 0 {
-				return out, nil
-			}
 			return out, nil
 		}
 		var r wire.Discovery

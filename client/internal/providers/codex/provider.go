@@ -123,10 +123,8 @@ func (p *Provider) Refresh(ctx context.Context) Snapshot {
 		p.next = now.Add(time.Minute * time.Duration(1<<min(p.failures-1, 4)))
 		p.snapshot.Quota.Health.State = providers.Error
 		p.snapshot.Quota.Health.ErrorCode = "codex_unavailable"
-		for _, code := range []error{proxy.ErrAutomatic, proxy.ErrDetection, proxy.ErrInvalid} {
-			if errors.Is(err, code) {
-				p.snapshot.Quota.Health.ErrorCode = code.Error()
-			}
+		if code := proxy.KnownError(err); code != nil {
+			p.snapshot.Quota.Health.ErrorCode = code.Error()
 		}
 		if err.Error() == "auth_required" {
 			p.snapshot.Quota.Health.State = providers.AuthRequired

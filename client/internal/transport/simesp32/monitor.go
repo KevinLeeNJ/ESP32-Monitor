@@ -246,31 +246,25 @@ func (m *Monitor) lan(d wire.Discovery, ip string, pair transport.Pairing) error
 		return e
 	}
 	defer client.Close()
+	send := func(topic string, data any, req *string, qos byte) error {
+		body, err := wire.Marshal(data)
+		if err != nil {
+			return err
+		}
+		control := wire.Control{ProtocolVersion: 1, HostID: d.HostID, DeviceID: m.DeviceID, SessionID: sid, Seq: nextSeq(), SentAt: time.Now().Unix(), RequestID: req, Data: body}
+		payload, err := wire.Marshal(control)
+		if err != nil {
+			return err
+		}
+		return client.Publish(pre+"/up/"+topic, payload, qos, false)
+	}
 	m.mu.Lock()
 	m.mqtt = client
 	m.goodbye = func(reason string) error {
-		body, err := wire.Marshal(wire.Goodbye{ProtocolVersion: 1, SessionID: sid, Reason: reason})
-		if err != nil {
-			return err
-		}
-		control := wire.Control{ProtocolVersion: 1, HostID: d.HostID, DeviceID: m.DeviceID, SessionID: sid, Seq: nextSeq(), SentAt: time.Now().Unix(), Data: body}
-		payload, err := wire.Marshal(control)
-		if err != nil {
-			return err
-		}
-		return client.Publish(pre+"/up/goodbye", payload, 1, false)
+		return send("goodbye", wire.Goodbye{ProtocolVersion: 1, SessionID: sid, Reason: reason}, nil, 1)
 	}
 	m.resync = func(reason string, last uint32) error {
-		body, err := wire.Marshal(wire.Resync{LastSnapshotSeq: &last, Reason: reason})
-		if err != nil {
-			return err
-		}
-		control := wire.Control{ProtocolVersion: 1, HostID: d.HostID, DeviceID: m.DeviceID, SessionID: sid, Seq: nextSeq(), SentAt: time.Now().Unix(), Data: body}
-		payload, err := wire.Marshal(control)
-		if err != nil {
-			return err
-		}
-		return client.Publish(pre+"/up/resync", payload, 1, false)
+		return send("resync", wire.Resync{LastSnapshotSeq: &last, Reason: reason}, nil, 1)
 	}
 	m.mu.Unlock()
 	defer func() {
@@ -284,18 +278,6 @@ func (m *Monitor) lan(d wire.Discovery, ip string, pair transport.Pairing) error
 	}()
 	if e = client.Subscribe(pre + "/down/#"); e != nil {
 		return e
-	}
-	send := func(topic string, data any, req *string, qos byte) error {
-		body, err := wire.Marshal(data)
-		if err != nil {
-			return err
-		}
-		control := wire.Control{ProtocolVersion: 1, HostID: d.HostID, DeviceID: m.DeviceID, SessionID: sid, Seq: nextSeq(), SentAt: time.Now().Unix(), RequestID: req, Data: body}
-		payload, err := wire.Marshal(control)
-		if err != nil {
-			return err
-		}
-		return client.Publish(pre+"/up/"+topic, payload, qos, false)
 	}
 	req := wire.NewID()
 	if e = send("open", wire.Open{ProtocolVersion: 1, RequestID: req, PairingID: pair.PairingID, DeviceID: m.DeviceID, DeviceName: m.Name, FirmwareVersion: "sim-esp32-v1", Transport: "lan"}, &req, 1); e != nil {

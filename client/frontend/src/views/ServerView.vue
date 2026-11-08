@@ -33,8 +33,6 @@ watch(
   { immediate: true },
 );
 
-const codeFor = computed(() => code.value.replace(/\D/g, "").slice(0, 6));
-
 function onCodeInput(event: Event) {
   code.value = (event.target as HTMLInputElement).value.replace(/\D/g, "").slice(0, 6);
   formError.value = "";
@@ -59,12 +57,12 @@ function registrationError(error: unknown): string {
 
 async function register() {
   if (!baseURL.value.trim()) { formError.value = "请填写 Server 地址"; return; }
-  if (codeFor.value.length !== 6) { formError.value = "请输入 6 位验证码"; return; }
+  if (code.value.length !== 6) { formError.value = "请输入 6 位验证码"; return; }
   registering.value = true;
   formError.value = "";
   result.value = null;
   try {
-    const registration = await appService.registerServer(baseURL.value.trim(), codeFor.value);
+    const registration = await appService.registerServer(baseURL.value.trim(), code.value);
     store.settings = await appService.getSettings();
     baseURL.value = registration.server_url;
     code.value = "";

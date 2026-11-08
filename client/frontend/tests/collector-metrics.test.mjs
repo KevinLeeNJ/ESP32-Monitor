@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bundleFor, displayMetrics, invalidV2Selections, isRequired, metricGroup, objectLabel, prepareMetricDraft, repairV2Selections, rowCells, rowValue, validateMetricDraft } from "../dist/services/collector-metrics.js";
+import { bundleFor, displayMetrics, isRequired, metricGroup, objectLabel, prepareMetricDraft, repairV2Selections, rowCells, rowValue, validateMetricDraft } from "../dist/services/collector-metrics.js";
 
 const metric = (name, extra = {}) => ({ metric: name, available: true, required: false, fixed: false, ...extra });
 
@@ -94,11 +94,6 @@ test("bundled values keep plain spacing for cell-level wrapping", () => {
     "系统 Windows 11 Pro 26H2\n设备 ASUSTeK COMPUTER INC. ASUS TUF Gaming A15 FA507XV_FA507XV");
   const uptime = { metric: "system.uptime", members: [{ metric: "system.uptime" }] };
   assert.equal(rowValue(uptime, caps, { v2_sample: { u: 90061 } }), "1 天 1 小时 1 分");
-});
-
-test("selections of unavailable metrics are reported as invalid", () => {
-  const config = { interval_seconds: 10, selections: [], upload: { enabled: true, interval_seconds: 10, optional: [{ metric: "gpu.usage" }] } };
-  assert.deepEqual(invalidV2Selections(config, capabilities()).map(item => item.metric), ["gpu.usage"]);
 });
 
 test("stale selections are pruned silently instead of blocking the save", () => {

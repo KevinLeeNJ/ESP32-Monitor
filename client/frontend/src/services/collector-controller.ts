@@ -11,13 +11,12 @@ export class CollectorController {
   busy = false;
   error = "";
   pollError = "";
-  private service = collectorService;
   private listeners = new Set<() => void>();
   private timer?: ReturnType<typeof setTimeout>;
   private stopped = true;
   private capsRetryAt = 0;
 
-  constructor(private pollMS = 1000) {}
+  constructor(private pollMS: number) {}
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     listener();
@@ -49,7 +48,7 @@ export class CollectorController {
   async refresh() {
     if (this.busy) return;
     try {
-      const snapshot = await this.service.snapshot();
+      const snapshot = await collectorService.snapshot();
       if (this.stopped || this.busy) return;
       // A restarted Agent starts a fresh revision counter; only compare
       // revisions within the same process.
@@ -71,7 +70,7 @@ export class CollectorController {
     if (this.busy) return;
     this.busy = true; this.error = ""; this.emit();
     try {
-      this.capabilities = await this.service.rescan();
+      this.capabilities = await collectorService.rescan();
       this.repairDraft();
     }
     catch (error) { this.error = String(error); }
@@ -91,7 +90,7 @@ export class CollectorController {
     ensureUploadConfig(config).enabled = enabled;
     this.busy = true; this.error = ""; this.emit();
     try {
-      this.snapshot = await this.service.apply(config);
+      this.snapshot = await collectorService.apply(config);
       if (this.draft) ensureUploadConfig(this.draft).enabled = enabled;
       return true;
     } catch (error) {
@@ -107,7 +106,7 @@ export class CollectorController {
     if (error) { this.error = error; this.emit(); return false; }
     this.busy = true; this.error = ""; this.emit();
     try {
-      this.snapshot = await this.service.apply(prepareMetricDraft(this.draft, this.capabilities));
+      this.snapshot = await collectorService.apply(prepareMetricDraft(this.draft, this.capabilities));
       this.draft = structuredClone(this.snapshot.config);
       return true;
     } catch (error) {

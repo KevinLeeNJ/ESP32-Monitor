@@ -4,7 +4,7 @@ import { collector, refreshCompanion, refreshDevices, store, toast, useCollector
 import { rowCells, displayMetrics, objectLabel } from "../services/collector-metrics.js";
 import type { MetricRow } from "../services/collector-metrics.js";
 import { serverBase } from "../services/server-url.js";
-import { connectionLabel } from "../services/device-labels.js";
+import { connectionLabel, connectionTypeLabel } from "../services/device-labels.js";
 import { fmtClockTime } from "../services/format.js";
 import type { PageID } from "../store.js";
 
@@ -28,12 +28,12 @@ const overviewRows = computed<OverviewEntry[]>(() => {
 });
 const snap = computed(() => { revision.value; return collector.snapshot; });
 const uploadPill = computed(() => {
-  if (!store.status?.collector_enabled) return { text: "未启用", cls: "gray" };
-  if (!snap.value) return { text: "等待采样", cls: "gray" };
-  if (snap.value.state === "error") return { text: "采集错误", cls: "amber" };
-  if (!snap.value.config.upload?.enabled) return { text: "未启用上传", cls: "gray" };
-  if (snap.value.upload_error) return { text: "上传异常", cls: "amber" };
-  return { text: snap.value.state === "healthy" ? "上传正常" : "已停止", cls: snap.value.state === "healthy" ? "" : "gray" };
+  if (!store.status?.collector_enabled) return "未启用";
+  if (!snap.value) return "等待采样";
+  if (snap.value.state === "error") return "采集错误";
+  if (!snap.value.config.upload?.enabled) return "未启用上传";
+  if (snap.value.upload_error) return "上传异常";
+  return snap.value.state === "healthy" ? "上传正常" : "已停止";
 });
 
 function sampleAge(): string {
@@ -113,7 +113,7 @@ async function reloadAll() {
         </template>
       </section>
       <section class="card span4">
-        <div class="card-title"><h2>数据活动</h2><span class="pill">{{ uploadPill.text }}</span></div>
+        <div class="card-title"><h2>数据活动</h2><span class="pill">{{ uploadPill }}</span></div>
         <div class="muted">采样周期 {{ snap?.config.upload?.interval_seconds ?? snap?.config.interval_seconds ?? "—" }}&nbsp;秒</div>
         <div class="row"><div><strong>已选指标</strong><small>随每次采样一起上传</small></div><div class="row-right"><span class="value">{{ snap?.config.upload?.optional.length ?? 0 }} 项</span></div></div>
         <div class="row"><div><strong>上传地址</strong><small>{{ snap?.config.upload?.enabled ? "已启用上传" : "仅本地采集" }}</small></div><div class="row-right"><span class="value muted">{{ serverBase(store.settings?.collector.upload_url ?? "") || "—" }}</span></div></div>
@@ -128,7 +128,7 @@ async function reloadAll() {
           <div class="device-icon" aria-hidden="true"><i class="pixelart-icons-font-cpu"></i></div>
           <div class="device-info">
             <h3>{{ device.device_name }}　<span class="pill" :class="device.confirmed_online && !device.pairing_lost ? '' : 'gray'">{{ device.pairing_lost ? "待重新配对" : (device.confirmed_online ? "在线" : "离线") }}</span></h3>
-            <p>{{ device.address || "—" }}{{ device.transport === "serial" ? " · 串口" : device.transport === "lan" ? " · 局域网" : "" }} · {{ connectionLabel(device.connection_state) }}<br>最近更新 {{ fmtClockTime(device.last_seen) }}</p>
+            <p>{{ device.address || "—" }}{{ device.transport ? " · " + connectionTypeLabel(device.transport) : "" }} · {{ connectionLabel(device.connection_state) }}<br>最近更新 {{ fmtClockTime(device.last_seen) }}</p>
           </div>
         </div>
       </section>

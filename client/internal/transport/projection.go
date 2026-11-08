@@ -241,9 +241,7 @@ func stripMetadata(v any) {
 		for _, k := range []string{"observed_at", "last_success_at", "age_ms", "position_observed_at"} {
 			delete(m, k)
 		}
-		if _, ok := m["utc_unix_ms"]; ok {
-			delete(m, "utc_unix_ms")
-		}
+		delete(m, "utc_unix_ms")
 		for _, v := range m {
 			stripMetadata(v)
 		}

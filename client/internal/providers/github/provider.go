@@ -164,7 +164,8 @@ func (p *Provider) Refresh(ctx context.Context, manual bool) Snapshot {
 				code = "upstream_error"
 			case "credential_save_failed":
 				code = "credential_save_failed"
-			case proxy.ErrAutomatic.Error(), proxy.ErrDetection.Error(), proxy.ErrInvalid.Error():
+			}
+			if proxy.KnownError(err) != nil {
 				code = err.Error()
 			}
 		}

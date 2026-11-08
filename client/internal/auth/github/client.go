@@ -46,10 +46,8 @@ func (c *Client) post(ctx context.Context, endpoint string, values url.Values, o
 func (c *Client) request(req *http.Request, out any) error {
 	response, err := c.http.Do(req)
 	if err != nil {
-		for _, known := range []error{proxy.ErrAutomatic, proxy.ErrDetection, proxy.ErrInvalid} {
-			if errors.Is(err, known) {
-				return known
-			}
+		if known := proxy.KnownError(err); known != nil {
+			return known
 		}
 		return errors.New("auth_network_error")
 	}

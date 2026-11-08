@@ -77,10 +77,8 @@ func fetch(ctx context.Context, client *http.Client, url, token, login string, n
 	req.Header.Set("User-Agent", "esp32-monitor-client/0.1")
 	resp, err := client.Do(req)
 	if err != nil {
-		for _, code := range []error{proxy.ErrAutomatic, proxy.ErrDetection, proxy.ErrInvalid} {
-			if errors.Is(err, code) {
-				return Calendar{}, time.Time{}, &apiError{code: code.Error()}
-			}
+		if code := proxy.KnownError(err); code != nil {
+			return Calendar{}, time.Time{}, &apiError{code: code.Error()}
 		}
 		return Calendar{}, time.Time{}, &apiError{code: "network_error"}
 	}

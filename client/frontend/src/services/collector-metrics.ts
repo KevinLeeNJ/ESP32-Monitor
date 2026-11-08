@@ -1,4 +1,4 @@
-import type { CollectorCapabilities, CollectorConfig, CollectorSnapshot, CollectorUploadConfig, CollectorUploadSelection, CollectorV2Capabilities, CollectorV2Metric } from "../types/collector.js";
+import type { CollectorCapabilities, CollectorConfig, CollectorSnapshot, CollectorUploadConfig, CollectorV2Capabilities, CollectorV2Metric } from "../types/collector.js";
 
 export const requiredMetrics = new Set(["cpu.usage", "memory.usage", "memory.total", "memory.used", "system.uptime"]);
 export const metricGroups = ["CPU", "内存（Swap）", "GPU", "磁盘", "网络", "电池", "系统指标"];
@@ -102,18 +102,6 @@ export function bundleUploads(upload: CollectorUploadConfig, caps: CollectorV2Ca
       if (member.objects && !selection.objects?.length) upload.optional = upload.optional.filter(item => item !== selection);
     }
   }
-}
-export function invalidV2Selections(config: CollectorConfig, caps: CollectorV2Capabilities): CollectorUploadSelection[] {
-  const available = new Map(availableMetrics(caps).map(metric => [metric.metric, metric]));
-  const rows = displayMetrics(caps);
-  return (config.upload?.optional ?? []).filter(selection => {
-    const metric = available.get(selection.metric);
-    const bundle = bundleFor(selection.metric);
-    const row = bundle && rows.find(item => item.bundle === bundle);
-    const parent = deviceDependencies[bundle?.key ?? selection.metric];
-    return !metric || isRequired(metric) || (bundle && !row) || (parent && selection.objects?.some(id => !selectedObjects(config.upload!, parent).includes(id))) ||
-      (selection.metric === "network.public_ipv4" && !selectedObjects(config.upload!, "interface.ipv4").length) || (metric.objects && (!selection.objects?.length || selection.objects.some(id => !(row?.objects ?? metric.objects!).includes(id))));
-  });
 }
 export function repairV2Selections(config: CollectorConfig, caps: CollectorV2Capabilities) {
   if (!config.upload) return;

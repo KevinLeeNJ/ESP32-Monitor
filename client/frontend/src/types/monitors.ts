@@ -24,12 +24,9 @@ export interface DiscoveredDevice {
   port: string;
   vid: string;
   pid: string;
-  usb_serial: string;
   identity_verified: boolean;
   paired: boolean;
   pairing_lost?: boolean;
-  online: boolean;
-  state: string;
 }
 
 export interface DiscoveryResult {

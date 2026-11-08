@@ -175,6 +175,9 @@ func (m *Manager) syncV2(ctx context.Context, target *uploadTarget, want *v2.Pro
 		method, condition = "PATCH", strconv.Quote(strconv.FormatUint(revision, 10))
 	} else if status == 404 {
 		body, e = json.Marshal(want)
+		if e != nil {
+			return 0, headers, e
+		}
 	} else {
 		return status, headers, errors.New("v2_profile_sync_failed")
 	}
@@ -301,7 +304,7 @@ func pointerPath(s string) string {
 // can be added without a group-level operation.
 var inventoryArrays = map[string]bool{"objects": true, "cores": true, "gpus": true, "drives": true, "volumes": true, "interfaces": true, "batteries": true, "fans": true}
 
-func diffInventory(p *v2.ProfilePatch, old, next map[string]any) {
+func sortedUnionKeys(old, next map[string]any) []string {
 	keys := []string{}
 	for key := range old {
 		keys = append(keys, key)
@@ -312,6 +315,11 @@ func diffInventory(p *v2.ProfilePatch, old, next map[string]any) {
 		}
 	}
 	sort.Strings(keys)
+	return keys
+}
+
+func diffInventory(p *v2.ProfilePatch, old, next map[string]any) {
+	keys := sortedUnionKeys(old, next)
 	for _, key := range keys {
 		x, hasOld := old[key]
 		y, hasNext := next[key]
@@ -344,16 +352,7 @@ func diffInventory(p *v2.ProfilePatch, old, next map[string]any) {
 }
 
 func diffObjectGroup(p *v2.ProfilePatch, path string, old, next map[string]any) {
-	keys := []string{}
-	for key := range old {
-		keys = append(keys, key)
-	}
-	for key := range next {
-		if _, ok := old[key]; !ok {
-			keys = append(keys, key)
-		}
-	}
-	sort.Strings(keys)
+	keys := sortedUnionKeys(old, next)
 	for _, key := range keys {
 		x, hasOld := old[key]
 		y, hasNext := next[key]
@@ -379,16 +378,7 @@ func diffValue(p *v2.ProfilePatch, path string, old, next any) {
 	a, am := old.(map[string]any)
 	b, bm := next.(map[string]any)
 	if am && bm {
-		keys := []string{}
-		for key := range a {
-			keys = append(keys, key)
-		}
-		for key := range b {
-			if _, ok := a[key]; !ok {
-				keys = append(keys, key)
-			}
-		}
-		sort.Strings(keys)
+		keys := sortedUnionKeys(a, b)
 		for _, key := range keys {
 			x, ax := a[key]
 			y, by := b[key]

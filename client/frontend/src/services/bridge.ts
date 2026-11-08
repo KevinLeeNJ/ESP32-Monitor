@@ -13,12 +13,10 @@ export const appService = {
   getSettings: () => call<GuiSettings>("AppService.GetSettings"),
   saveSettings: (settings: GuiSettings) => call<GuiSettings>("AppService.SaveSettings", settings),
   restartAgent: () => call<void>("AppService.RestartAgent"),
-  lastAgentError: () => call<string>("AppService.LastAgentError"),
 };
 
 export const companionService = {
   snapshot: () => call<CompanionSnapshot>("CompanionService.GetCompanionSnapshot"),
-  nowPlaying: () => call<CompanionSnapshot["music"]>("CompanionService.GetNowPlaying"),
   githubSession: () => call<GitHubSession>("CompanionService.GitHubSession"),
   githubLoginStart: () => call<GitHubSession>("CompanionService.GitHubLoginStart"),
   githubLoginPoll: (sessionID: string) => call<GitHubSession>("CompanionService.GitHubLoginPoll", sessionID),
@@ -34,9 +32,6 @@ export const monitorService = {
   cancelPairing: () => call<void>("MonitorService.CancelPairing"),
   revoke: (device: string) => call<void>("MonitorService.RevokeDevice", device),
   setEnabled: (device: string, enabled: boolean) => call<void>("MonitorService.SetDeviceEnabled", device, enabled),
-  confirmLANConsent: (device: string, trusted: boolean) => call<void>("MonitorService.ConfirmLANConsent", device, trusted),
-  setLANInterface: (ip: string) => call<void>("MonitorService.SetLANInterface", ip),
-  serialPorts: () => call<DiscoveredDevice[]>("MonitorService.ListSerialPorts"),
   probeSerial: (port: string) => call<DiscoveredDevice>("MonitorService.ProbeSerial", port),
   connectSerial: (port: string, deviceID: string, trustPhysicalConnection: boolean) =>
     call<void>("MonitorService.ConnectSerial", port, deviceID, trustPhysicalConnection),

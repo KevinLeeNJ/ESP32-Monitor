@@ -5,7 +5,6 @@ import { call } from "./wails.js";
 // sees tokens or filesystem paths.
 export const collectorService = {
   rescan: () => call<CollectorCapabilities>("CollectorService.DiscoverCollectorMetrics"),
-  capabilities: () => call<CollectorCapabilities>("CollectorService.GetCollectorCapabilities"),
   snapshot: () => call<CollectorSnapshot>("CollectorService.GetCollectorSnapshot"),
   apply: (config: CollectorConfig) => call<CollectorSnapshot>("CollectorService.ApplyCollectorConfig", config),
 };

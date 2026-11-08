@@ -220,7 +220,6 @@ async function probeAndConnect(port: DiscoveredDevice) {
       item.device_id = device.device_id;
       item.name = device.name;
       item.paired = true;
-      item.state = "connected";
     }
     await refreshDevices();
     toast(`串口 ${port.port} 已连接`);
@@ -238,7 +237,6 @@ async function probeAndConnect(port: DiscoveredDevice) {
         item.device_id = deviceID;
         item.name = deviceName;
         item.paired = true;
-        item.state = "connected";
       }
       toast(`串口 ${port.port} 已连接`);
     } else {
@@ -280,7 +278,7 @@ onUnmounted(stopPairingPoll);
           <div class="device-icon" aria-hidden="true"><i class="pixelart-icons-font-cpu"></i></div>
           <div class="device-info">
             <h3>{{ device.device_name }}　<span class="pill" :class="device.confirmed_online && !device.pairing_lost ? '' : 'gray'">{{ device.pairing_lost ? "待重新配对" : (device.confirmed_online ? "在线" : "离线") }}</span></h3>
-            <p>{{ device.device_id }}<br>{{ device.address || "—" }}{{ device.transport === "serial" ? " · 串口" : device.transport === "lan" ? " · 局域网" : "" }} · {{ connectionLabel(device.connection_state) }}<br>最近在线 {{ fmtClockTime(device.last_seen) }}</p>
+            <p>{{ device.device_id }}<br>{{ device.address || "—" }}{{ device.transport ? " · " + connectionTypeLabel(device.transport) : "" }} · {{ connectionLabel(device.connection_state) }}<br>最近在线 {{ fmtClockTime(device.last_seen) }}</p>
           </div>
           <div class="actions">
             <button class="btn" @click="toggleDevice(device.device_id, !device.enabled)">{{ device.enabled ? "停用" : "启用" }}</button>
