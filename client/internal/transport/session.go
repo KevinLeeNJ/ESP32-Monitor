@@ -277,6 +277,14 @@ func (s *session) subscribed(b *Backend) bool {
 	return true
 }
 func (s *session) handle(b *Backend, m incoming) error {
+	if s.transport == "serial" && m.topic == "time-request" {
+		if m.seq <= s.inputSeq {
+			return nil
+		}
+		s.inputSeq = m.seq
+		s.lastReceipt = time.Now()
+		return s.sendSerial("time-response", m.seq)
+	}
 	if m.topic == "presence" {
 		var p wire.Presence
 		if wire.Decode(m.data, &p, 1024) != nil || p.ProtocolVersion != 1 || p.HostID != b.HostID() || p.DeviceID != s.pair.DeviceID || p.SessionID != s.id {
@@ -538,7 +546,7 @@ func (s *session) heartbeat(b *Backend, sections wire.Sections) error {
 	 * Omitting an unchanged lease is not neutral: the monitor falls back to
 	 * the snapshot age for that path and can expire a live source between
 	 * two observations of a slow provider. */
-	h := wire.Heartbeat{ProtocolVersion: 1, HostID: b.HostID(), DeviceID: s.pair.DeviceID, SessionID: s.id, Seq: seq, SentAt: time.Now().Unix(), LastSnapshotSeq: &s.lastSnapshot, Epoch: &s.config.Epoch, Revision: &s.config.Revision, Time: &wire.HeartbeatTime{UnixMS: time.Now().UnixMilli(), Offset: s.config.Time.Offset, Trusted: false}, SourceUpdates: leases(sections, s.lastSnapshot)}
+	h := wire.Heartbeat{ProtocolVersion: 1, HostID: b.HostID(), DeviceID: s.pair.DeviceID, SessionID: s.id, Seq: seq, SentAt: time.Now().Unix(), LastSnapshotSeq: &s.lastSnapshot, Epoch: &s.config.Epoch, Revision: &s.config.Revision, SourceUpdates: leases(sections, s.lastSnapshot)}
 	if s.transport == "serial" {
 		s.outputSeq--
 	}

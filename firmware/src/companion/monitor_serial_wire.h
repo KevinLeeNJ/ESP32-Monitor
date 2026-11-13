@@ -17,6 +17,10 @@ typedef enum {
     MONITOR_SERIAL_SNAPSHOT = 0x20,
     MONITOR_SERIAL_HEARTBEAT = 0x21,
     MONITOR_SERIAL_ACK = 0x22,
+    /* Authenticated ASCII payloads: "?\n" and "<request frame seq> <epoch_ms>\n".
+     * All other message types retain their Protobuf payloads. */
+    MONITOR_SERIAL_TIME_REQUEST = 0x23,
+    MONITOR_SERIAL_TIME_RESPONSE = 0x24,
     MONITOR_SERIAL_GOODBYE = 0x7e,
     MONITOR_SERIAL_ERROR = 0x7f,
 } monitor_serial_type_t;

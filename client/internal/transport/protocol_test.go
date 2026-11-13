@@ -290,6 +290,14 @@ func TestSerialKeysAndEncryptedConfig(t *testing.T) {
 type doerFunc func(*http.Request) (*http.Response, error)
 
 func (f doerFunc) Do(r *http.Request) (*http.Response, error) { return f(r) }
+func TestProxyDoesNotPushClock(t *testing.T) {
+	p := &proxyWorker{now: time.Now}
+	clock := p.snapshot().Time
+	if clock.State != "disabled" || clock.Data != nil {
+		t.Fatalf("clock must come from RTC/NTP or a serial time request: %+v", clock)
+	}
+}
+
 func TestProxyMemoryOnlyIsolationAndFailureAge(t *testing.T) {
 	calls := make(chan string, 10)
 	client := doerFunc(func(r *http.Request) (*http.Response, error) {
@@ -312,13 +320,13 @@ func TestProxyMemoryOnlyIsolationAndFailureAge(t *testing.T) {
 		t.Fatal("no initial fetch")
 	}
 	for i := 0; i < 100; i++ {
-		if p.snapshot(false).Devices.State == "healthy" {
+		if p.snapshot().Devices.State == "healthy" {
 			break
 		}
 		time.Sleep(time.Millisecond)
 	}
 	for i := 0; i < 5; i++ {
-		p.snapshot(false)
+		p.snapshot()
 	}
 	select {
 	case <-calls:
@@ -333,12 +341,12 @@ func TestProxyMemoryOnlyIsolationAndFailureAge(t *testing.T) {
 	if before == nil || after == nil || *before != *after {
 		t.Fatal("failure renewed data age")
 	}
-	if d := p.snapshot(false); d.Devices.State != "degraded" || d.Time.Data.(wire.TimeData).Trusted {
+	if d := p.snapshot(); d.Devices.State != "degraded" || d.Time.State != "disabled" || d.Time.Data != nil {
 		t.Fatal("failure/trust misreported")
 	}
 	other := newProxy(context.Background(), disabledConfig(), client)
 	defer other.stop()
-	if other.snapshot(false).Devices.Data != nil {
+	if other.snapshot().Devices.Data != nil {
 		t.Fatal("cross device cache")
 	}
 }

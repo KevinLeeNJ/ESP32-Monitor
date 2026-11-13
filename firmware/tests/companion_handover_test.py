@@ -130,6 +130,17 @@ int main(void) {
     assert(snapshot.devices.count == 2 && snapshot.devices.version == 7);
     assert(!s_companion_weather_seen && !s_companion_aqi_seen && !s_companion_devices_supplied);
 
+    // LAN uses the same local clock as Standalone, even with an older Client.
+    s_companion_view.time_valid = true;
+    snprintf(s_companion_view.time_text, sizeof s_companion_view.time_text, "%s", "03:45");
+    snprintf(s_companion_view.date_text, sizeof s_companion_view.date_text, "%s", "SUN 2 NOV");
+    snapshot = capture();
+    assert(!strcmp(snapshot.time_text, "20:15") && !strcmp(snapshot.date_text, "SAT 1 NOV"));
+    serial_active = true;
+    snapshot = capture();
+    assert(!strcmp(snapshot.time_text, "20:15") && !strcmp(snapshot.date_text, "SAT 1 NOV"));
+    serial_active = false;
+
     // First Client data replaces each source.
     s_companion_view.weather_pending = s_companion_view.aqi_pending = false;
     s_companion_view.devices_pending = false;

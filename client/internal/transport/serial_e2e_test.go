@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"esp32-monitor/client/internal/transport/wire"
+	"fmt"
 	"net"
 	"path/filepath"
 	"testing"
@@ -40,6 +41,9 @@ func TestSerialEndToEndSimulatedMonitor(t *testing.T) {
 		t.Helper()
 		seq++
 		p, _ := wire.Marshal(data)
+		if typ == SerialTimeRequest {
+			p = []byte("?\n")
+		}
 		frame, e := EncodeSerial(typ, seq, p, key, 2)
 		if e != nil {
 			t.Fatal(e)
@@ -129,6 +133,32 @@ func TestSerialEndToEndSimulatedMonitor(t *testing.T) {
 		t.Fatal("wire snapshot invalid", e)
 	}
 	send(SerialAck, wire.Ack{ProtocolVersion: 1, SessionID: auth.SessionID, AckSeq: f.Seq, Status: "accepted"}, keys.Frame)
+	// The ESP requests five independent samples; no pushed clock may replace them.
+	for i := 0; i < 5; i++ {
+		t0 := time.Now()
+		send(SerialTimeRequest, nil, keys.Frame)
+		request := seq
+		for {
+			f, p = recv(keys.Frame)
+			if f.Type == SerialHeartbeat {
+				var h wire.Heartbeat
+				if err := wire.Decode(p, &h, 4096); err != nil || h.Time != nil {
+					t.Fatal("serial heartbeat must not push time", err)
+				}
+				continue
+			}
+			break
+		}
+		var echoed uint32
+		var epochMS int64
+		if f.Type != SerialTimeResponse {
+			t.Fatalf("expected time response, got %x", f.Type)
+		}
+		if _, err := fmt.Sscanf(string(p), "%d %d\n", &echoed, &epochMS); err != nil || echoed != request ||
+			epochMS < t0.UnixMilli() || epochMS > time.Now().UnixMilli() {
+			t.Fatalf("invalid send-time sample: %q (%v)", p, err)
+		}
+	}
 	for i := 0; i < 2; i++ {
 		f, p = recv(keys.Frame)
 		if f.Type != SerialHeartbeat {
@@ -136,7 +166,7 @@ func TestSerialEndToEndSimulatedMonitor(t *testing.T) {
 		}
 		var hb wire.Heartbeat
 		wire.Decode(p, &hb, 4096)
-		if hb.Seq != f.Seq || hb.Time == nil || hb.Time.Trusted {
+		if hb.Seq != f.Seq || hb.Time != nil {
 			t.Fatal("heartbeat time/sequence")
 		}
 		send(SerialHeartbeat, wire.Heartbeat{ProtocolVersion: 1, HostID: b.HostID(), DeviceID: pair.DeviceID, SessionID: auth.SessionID, Seq: seq + 1, SentAt: time.Now().Unix(), LastSnapshotSeq: &snapshot.Seq, Epoch: &cfg.Epoch, Revision: &cfg.Revision}, keys.Frame)

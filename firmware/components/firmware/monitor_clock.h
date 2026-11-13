@@ -14,9 +14,10 @@ extern "C" {
 esp_err_t monitor_clock_start(void);
 void monitor_clock_on_wifi_connected(void);
 void monitor_clock_on_wifi_disconnected(void);
-/* Use a Client-supplied UTC reading only while the RTC is untrusted and Wi-Fi
- * is unavailable; a stored Client time re-trusts the RTC. */
-void monitor_clock_offer_client_time(int64_t utc_epoch_s);
+bool monitor_clock_needs_sync(void);
+/* UTC microseconds at the captured monotonic receive instant, RTT-compensated.
+ * Wait for the next whole second before writing RTC; call from the serial task. */
+bool monitor_clock_apply_serial_time(int64_t utc_us, int64_t received_us);
 bool monitor_clock_is_valid(void);
 bool monitor_clock_get_text(char *time_text, size_t time_size,
                             char *date_text, size_t date_size);

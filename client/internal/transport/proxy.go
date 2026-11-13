@@ -52,6 +52,7 @@ func newProxy(ctx context.Context, c wire.Config, client HTTPDoer) *proxyWorker 
 	return p
 }
 func (p *proxyWorker) stop() { p.cancel(); <-p.done }
+
 const (
 	weatherRefreshInterval = 15 * time.Minute
 	devicesRefreshInterval = 30 * time.Second
@@ -207,7 +208,7 @@ func (p *proxyWorker) update(s *wire.Section, data any, e error) {
 	// successTimes uses time.Time's monotonic component; failures never reset age.
 	p.successTimes[s] = now
 }
-func (p *proxyWorker) snapshot(serial bool) wire.ProxyData {
+func (p *proxyWorker) snapshot() wire.ProxyData {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	d := p.data
@@ -229,16 +230,7 @@ func (p *proxyWorker) snapshot(serial bool) wire.ProxyData {
 			}
 		}
 	}
-	stale := int64(45000)
-	if serial {
-		stale = 15000
-	}
-	d.Time = health("healthy", stale, 60000)
-	d.Time.ObservedAt = wire.Ptr(now.Unix())
-	d.Time.LastSuccessAt = wire.Ptr(now.Unix())
-	d.Time.AgeMS = wire.Ptr(int64(0))
-	d.Time.SourceVersion = wire.Ptr("system")
-	d.Time.Data = wire.TimeData{UnixMS: now.UnixMilli(), Offset: p.config.Time.Offset, Trusted: false, Source: "system_clock"}
+	d.Time = health("disabled", 45000, 60000)
 	return d
 }
 func (p *proxyWorker) weatherLoop(ctx context.Context) {

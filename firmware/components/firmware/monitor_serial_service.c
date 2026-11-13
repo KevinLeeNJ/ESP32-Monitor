@@ -9,6 +9,7 @@
 #include "monitor_companion_config.h"
 #include "monitor_companion_mqtt.h"
 #include "monitor_display_refresh.h"
+#include "monitor_clock.h"
 #include "monitor_wifi_manager.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -67,6 +68,16 @@ typedef struct {
     uint32_t config_seq;
     uint64_t last_rx_ms;
     uint64_t last_heartbeat_ms;
+    int64_t rx_us;
+    int64_t time_t0_us;
+    int64_t time_retry_us;
+    int64_t time_best_rtt_us;
+    int64_t time_best_utc_us;
+    int64_t time_best_rx_us;
+    uint32_t time_request_seq;
+    unsigned time_attempts;
+    unsigned time_samples;
+    bool time_synced;
     monitor_lan_session_t *lan;
     bool committed;
     esp32monitor_companion_Snapshot *pending_snapshot;
@@ -136,10 +147,17 @@ static bool equal_constant(const char *a, const char *b)
     return difference == 0;
 }
 
-static bool tx_bytes(const uint8_t *data, size_t length)
+static bool tx_bytes(const uint8_t *data, size_t length, int64_t *sent_us)
 {
     if (!s_tx_lock || !data || !length) return false;
     xSemaphoreTake(s_tx_lock, portMAX_DELAY);
+    if (sent_us) {
+        if (usb_serial_jtag_wait_tx_done(pdMS_TO_TICKS(1000)) != ESP_OK) {
+            xSemaphoreGive(s_tx_lock);
+            return false;
+        }
+        *sent_us = esp_timer_get_time();
+    }
     size_t at = 0;
     /* A burst of human logs can fill the USB TX ring just before a frame.
      * Keep retrying partial/timeout writes under one bounded deadline so a
@@ -184,7 +202,7 @@ static bool send_frame(serial_ctx_t *ctx, uint8_t type, const uint8_t *payload, 
     bool ok = monitor_serial_encode(type, seq, payload, length,
                                     authenticated ? ctx->keys.frame : NULL, 2,
                                     frame, capacity, &written) &&
-              tx_bytes(frame, written);
+              tx_bytes(frame, written, type == MONITOR_SERIAL_TIME_REQUEST ? &ctx->time_t0_us : NULL);
     free(frame);
     if (ok) ctx->tx_seq = seq;
     return ok;
@@ -306,6 +324,9 @@ static void end_session(serial_ctx_t *ctx, const char *reason, bool goodbye, boo
     memset(&ctx->config, 0, sizeof ctx->config);
     if (ctx->decoder) monitor_serial_decoder_init(ctx->decoder);
     ctx->authenticated = false;
+    ctx->time_request_seq = ctx->time_attempts = ctx->time_samples = 0;
+    ctx->time_retry_us = 0;
+    ctx->time_synced = false;
     ctx->state = SERIAL_IDLE;
     ctx->session_id[0] = ctx->host_nonce[0] = ctx->device_nonce[0] = 0;
     portENTER_CRITICAL(&s_lock); s_active = false; s_committed = false; s_revoke = false; portEXIT_CRITICAL(&s_lock);
@@ -785,6 +806,60 @@ static void handle_goodbye(serial_ctx_t *ctx, const uint8_t *payload, size_t len
     }
 }
 
+static void handle_time_response(serial_ctx_t *ctx, const uint8_t *payload, size_t length)
+{
+    if (!ctx->time_request_seq || length < 16 || length > 25 || payload[length - 1] != '\n') return;
+    const uint8_t *space = memchr(payload, ' ', length);
+    if (!space || space == payload || space - payload > 10 || payload + length - space != 15) return;
+    uint64_t request = 0, epoch_ms = 0;
+    for (const uint8_t *p = payload; p < space; p++) {
+        if (*p < '0' || *p > '9') return;
+        request = request * 10 + *p - '0';
+    }
+    for (const uint8_t *p = space + 1; p < payload + length - 1; p++) {
+        if (*p < '0' || *p > '9') return;
+        epoch_ms = epoch_ms * 10 + *p - '0';
+    }
+    if (request != ctx->time_request_seq || epoch_ms < 1704067200000ULL || epoch_ms >= 4102444800000ULL)
+        return;
+    int64_t rtt = ctx->rx_us - ctx->time_t0_us;
+    if (rtt < 0 || rtt > 1000000) return;
+    ctx->time_request_seq = 0;
+    if (!ctx->time_samples || rtt < ctx->time_best_rtt_us) {
+        ctx->time_best_rtt_us = rtt;
+        ctx->time_best_rx_us = ctx->rx_us;
+        ctx->time_best_utc_us = (int64_t)epoch_ms * 1000 + rtt / 2;
+    }
+    ctx->time_samples++;
+}
+
+static void sync_serial_time(serial_ctx_t *ctx)
+{
+    int64_t now_us = esp_timer_get_time();
+    if (now_us < ctx->time_retry_us || (ctx->time_synced && !monitor_clock_needs_sync())) return;
+    if (ctx->time_request_seq) {
+        if (now_us - ctx->time_t0_us < 1000000) return;
+        ctx->time_request_seq = 0;
+    }
+    if (ctx->time_attempts == 5) {
+        bool applied = ctx->time_samples >= 3 &&
+            monitor_clock_apply_serial_time(ctx->time_best_utc_us, ctx->time_best_rx_us);
+        if (applied) ctx->time_synced = true;
+        ESP_LOGI(TAG, "serial time samples=%u min_rtt_us=%lld applied=%d", ctx->time_samples,
+                 (long long)ctx->time_best_rtt_us, applied);
+        ctx->time_attempts = ctx->time_samples = 0;
+        ctx->time_retry_us = esp_timer_get_time() + 60000000LL;
+        return;
+    }
+    if (send_frame(ctx, MONITOR_SERIAL_TIME_REQUEST, (const uint8_t *)"?\n", 2, true)) {
+        ctx->time_request_seq = ctx->tx_seq;
+        ctx->time_attempts++;
+    } else {
+        ctx->time_attempts = ctx->time_samples = 0;
+        ctx->time_retry_us = now_us + 60000000LL;
+    }
+}
+
 static void on_frame(void *user, const monitor_serial_frame_t *frame)
 {
     serial_ctx_t *ctx = user;
@@ -808,6 +883,9 @@ static void on_frame(void *user, const monitor_serial_frame_t *frame)
         return;
     }
     switch (frame->type) {
+    case MONITOR_SERIAL_TIME_RESPONSE:
+        if (ctx->state == SERIAL_RUNNING) handle_time_response(ctx, frame->payload, frame->length);
+        break;
     case MONITOR_SERIAL_CONFIG_ACK: handle_config_ack(ctx, frame->payload, frame->length, now); break;
     case MONITOR_SERIAL_SNAPSHOT: handle_data(ctx, "snapshot", frame->payload, frame->length, now); break;
     case MONITOR_SERIAL_HEARTBEAT: handle_data(ctx, "heartbeat", frame->payload, frame->length, now); break;
@@ -889,6 +967,7 @@ static void tick(serial_ctx_t *ctx, uint64_t now)
         end_session(ctx, "heartbeat", true, false);
         return;
     }
+    if (ctx->committed) sync_serial_time(ctx);
     if (ctx->committed && ctx->lan && monitor_lan_state(ctx->lan) == MONITOR_LAN_CONNECTED)
         monitor_companion_sink_connection(true, false);
     if (ctx->lan && monitor_lan_state(ctx->lan) == MONITOR_LAN_CLOSED)
@@ -943,7 +1022,11 @@ static void serial_task(void *argument)
         if (!usb_serial_jtag_is_connected()) wait = pdMS_TO_TICKS(SERIAL_DETACHED_POLL_MS);
 #endif
         int received = usb_serial_jtag_read_bytes(buffer, sizeof buffer, wait);
-        uint64_t now = monotonic_ms();
+        /* Capture before decoding, authentication or application callbacks.
+         * shortcut: driver I/O timestamps include task/USB jitter; use ISR
+         * timestamps if measured hardware precision requires it. */
+        ctx->rx_us = esp_timer_get_time();
+        uint64_t now = (uint64_t)ctx->rx_us / 1000;
         ctx->frame_authenticated = ctx->authenticated;
         const uint8_t *key = ctx->authenticated ? ctx->keys.frame : NULL;
         if (received > 0)

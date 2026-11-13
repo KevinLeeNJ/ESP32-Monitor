@@ -12,20 +12,23 @@ import (
 	"errors"
 	"esp32-monitor/client/internal/transport/wire"
 	"hash/crc32"
+	"strconv"
 	"time"
 )
 
 const (
-	SerialHello     byte = 1
-	SerialAuth      byte = 2
-	SerialPair      byte = 3
-	SerialConfig    byte = 0x10
-	SerialConfigAck byte = 0x11
-	SerialSnapshot  byte = 0x20
-	SerialHeartbeat byte = 0x21
-	SerialAck       byte = 0x22
-	SerialGoodbye   byte = 0x7e
-	SerialError     byte = 0x7f
+	SerialHello        byte = 1
+	SerialAuth         byte = 2
+	SerialPair         byte = 3
+	SerialConfig       byte = 0x10
+	SerialConfigAck    byte = 0x11
+	SerialSnapshot     byte = 0x20
+	SerialHeartbeat    byte = 0x21
+	SerialAck          byte = 0x22
+	SerialTimeRequest  byte = 0x23
+	SerialTimeResponse byte = 0x24
+	SerialGoodbye      byte = 0x7e
+	SerialError        byte = 0x7f
 )
 
 type SerialFrame struct {
@@ -37,10 +40,36 @@ type SerialFrame struct {
 
 func serialType(t byte) bool {
 	switch t {
-	case 1, 2, 3, 0x10, 0x11, 0x20, 0x21, 0x22, 0x7e, 0x7f:
+	case 1, 2, 3, 0x10, 0x11, 0x20, 0x21, 0x22, 0x23, 0x24, 0x7e, 0x7f:
 		return true
 	}
 	return false
+}
+
+func validSerialPayload(t byte, p []byte) bool {
+	if t == SerialTimeRequest {
+		return bytes.Equal(p, []byte("?\n"))
+	}
+	if t == SerialTimeResponse {
+		if len(p) < 16 || len(p) > 25 || p[len(p)-1] != '\n' {
+			return false
+		}
+		parts := bytes.Split(p[:len(p)-1], []byte(" "))
+		if len(parts) != 2 || len(parts[1]) != 13 {
+			return false
+		}
+		for _, part := range parts {
+			for _, c := range part {
+				if c < '0' || c > '9' {
+					return false
+				}
+			}
+		}
+		request, e1 := strconv.ParseUint(string(parts[0]), 10, 32)
+		epoch, e2 := strconv.ParseInt(string(parts[1]), 10, 64)
+		return e1 == nil && request > 0 && e2 == nil && epoch >= 1704067200000 && epoch < 4102444800000
+	}
+	return wire.Validate(p, 16336) == nil
 }
 
 // SerialDecoder is bounded to one maximum frame. Feed accepts logs and fragments;
@@ -107,7 +136,10 @@ func (d *SerialDecoder) parse(now time.Time) []SerialFrame {
 	return out
 }
 func EncodeSerial(t byte, seq uint32, data []byte, key []byte, direction byte) ([]byte, error) {
-	if !serialType(t) || seq == 0 || wire.Validate(data, 16336) != nil {
+	if (t == SerialTimeRequest || t == SerialTimeResponse) && len(key) != 32 {
+		return nil, wire.ErrMessage
+	}
+	if !serialType(t) || seq == 0 || !validSerialPayload(t, data) {
 		return nil, wire.ErrMessage
 	}
 	n := len(data)
@@ -136,6 +168,9 @@ func EncodeSerial(t byte, seq uint32, data []byte, key []byte, direction byte) (
 	return b, nil
 }
 func VerifySerial(f SerialFrame, key []byte, direction byte) ([]byte, error) {
+	if (f.Type == SerialTimeRequest || f.Type == SerialTimeResponse) && len(key) != 32 {
+		return nil, wire.ErrMessage
+	}
 	if len(f.Header) != 12 {
 		return nil, wire.ErrMessage
 	}
@@ -156,7 +191,7 @@ func VerifySerial(f SerialFrame, key []byte, direction byte) ([]byte, error) {
 	} else if len(p) > 2048 {
 		return nil, errLarge
 	}
-	if wire.Validate(p, 16336) != nil {
+	if !validSerialPayload(f.Type, p) {
 		return nil, wire.ErrMessage
 	}
 	return p, nil

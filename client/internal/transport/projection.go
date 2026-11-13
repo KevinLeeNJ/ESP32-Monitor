@@ -61,7 +61,7 @@ func (s *session) project(b *Backend) wire.Sections {
 		raw := b.opts.Providers.Snapshot()
 		s.projectProviders(raw, &result)
 	}
-	d := s.proxy.snapshot(s.transport == "serial")
+	d := s.proxy.snapshot()
 	result.Proxy = aggregate([]wire.Section{d.Time, d.Weather, d.AQI, d.Devices}, d)
 	return result
 }

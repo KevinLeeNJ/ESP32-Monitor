@@ -35,6 +35,8 @@ static bool type_valid(uint8_t type)
     case MONITOR_SERIAL_SNAPSHOT:
     case MONITOR_SERIAL_HEARTBEAT:
     case MONITOR_SERIAL_ACK:
+    case MONITOR_SERIAL_TIME_REQUEST:
+    case MONITOR_SERIAL_TIME_RESPONSE:
     case MONITOR_SERIAL_GOODBYE:
     case MONITOR_SERIAL_ERROR:
         return true;

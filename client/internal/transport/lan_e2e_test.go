@@ -160,6 +160,9 @@ func TestLANKeepsHeartbeatsWithoutSnapshotRefresh(t *testing.T) {
 	case next := <-m.Snapshots:
 		t.Fatalf("unexpected repeated snapshot seq=%d while content was unchanged", next.Seq)
 	case h := <-m.Heartbeats:
+		if h.Time != nil {
+			t.Fatal("LAN heartbeat must not supply device time")
+		}
 		if h.LastSnapshotSeq == nil || *h.LastSnapshotSeq != first.Seq {
 			t.Fatalf("heartbeat does not reference applied snapshot: %+v", h)
 		}
@@ -303,7 +306,7 @@ func TestLANEndToEndSimulatedESP32(t *testing.T) {
 		}
 		data, _ := json.Marshal(snap.Sections.Proxy.Data)
 		json.Unmarshal(data, &proxy)
-		if proxy.Time.State != "healthy" || proxy.Weather.State == "disabled" || proxy.Devices.State == "disabled" {
+		if proxy.Time.State != "disabled" || proxy.Time.Data != nil || proxy.Weather.State == "disabled" || proxy.Devices.State == "disabled" {
 			t.Fatal("proxy statuses incorrect")
 		}
 	case e := <-m.Errors:
@@ -428,7 +431,7 @@ func TestLANResyncRespondsWithSnapshot(t *testing.T) {
 	}
 	select {
 	case snap := <-m.Snapshots:
-		if snap.DeviceID != m.DeviceID || snap.Sections.Proxy.Data == nil {
+		if snap.DeviceID != m.DeviceID || snap.Sections.Proxy.State != "disabled" || snap.Sections.Proxy.Data != nil {
 			t.Fatalf("invalid resync snapshot: %+v", snap)
 		}
 	case e := <-m.Errors:

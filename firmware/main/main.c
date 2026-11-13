@@ -154,8 +154,7 @@ static void capture_display_snapshot(display_snapshot_t *snapshot)
     snapshot->profiling = monitor_pm_profile_active();
     g_demo.wifi_state = snapshot->wifi_state;
     /* An authenticated LAN session owns page one's proxy values. Local
-     * battery and environment readings stay local, and RTC time remains the
-     * fallback while the upstream time source has no usable value. */
+     * battery, environment and RTC/NTP clock readings stay local. */
     if (s_companion_overlay) {
         if (companion_owns(s_companion_view.weather_pending, s_companion_view.weather_valid,
                            s_companion_weather_seen)) {
@@ -167,10 +166,6 @@ static void capture_display_snapshot(display_snapshot_t *snapshot)
                            s_companion_aqi_seen)) {
             snapshot->aqi = s_companion_view.aqi_valid ? s_companion_view.aqi : -1;
             if (s_companion_view.aqi_valid) s_companion_aqi_seen = true;
-        }
-        if (s_companion_view.time_valid) {
-            snprintf(snapshot->time_text, sizeof snapshot->time_text, "%s", s_companion_view.time_text);
-            snprintf(snapshot->date_text, sizeof snapshot->date_text, "%s", s_companion_view.date_text);
         }
         if (companion_owns(s_companion_view.devices_pending, s_companion_view.devices_valid,
                            s_companion_devices_supplied)) {
@@ -218,8 +213,6 @@ static bool apply_companion_if_changed(monitor_pages_t *pages)
                                  connected && s_companion.has_heartbeat ? &s_companion.heartbeat : NULL,
                                  elapsed, heartbeat_elapsed, &s_companion_view);
     s_companion_view.activity.music_live = monitor_serial_active();
-    if (s_companion_view.time_valid)
-        monitor_clock_offer_client_time(s_companion_view.time_utc_ms / 1000);
     s_companion_overlay = connected && s_companion_view.proxy_owned;
     if (connected != s_companion_connected) {
         s_companion_connected = connected;

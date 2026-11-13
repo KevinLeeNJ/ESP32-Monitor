@@ -392,6 +392,8 @@ func (b *Backend) attachSerial(ctx context.Context, stream io.ReadWriteCloser, s
 			}
 		case SerialHeartbeat:
 			topic = "heartbeat"
+		case SerialTimeRequest:
+			topic = "time-request"
 		case SerialAck:
 			topic = "ack"
 		case SerialGoodbye:
@@ -409,19 +411,29 @@ func (b *Backend) attachSerial(ctx context.Context, stream io.ReadWriteCloser, s
 	}
 }
 func writeSerialFrame(ctx context.Context, stream io.ReadWriteCloser, t byte, seq uint32, data any, key []byte) error {
-	p, e := wire.Marshal(data)
-	if e != nil {
-		return wire.ErrMessage
-	}
-	frame, e := EncodeSerial(t, seq, p, key, 1)
-	if e != nil {
-		return e
-	}
-	if float64(len(frame))/11520 >= 2 {
-		return errors.New("serial_link_capacity")
-	}
 	done := make(chan error, 1)
 	go func() {
+		var p []byte
+		var e error
+		if t == SerialTimeResponse {
+			// Sample after scheduling/queueing, immediately before encoding and Write.
+			p = []byte(fmt.Sprintf("%d %d\n", data.(uint32), time.Now().UnixMilli()))
+		} else {
+			p, e = wire.Marshal(data)
+		}
+		if e != nil {
+			done <- wire.ErrMessage
+			return
+		}
+		frame, e := EncodeSerial(t, seq, p, key, 1)
+		if e != nil {
+			done <- e
+			return
+		}
+		if float64(len(frame))/11520 >= 2 {
+			done <- errors.New("serial_link_capacity")
+			return
+		}
 		for len(frame) > 0 {
 			n, e := stream.Write(frame)
 			if e != nil {
@@ -452,7 +464,7 @@ func writeSerialFrame(ctx context.Context, stream io.ReadWriteCloser, t byte, se
 	}
 }
 func (s *session) sendSerial(topic string, data any) error {
-	types := map[string]byte{"config-ack": SerialConfigAck, "snapshot": SerialSnapshot, "heartbeat": SerialHeartbeat, "ack": SerialAck, "goodbye": SerialGoodbye, "error": SerialError}
+	types := map[string]byte{"config-ack": SerialConfigAck, "snapshot": SerialSnapshot, "heartbeat": SerialHeartbeat, "ack": SerialAck, "goodbye": SerialGoodbye, "error": SerialError, "time-response": SerialTimeResponse}
 	t, ok := types[topic]
 	if !ok {
 		return wire.ErrMessage

@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
 #include "esp_timer.h"
+#include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -28,7 +29,7 @@ static volatile bool s_time_valid;
 static volatile bool s_rtc_healthy;
 /* The RTC reading is the preferred source until 02:00 invalidates it. Being
  * readable is not enough: after invalidation the stored time must not be
- * adopted again before NTP or the Client supplies a fresh reading. */
+ * adopted again before NTP or a measured serial exchange supplies a fresh reading. */
 static volatile bool s_rtc_trusted;
 static bool s_rtc_present;
 static volatile bool s_wifi_connected;
@@ -83,7 +84,7 @@ static void read_rtc_and_update_system(void)
     }
     if (!s_rtc_trusted) {
         /* Invalidated at 02:00. Keep the running system clock until a fresh
-         * NTP or Client reading replaces the stored value. */
+         * NTP or measured serial reading replaces the stored value. */
         publish_time_valid(s_time_valid, sample.present && sample.running && !sample.oscillator_stopped);
         return;
     }
@@ -208,7 +209,7 @@ static void clock_task(void *arg)
         if (due & MONITOR_SCHEDULE_DEVICES) monitor_devices_request_refresh();
         struct tm local; localtime_r(&now, &local);
         /* The daily refresh invalidates the stored RTC time once, then NTP or
-         * a Client reading replaces it. Without either, the running clock
+         * a measured serial reading replaces it. Without either, the running clock
          * stays visible instead of falling back to SYNCING. */
         if ((due & MONITOR_SCHEDULE_DEVICES) && local.tm_hour == 2 && local.tm_min == 0 &&
             rtc_invalidate_yday != local.tm_yday) {
@@ -257,35 +258,45 @@ void monitor_clock_on_wifi_disconnected(void)
     if (s_sync_task != NULL) xTaskNotifyGive(s_sync_task);
 }
 
-/* Client time is the last resort: a trusted RTC wins, and Wi-Fi means NTP is
- * available. Once the Client reading is stored, the RTC is trusted again. */
-void monitor_clock_offer_client_time(int64_t utc_epoch_s)
+bool monitor_clock_needs_sync(void)
 {
-    if (utc_epoch_s < 1704067200LL || utc_epoch_s >= 4102444800LL) return;
-    if (s_rtc_trusted || s_wifi_connected) return;
-    struct timeval current;
-    gettimeofday(&current, NULL);
-    int64_t difference = (int64_t)current.tv_sec - utc_epoch_s;
-    bool changed = !s_time_valid || difference < -2 || difference > 2;
-    if (changed) {
-        struct timeval supplied = {.tv_sec = (time_t)utc_epoch_s, .tv_usec = 0};
-        if (settimeofday(&supplied, NULL) != 0) return;
+    return !s_rtc_trusted;
+}
+
+bool monitor_clock_apply_serial_time(int64_t utc_us, int64_t received_us)
+{
+    int64_t now_us = esp_timer_get_time();
+    if (utc_us < 1704067200000000LL || utc_us >= 4102444800000000LL ||
+        received_us > now_us || now_us - received_us > 15000000LL || s_wifi_connected) return false;
+    int64_t current_utc = utc_us + now_us - received_us;
+    int64_t boundary = (current_utc / 1000000 + 1) * 1000000;
+    int64_t deadline = received_us + boundary - utc_us;
+    int64_t remaining = deadline - now_us;
+    /* Sleep most of the second; only the final tick needs a precise wait. */
+    if (remaining > 1000) {
+        TickType_t ticks = pdMS_TO_TICKS((uint32_t)((remaining - 1000) / 1000));
+        if (ticks) vTaskDelay(ticks);
     }
-    bool was_trusted = s_rtc_trusted;
-    esp_err_t rtc_err = monitor_rtc_write_utc(utc_epoch_s);
+    while ((now_us = esp_timer_get_time()) < deadline) {
+        int64_t left = deadline - now_us;
+        esp_rom_delay_us((uint32_t)(left > 1000 ? 1000 : left));
+    }
+    s_rtc_trusted = false;
+    esp_err_t rtc_err = monitor_rtc_write_utc((utc_us + now_us - received_us) / 1000000);
+    current_utc = utc_us + esp_timer_get_time() - received_us;
+    struct timeval supplied = {.tv_sec = (time_t)(current_utc / 1000000),
+                               .tv_usec = (long)(current_utc % 1000000)};
+    if (settimeofday(&supplied, NULL) != 0) return false;
     s_rtc_trusted = rtc_err == ESP_OK;
     bool time_was_valid = s_time_valid;
     publish_time_valid(true, rtc_err == ESP_OK);
-    if (changed || (!was_trusted && s_rtc_trusted))
-        ESP_LOGI(TAG, "Client time adopted; RTC write %s", rtc_err == ESP_OK ? "verified" : "failed");
     if (!time_was_valid) {
         monitor_weather_on_time_valid();
         monitor_devices_request_refresh();
     }
-    if (changed) {
-        monitor_display_refresh_request();
-        if (s_clock_task != NULL) xTaskNotify(s_clock_task, 0, eNoAction);
-    }
+    if (s_clock_task != NULL) xTaskNotify(s_clock_task, 0, eNoAction);
+    ESP_LOGI(TAG, "Measured serial time applied; RTC write %s", rtc_err == ESP_OK ? "verified" : "failed");
+    return rtc_err == ESP_OK;
 }
 
 bool monitor_clock_is_valid(void)
