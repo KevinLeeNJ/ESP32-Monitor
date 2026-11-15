@@ -178,6 +178,9 @@ func TestCancellationAndFailedStorageCannotAuthorize(t *testing.T) {
 	if err == nil || s.State != Failed || s.ErrorCode != "credential_save_failed" {
 		t.Fatal("claimed success without secure storage")
 	}
+	if _, err := c.Token(context.Background(), "octocat"); err == nil {
+		t.Fatal("failed login left a usable token")
+	}
 }
 func TestBrowserFailureAndUnconfiguredApp(t *testing.T) {
 	c, _, _, _, _, _ := fixture(t)
@@ -191,7 +194,7 @@ func TestBrowserFailureAndUnconfiguredApp(t *testing.T) {
 		t.Fatal("unregistered app pretended to log in")
 	}
 }
-func TestRefreshRotationAndPATCompatibility(t *testing.T) {
+func TestRefreshSurvivesCredentialSaveFailure(t *testing.T) {
 	c, now, store, reply, _, _ := fixture(t)
 	past := now.Add(-time.Minute)
 	future := now.Add(time.Hour)
@@ -199,21 +202,80 @@ func TestRefreshRotationAndPATCompatibility(t *testing.T) {
 	data, _ := json.Marshal(record)
 	store.values["octocat"] = string(data)
 	*reply = `{"access_token":"secret-access","token_type":"bearer","refresh_token":"rotated-refresh","expires_in":28800,"refresh_token_expires_in":15897600}`
+	var sentRefresh []string
+	original := c.http.Transport
+	c.http.Transport = transport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/login/oauth/access_token" {
+			r.ParseForm()
+			if r.Form.Get("grant_type") == "refresh_token" {
+				sentRefresh = append(sentRefresh, r.Form.Get("refresh_token"))
+			}
+		}
+		return original.RoundTrip(r)
+	})
+	store.fail = true
+	if _, err := c.Token(context.Background(), "octocat"); err == nil || err.Error() != "credential_save_failed" {
+		t.Fatalf("save failure not reported: %v", err)
+	}
+	// The rotated token must stay usable while the store keeps failing.
 	token, err := c.Token(context.Background(), "octocat")
 	if err != nil || token != "secret-access" {
+		t.Fatalf("rotated token lost after save failure: %q %v", token, err)
+	}
+	if len(sentRefresh) != 1 {
+		t.Fatalf("unexpected refresh attempts: %v", sentRefresh)
+	}
+	// Once the store recovers, the retained record is persisted without another rotation.
+	store.fail = false
+	if _, err := c.Token(context.Background(), "octocat"); err != nil {
 		t.Fatal(err)
 	}
 	var updated secretRecord
 	json.Unmarshal([]byte(store.values["octocat"]), &updated)
-	if updated.RefreshToken != "rotated-refresh" || updated.ExpiresAt == nil || !updated.ExpiresAt.After(*now) {
-		t.Fatal("refresh not rotated atomically")
+	if updated.RefreshToken != "rotated-refresh" {
+		t.Fatal("retained record not healed into store")
 	}
-	store.values["manual"] = "legacy-pat"
-	if value, err := c.Token(context.Background(), "manual"); err != nil || value != "legacy-pat" {
-		t.Fatal("manual credential migration broken")
+	// The next rotation must use the retained refresh token, not the dead one.
+	*now = now.Add(9 * time.Hour)
+	*reply = `{"access_token":"secret-access","token_type":"bearer","refresh_token":"rotated-refresh-2","expires_in":28800,"refresh_token_expires_in":15897600}`
+	if _, err := c.Token(context.Background(), "octocat"); err != nil {
+		t.Fatal(err)
+	}
+	if len(sentRefresh) != 2 || sentRefresh[0] != "secret-refresh" || sentRefresh[1] != "rotated-refresh" {
+		t.Fatalf("dead refresh token reused: %v", sentRefresh)
 	}
 }
-func TestCancellationDuringIdentityReadCannotSaveLateToken(t *testing.T) {
+func TestRefreshSurvivesIdentityReadFailure(t *testing.T) {
+	c, now, store, reply, _, _ := fixture(t)
+	past := now.Add(-time.Minute)
+	future := now.Add(time.Hour)
+	record := secretRecord{AccessToken: "old", RefreshToken: "secret-refresh", ExpiresAt: &past, RefreshExpiresAt: &future}
+	data, _ := json.Marshal(record)
+	store.values["octocat"] = string(data)
+	*reply = `{"access_token":"secret-access","token_type":"bearer","refresh_token":"rotated-refresh","expires_in":28800,"refresh_token_expires_in":15897600}`
+	original := c.http.Transport
+	identityDown := true
+	c.http.Transport = transport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/user" && identityDown {
+			return nil, errors.New("synthetic network failure")
+		}
+		return original.RoundTrip(r)
+	})
+	if _, err := c.Token(context.Background(), "octocat"); err == nil || err.Error() != "auth_network_error" {
+		t.Fatalf("identity transport failure misreported: %v", err)
+	}
+	identityDown = false
+	token, err := c.Token(context.Background(), "octocat")
+	if err != nil || token != "secret-access" {
+		t.Fatalf("rotated token lost after identity failure: %q %v", token, err)
+	}
+	var updated secretRecord
+	json.Unmarshal([]byte(store.values["octocat"]), &updated)
+	if updated.RefreshToken != "rotated-refresh" {
+		t.Fatal("record not persisted after recovery")
+	}
+}
+func TestRefreshRotationAndPATCompatibility(t *testing.T) {
 	c, now, store, _, _, _ := fixture(t)
 	session, _ := c.StartLogin(context.Background())
 	*now = now.Add(5 * time.Second)

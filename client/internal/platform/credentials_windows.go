@@ -4,6 +4,7 @@ package platform
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -68,9 +69,9 @@ func windowsSaveCredential(account, secret string) error {
 	}
 	value := credential{Type: 1, TargetName: target, UserName: user, Persist: 2, BlobSize: uint32((len(blob) - 1) * 2), Blob: (*byte)(unsafe.Pointer(&blob[0]))}
 	write := syscall.NewLazyDLL("advapi32.dll").NewProc("CredWriteW")
-	ok, _, _ := write.Call(uintptr(unsafe.Pointer(&value)), 0)
+	ok, _, code := write.Call(uintptr(unsafe.Pointer(&value)), 0)
 	if ok == 0 {
-		return ErrCredentialUnavailable
+		return fmt.Errorf("%w: win32=%d", ErrCredentialUnavailable, code)
 	}
 	return nil
 }

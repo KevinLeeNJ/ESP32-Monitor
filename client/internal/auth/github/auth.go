@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"esp32-monitor/client/internal/logging"
 	"esp32-monitor/client/internal/platform"
 )
 
@@ -58,6 +59,14 @@ type secretRecord struct {
 	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
 	RefreshExpiresAt *time.Time `json:"refresh_expires_at,omitempty"`
 }
+
+// retainedRecord keeps a rotated token usable even when the persistent store
+// rejected the write; GitHub has already invalidated the previous refresh
+// token, so losing the new one would sign the user out until manual re-login.
+type retainedRecord struct {
+	record    secretRecord
+	persisted bool
+}
 type Client struct {
 	mu                           sync.Mutex
 	tokenMu                      sync.Mutex
@@ -68,6 +77,7 @@ type Client struct {
 	interval                     time.Duration
 	cancel                       context.CancelFunc
 	busy                         bool
+	mem                          map[string]retainedRecord
 	deviceURL, tokenURL, userURL string
 }
 
@@ -81,7 +91,7 @@ func New(opts Options) *Client {
 		copy.CheckRedirect = client.CheckRedirect
 		client = &copy
 	}
-	return &Client{opts: opts, http: client, session: Session{State: SignedOut}, deviceURL: "https://github.com/login/device/code", tokenURL: "https://github.com/login/oauth/access_token", userURL: "https://api.github.com/user"}
+	return &Client{opts: opts, http: client, session: Session{State: SignedOut}, mem: map[string]retainedRecord{}, deviceURL: "https://github.com/login/device/code", tokenURL: "https://github.com/login/oauth/access_token", userURL: "https://api.github.com/user"}
 }
 
 func active(s State) bool { return s == Starting || s == AwaitingAuthorization }
@@ -282,9 +292,10 @@ func (c *Client) PollLogin(ctx context.Context, id string) (Session, error) {
 		// Serialize save against cancellation/logout so cancelled sessions cannot log in later.
 		c.tokenMu.Lock()
 		defer c.tokenMu.Unlock()
-		bytes, _ := json.Marshal(record)
-		if c.opts.Store.Save(requestCtx, login, string(bytes)) != nil {
+		if c.saveRecord(requestCtx, login, record, true) != nil {
 			err = errors.New("credential_save_failed")
+		} else {
+			c.mem[login] = retainedRecord{record: record, persisted: true}
 		}
 	}
 	if err != nil {
@@ -322,45 +333,87 @@ func (c *Client) Token(ctx context.Context, login string) (string, error) {
 	if !platform.ValidGitHubLogin(login) || c.opts.Store == nil {
 		return "", errors.New("auth_required")
 	}
-	raw, err := c.opts.Store.Load(ctx, login)
-	if err != nil {
-		return "", errors.New("auth_required")
-	}
-	var record secretRecord
-	if !strings.HasPrefix(strings.TrimSpace(raw), "{") {
-		return raw, nil
-	} // Existing manually registered PAT.
-	if json.Unmarshal([]byte(raw), &record) != nil || record.AccessToken == "" {
-		return "", errors.New("auth_required")
+	// The retained record is always at least as fresh as the store and keeps
+	// rotated tokens alive while a persistent write is still failing.
+	record, retained := c.mem[login]
+	if retained {
+		if !record.persisted && c.saveRecord(ctx, login, record.record, false) == nil {
+			record.persisted = true
+			c.mem[login] = record
+		}
+	} else {
+		raw, err := c.opts.Store.Load(ctx, login)
+		if err != nil {
+			return "", errors.New("auth_required")
+		}
+		if !strings.HasPrefix(strings.TrimSpace(raw), "{") {
+			return raw, nil
+		} // Existing manually registered PAT.
+		if json.Unmarshal([]byte(raw), &record.record) != nil || record.record.AccessToken == "" {
+			return "", errors.New("auth_required")
+		}
 	}
 	now := c.opts.Now()
-	if record.ExpiresAt == nil || record.ExpiresAt.After(now.Add(time.Minute)) {
-		return record.AccessToken, nil
+	if record.record.ExpiresAt == nil || record.record.ExpiresAt.After(now.Add(time.Minute)) {
+		return record.record.AccessToken, nil
 	}
-	if c.opts.ClientID == "" || record.RefreshToken == "" || (record.RefreshExpiresAt != nil && !record.RefreshExpiresAt.After(now)) {
+	if c.opts.ClientID == "" || record.record.RefreshToken == "" || (record.record.RefreshExpiresAt != nil && !record.record.RefreshExpiresAt.After(now)) {
 		return "", errors.New("auth_required")
 	}
 	var token tokenResponse
-	err = c.post(ctx, c.tokenURL, url.Values{"client_id": {c.opts.ClientID}, "grant_type": {"refresh_token"}, "refresh_token": {record.RefreshToken}}, &token)
+	err := c.post(ctx, c.tokenURL, url.Values{"client_id": {c.opts.ClientID}, "grant_type": {"refresh_token"}, "refresh_token": {record.record.RefreshToken}}, &token)
 	if err != nil {
 		return "", err
 	}
 	if token.Error != "" || token.AccessToken == "" || !strings.EqualFold(token.Type, "bearer") {
 		return "", errors.New("auth_required")
 	}
-	identity, err := c.identity(ctx, token.AccessToken)
-	if err != nil || !strings.EqualFold(identity, login) {
-		return "", errors.New("auth_required")
-	}
 	next, err := makeRecord(token, now)
 	if err != nil {
 		return "", err
 	}
-	bytes, _ := json.Marshal(next)
-	if c.opts.Store.Save(ctx, login, string(bytes)) != nil {
+	// The previous refresh token is dead server-side from this point; retain
+	// the new record before any further fallible step so retries cannot reuse
+	// the dead token.
+	c.mem[login] = retainedRecord{record: next}
+	identity, err := c.identity(ctx, token.AccessToken)
+	if err != nil {
+		return "", err
+	}
+	if !strings.EqualFold(identity, login) {
+		delete(c.mem, login)
+		return "", errors.New("auth_required")
+	}
+	if err := c.saveRecord(ctx, login, next, true); err != nil {
+		logging.L("github").Warn("credential_save_failed", "error", err)
 		return "", errors.New("credential_save_failed")
 	}
+	c.mem[login] = retainedRecord{record: next, persisted: true}
 	return next.AccessToken, nil
+}
+
+// saveRecord persists a token record; retry absorbs transient store failures
+// (e.g. the credential vault not being ready right after logon).
+func (c *Client) saveRecord(ctx context.Context, login string, record secretRecord, retry bool) error {
+	data, _ := json.Marshal(record)
+	attempts := 1
+	if retry {
+		attempts = 3
+	}
+	var err error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt) * 500 * time.Millisecond):
+			}
+		}
+		if err = c.opts.Store.Save(ctx, login, string(data)); err == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 // Logout removes local credentials. It does not revoke every GitHub grant.
@@ -378,6 +431,7 @@ func (c *Client) Logout(ctx context.Context, login string) error {
 	if c.opts.Store.Delete(ctx, login) != nil {
 		return errors.New("credential_delete_failed")
 	}
+	delete(c.mem, login)
 	c.session = Session{State: SignedOut}
 	return nil
 }
