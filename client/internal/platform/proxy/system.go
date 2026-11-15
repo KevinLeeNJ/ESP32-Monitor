@@ -25,13 +25,7 @@ func readSystem(ctx context.Context) (Settings, error) {
 		}
 		return parseMac(string(data))
 	case "windows":
-		// Read the logged-in user's WinINET configuration; never modify it.
-		script := `$ErrorActionPreference='Stop'; $p=Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'; @{enabled=[bool]$p.ProxyEnable;server=[string]$p.ProxyServer;bypass=[string]$p.ProxyOverride;pac=[string]$p.AutoConfigURL}|ConvertTo-Json -Compress`
-		data, err := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script).Output()
-		if err != nil {
-			return Settings{}, ErrDetection
-		}
-		return parseWindows(data)
+		return readWindows()
 	case "linux":
 		if strings.Contains(strings.ToLower(os.Getenv("XDG_CURRENT_DESKTOP")), "kde") {
 			config, err := os.UserConfigDir()
@@ -134,11 +128,14 @@ func parseWindows(data []byte) (Settings, error) {
 	if json.Unmarshal(data, &v) != nil {
 		return Settings{}, ErrDetection
 	}
-	s := Settings{Automatic: v.PAC != "", Bypass: strings.Split(v.Bypass, ";")}
-	if !v.Enabled {
+	return windowsSettings(v.Enabled, v.Server, v.Bypass, v.PAC)
+}
+func windowsSettings(enabled bool, server, bypass, pac string) (Settings, error) {
+	s := Settings{Automatic: pac != "", Bypass: strings.Split(bypass, ";")}
+	if !enabled {
 		return s, nil
 	}
-	for _, part := range strings.Split(v.Server, ";") {
+	for _, part := range strings.Split(server, ";") {
 		key, value, ok := strings.Cut(strings.TrimSpace(part), "=")
 		if !ok {
 			if key != "" {

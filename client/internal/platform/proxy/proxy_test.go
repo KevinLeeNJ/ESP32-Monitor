@@ -98,6 +98,22 @@ func TestEnvironmentFallbackSocksAndBypass(t *testing.T) {
 	}
 }
 
+func TestLoopbackSkipsSystemDetection(t *testing.T) {
+	r := Resolver{
+		System: func(context.Context) (Settings, error) {
+			t.Error("system proxy read for a loopback request")
+			return Settings{}, ErrDetection
+		},
+		Environ: func() []string { return nil },
+	}
+	for _, host := range []string{"localhost", "127.0.0.1", "[::1]"} {
+		req, _ := http.NewRequest("GET", "http://"+host+":18081/", nil)
+		if u, err := r.Proxy(req); err != nil || u != nil {
+			t.Fatalf("%s: %v %v", host, u, err)
+		}
+	}
+}
+
 func TestBypassRespectsPort(t *testing.T) {
 	r := resolver(Settings{HTTPS: "http://proxy:8080", Bypass: []string{"example.com:8080"}})
 	for _, tc := range []struct {

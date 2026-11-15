@@ -92,12 +92,16 @@ func proxyURL(value string) (*url.URL, error) {
 		return nil, ErrInvalid
 	}
 }
-func bypass(host, port string, patterns []string) bool {
-	host = strings.ToLower(host)
-	if host == "localhost" {
+func loopback(host string) bool {
+	if strings.EqualFold(host, "localhost") {
 		return true
 	}
-	if ip, err := netip.ParseAddr(host); err == nil && ip.IsLoopback() {
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.IsLoopback()
+}
+func bypass(host, port string, patterns []string) bool {
+	host = strings.ToLower(host)
+	if loopback(host) {
 		return true
 	}
 	for _, pattern := range patterns {
@@ -134,6 +138,11 @@ func bypass(host, port string, patterns []string) bool {
 	return false
 }
 func (r Resolver) Proxy(req *http.Request) (*url.URL, error) {
+	// Loopback never uses a proxy; skip OS detection so local requests do not
+	// depend on (or time out on) system proxy reads.
+	if loopback(req.URL.Hostname()) {
+		return nil, nil
+	}
 	s, err := r.settings(req.Context())
 	if err != nil {
 		return nil, err
